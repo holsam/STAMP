@@ -22,6 +22,7 @@ class AdapterOutput(BaseModel):
     parsed: dict = {}
 
 # ToolAdapter: class that defines an adapter that can build a command and parse the output of a specific tool
+class ToolAdapter:
     name: str
     stage: str
     mac_compatible: bool
