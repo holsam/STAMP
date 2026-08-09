@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
 # HalfSet: class for half-set label that gets assigned at the end of consensus picking
-class HalfSet(str, enum):
+class HalfSet(str, Enum):
     A = 'A'
     B = 'B'
 
