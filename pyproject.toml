@@ -1,0 +1,17 @@
+[project]
+name = "stamp"
+version = "0.0.0"
+description = "A workflow for Sub-Tomogram Averaging Membrane Proteins"
+readme = "README.md"
+authors = [
+    { name = "Sam Holland", email = "hol_sam@icloud.com" }
+]
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+stamp = "stamp.cli:stamp"
+
+[build-system]
+requires = ["uv_build>=0.11.26,<0.12.0"]
+build-backend = "uv_build"
