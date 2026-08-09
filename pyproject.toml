@@ -7,7 +7,9 @@ authors = [
     { name = "Sam Holland", email = "hol_sam@icloud.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "typer>=0.27.1",
+]
 
 [project.scripts]
 stamp = "stamp.cli:stamp"
@@ -15,3 +17,8 @@ stamp = "stamp.cli:stamp"
 [build-system]
 requires = ["uv_build>=0.11.26,<0.12.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
