@@ -32,29 +32,35 @@ class MockAdapter:
 
 # MOCK_ADAPTERS: instantiate a MockAdapter class for each external tool
 MOCK_ADAPTERS: dict[str, MockAdapter] = {
-    'pyseg': MockAdapter(
-        'pyseg',
+    'stamp-native': MockAdapter(
+        'stamp-native',
         stage='pick',
-        mac_compatible=False,
+        mac_compatible=True,
         requires_gpu=False,
+        automatable=True,
+        batches_natively=True,
+        runs_in_process=False,
+        canned_parsed=_canned_picks_for('stamp-native'),
     ),
     'membrain-pick': MockAdapter(
         'membrain-pick',
         stage='pick',
         mac_compatible=True,
         requires_gpu=False,
-    ),
-    'mpicker': MockAdapter(
-        'mpicker',
-        stage='pick',
-        mac_compatible=False,
-        requires_gpu=False,
+        automatable=True,
+        batches_natively=False,
+        runs_in_process=False,
+        canned_parsed=_canned_picks_for('membrain-pick'),
     ),
     'pytom-match-pick': MockAdapter(
         'pytom-match-pick',
         stage='pick',
-        mac_compatible=True,
+        mac_compatible=False,
         requires_gpu=True,
+        automatable=True,
+        batches_natively=False,
+        runs_in_process=False,
+        canned_parsed=_canned_picks_for('pytom-match-pick'),
     ),
     'tomotwin': MockAdapter(
         'tomotwin',
