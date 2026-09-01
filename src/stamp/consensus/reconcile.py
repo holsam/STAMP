@@ -8,7 +8,7 @@ from scipy.spatial import cKDTree
 from typing import Literal
 
 # Import internal STAMP objects
-from stamp.halfset.split import assign_half_sets
+from stamp.utils.halfset import assign_half_sets
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 
