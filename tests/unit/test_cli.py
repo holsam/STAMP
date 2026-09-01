@@ -7,13 +7,13 @@ import pytest
 from typer.testing import CliRunner
 
 # Import main CLI
-from stamp.cli import stamp
+from stamp.cli.cli import stamp
 
 # Initialise runner
 runner = CliRunner()
 
 # Define constants
-STUB_COMMANDS = ['pick', 'decoy', 'classify', 'identify', 'refine', 'pipeline']
+STUB_COMMANDS = ['decoy', 'classify', 'identify', 'refine', 'pipeline']
 
 # TestCli: class containing CLI unit tests
 class TestCli:
