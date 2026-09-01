@@ -37,13 +37,12 @@ class TestAdapters:
         assert MOCK_ADAPTERS['domainfit'].mac_compatible is True
         assert MOCK_ADAPTERS['relion'].mac_compatible is False
         assert MOCK_ADAPTERS['relion'].requires_gpu is True
-        assert MOCK_ADAPTERS['pyseg'].mac_compatible is False
+        assert MOCK_ADAPTERS['stamp-native'].mac_compatible is True
 
     def test_all_nine_tools_present(self) -> None:
         expected = {
-            'pyseg',
+            'stamp-native',
             'membrain-pick',
-            'mpicker',
             'pytom-match-pick',
             'tomotwin',
             'disca',
