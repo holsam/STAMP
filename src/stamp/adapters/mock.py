@@ -16,6 +16,9 @@ class MockAdapter:
     stage: str
     mac_compatible: bool
     requires_gpu: bool
+    automatable: bool = False
+    batches_natively: bool = False
+    runs_in_process: bool = False
     canned_parsed: dict = field(default_factory=dict)
 
     def build_command(self, inputs: AdapterInputs) -> ToolCommand:
@@ -28,6 +31,11 @@ class MockAdapter:
 
     def parse_output(self, result: RunResult) -> AdapterOutput:
         return AdapterOutput(output_paths=[], parsed=dict(self.canned_parsed))
+
+
+# _canned_picks_for: stub parsed-output for a mock picker
+def _canned_picks_for(_name: str) -> dict:
+    return {'picks': []}
 
 
 # MOCK_ADAPTERS: instantiate a MockAdapter class for each external tool
