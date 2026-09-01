@@ -67,6 +67,10 @@ def pick_tomogram(
     if segmentation.shape != tomogram.shape:
         raise ValueError(f'Segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id}; they must be the same volume at the same binning')
 
+    # Blank membrane signal so offset shell only scores densities off membrane surface
+    tomogram = tomogram.astype(np.float32).copy()
+    tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
+
     vertices, normals = extract_surface(segmentation)
     vertices, normals = downsample_points(vertices, normals, config.to_voxels(config.surface_spacing_angstrom))
 
