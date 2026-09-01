@@ -67,11 +67,13 @@ def sample_along_normals(
 def robust_normalise(values: np.ndarray) -> np.ndarray:
     median = np.median(values)
     mad = np.median(np.abs(values - median))
-    if mad == 0.0:
+    if mad > 0.0:
+        # 1.4826 makes MAD a consistent estimator of sigma for normal data
+        return (values - median) / (1.4826 * mad)
+    std = values.std()
+    if std == 0.0:
         return np.zeros_like(values)
-    # 1.4826 makes MAD a consistent estimator of sigma for normal data.
-    return (values - median) / (1.4826 * mad)
-
+    return (values - median) / std
 
 # non_maximum_suppression: greedy non-maximum suppression, highest score first, returning indices of kept points
 def non_maximum_suppression(
