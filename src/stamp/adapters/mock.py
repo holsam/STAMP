@@ -16,6 +16,9 @@ class MockAdapter:
     stage: str
     mac_compatible: bool
     requires_gpu: bool
+    automatable: bool = False
+    batches_natively: bool = False
+    runs_in_process: bool = False
     canned_parsed: dict = field(default_factory=dict)
 
     def build_command(self, inputs: AdapterInputs) -> ToolCommand:
@@ -30,31 +33,42 @@ class MockAdapter:
         return AdapterOutput(output_paths=[], parsed=dict(self.canned_parsed))
 
 
+# _canned_picks_for: stub parsed-output for a mock picker
+def _canned_picks_for(_name: str) -> dict:
+    return {'picks': []}
+
+
 # MOCK_ADAPTERS: instantiate a MockAdapter class for each external tool
 MOCK_ADAPTERS: dict[str, MockAdapter] = {
-    'pyseg': MockAdapter(
-        'pyseg',
+    'stamp-native': MockAdapter(
+        'stamp-native',
         stage='pick',
-        mac_compatible=False,
+        mac_compatible=True,
         requires_gpu=False,
+        automatable=True,
+        batches_natively=True,
+        runs_in_process=False,
+        canned_parsed=_canned_picks_for('stamp-native'),
     ),
     'membrain-pick': MockAdapter(
         'membrain-pick',
         stage='pick',
         mac_compatible=True,
         requires_gpu=False,
-    ),
-    'mpicker': MockAdapter(
-        'mpicker',
-        stage='pick',
-        mac_compatible=False,
-        requires_gpu=False,
+        automatable=True,
+        batches_natively=False,
+        runs_in_process=False,
+        canned_parsed=_canned_picks_for('membrain-pick'),
     ),
     'pytom-match-pick': MockAdapter(
         'pytom-match-pick',
         stage='pick',
-        mac_compatible=True,
+        mac_compatible=False,
         requires_gpu=True,
+        automatable=True,
+        batches_natively=False,
+        runs_in_process=False,
+        canned_parsed=_canned_picks_for('pytom-match-pick'),
     ),
     'tomotwin': MockAdapter(
         'tomotwin',

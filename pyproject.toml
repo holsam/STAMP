@@ -8,12 +8,18 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "mrcfile>=1.5.4",
+    "numpy>=2.5.2",
     "pydantic>=2.13.4",
+    "scikit-image>=0.26.0",
+    "scipy>=1.18.1",
+    "starfile>=0.5.13",
+    "tomli-w>=1.2.0",
     "typer>=0.27.1",
 ]
 
 [project.scripts]
-stamp = "stamp.cli:stamp"
+stamp = "stamp.cli.cli:stamp"
 
 [build-system]
 requires = ["uv_build>=0.11.26,<0.12.0"]

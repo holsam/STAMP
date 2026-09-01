@@ -26,6 +26,7 @@ class TestManifestSchema:
         manifest = TomogramManifest(
             tomogram_id='tomo001',
             segmentation_path=Path('/data/tomo001_seg.mrc'),
+            raw_tomogram_path=Path('/data/tomo001.mrc'),
             voxel_size_angstrom=3.4,
         )
         assert manifest.is_decoy is False

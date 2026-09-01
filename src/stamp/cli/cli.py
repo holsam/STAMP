@@ -6,7 +6,8 @@ STAMP: CLI entrypoint
 import typer
 
 # Import internal commands
-from stamp.commands import classify, decoy, identify, pick, pipeline, refine
+from stamp.commands import classify, decoy, identify, pipeline, refine
+from stamp.cli import pick
 
 # Initialise Typer app 
 stamp = typer.Typer(
