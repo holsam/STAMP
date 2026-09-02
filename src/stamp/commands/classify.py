@@ -21,6 +21,7 @@ from stamp.decoy.validate import is_decoy_particle_set
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.utils.io import toml_none_to_empty
 
 # run_classify: cluster picked particles by structural similarity
 def run_classify(
@@ -98,7 +99,7 @@ def run_classify(
         timestamp=datetime.now(timezone.utc),
         input_checksums={},
     )
-    (output_dir / 'params.toml').write_text(tomli_w.dumps(sidecar.model_dump()))
+    (output_dir / 'params.toml').write_text(tomli_w.dumps(toml_none_to_empty(sidecar.model_dump())))
     print(f'Wrote {len(assignments)} class assignments to {assignments_path}')
 
 # _classify_combined: cluster all particles together, then average each half separately

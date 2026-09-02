@@ -19,6 +19,7 @@ from stamp.picking.native import PICKER_NAME as NATIVE_PICKER_NAME
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.utils.io import toml_none_to_empty
 
 # REAL_ADAPTERS: dictionary containing all implemented pickers
 REAL_ADAPTERS: dict[str, ToolAdapter] = {
@@ -136,14 +137,6 @@ def _run_picker(
         collected.extend(_execute(adapter, inputs, runner))
     return collected
 
-# _none_to_empty: map any None instances to an empty string for TOML serialisation
-def _none_to_empty(obj):
-    if isinstance(obj, dict):
-        return {k: _none_to_empty(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_none_to_empty(v) for v in obj]
-    return '' if obj is None else obj
-
 # run_pick: pick command orchestration
 def run_pick(
     picker_names,
@@ -222,6 +215,6 @@ def run_pick(
         timestamp=datetime.now(timezone.utc),
         input_checksums=_checksum_inputs(manifests),
     )
-    (output_dir / 'params.toml').write_text(tomli_w.dumps(_none_to_empty(sidecar.model_dump())))
+    (output_dir / 'params.toml').write_text(tomli_w.dumps(toml_none_to_empty(sidecar.model_dump())))
 
     print(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
