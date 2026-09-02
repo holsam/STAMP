@@ -14,7 +14,7 @@ from stamp.adapters.native import NativePickerAdapter
 from stamp.backends.base import Runner
 from stamp.backends.local import LocalRunner
 from stamp.backends.mock import MockRunner
-from stamp.consensus.reconcile import build_particle_set, reconcile_picks
+from stamp.picking.consensus import build_particle_set, reconcile_picks
 from stamp.picking.native import PICKER_NAME as NATIVE_PICKER_NAME
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
