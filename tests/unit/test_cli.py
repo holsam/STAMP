@@ -13,7 +13,7 @@ from stamp.cli.cli import stamp
 runner = CliRunner()
 
 # Define constants
-STUB_COMMANDS = ['decoy', 'classify', 'identify', 'refine', 'pipeline']
+STUB_COMMANDS = ['classify', 'identify', 'refine', 'pipeline']
 
 # TestCli: class containing CLI unit tests
 class TestCli:
