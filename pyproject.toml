@@ -12,6 +12,7 @@ dependencies = [
     "numpy>=2.5.2",
     "pydantic>=2.13.4",
     "scikit-image>=0.26.0",
+    "scikit-learn>=1.9.0",
     "scipy>=1.18.1",
     "starfile>=0.5.13",
     "tomli-w>=1.2.0",
