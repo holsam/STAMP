@@ -14,7 +14,7 @@ _IN_PROCESS_MESSAGE = 'stamp-native runs in-process; call run_in_process() rathe
 # NativePickerAdapter: ToolAdapter surface for the in-process stamp-native picker
 class NativePickerAdapter:
     name = PICKER_NAME
-    stage = 'C'
+    stage = 'pick'
     mac_compatible = True
     requires_gpu = False
     automatable = True
