@@ -18,6 +18,7 @@ from stamp.decoy.generate import (
 from stamp.picking.native import NativePickerConfig
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
+from stamp.utils.io import write_sidecar
 
 # METHODS: decoy generation methods
 METHODS = (METHOD_REJECTED_SURFACE, METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE)
@@ -101,6 +102,30 @@ def run_decoy(
 
     decoy_path = output_dir / 'decoy_particle_set.json'
     decoy_path.write_text(decoy_set.model_dump_json(indent=2))
+
+    write_sidecar(
+        output_dir,
+        stage='decoy',
+        tool=f'stamp-{method}',
+        tool_version=None,
+        parameters={
+            'method': method,
+            'voxel_size_angstrom': voxel_size_angstrom,
+            'n_decoys_per_tomogram': n_decoys_per_tomogram,
+            'min_distance_from_real_angstrom': min_distance_from_real_angstrom,
+            'min_shift_angstrom': min_shift_angstrom,
+            'max_shift_angstrom': max_shift_angstrom,
+            'n_synthetic_tomograms': n_synthetic_tomograms,
+            'synthetic_shape': synthetic_shape,
+            'seed': seed,
+            'picker_params': parameters,
+        },
+        inputs=(
+            [('particle_set', real_particle_set)] if real_particle_set else []
+        ) + (
+            [('segmentation', segmentation_dir)] if segmentation_dir else []
+        ),
+    )
     print(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
 
 

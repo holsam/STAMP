@@ -3,8 +3,7 @@ STAMP: consensus picking logic
 '''
 
 # Import external dependencies
-import hashlib, platform, subprocess, tomli_w
-from datetime import datetime, timezone
+import platform
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -18,8 +17,7 @@ from stamp.picking.consensus import build_particle_set, reconcile_picks
 from stamp.picking.native import PICKER_NAME as NATIVE_PICKER_NAME
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
-from stamp.schemas.provenance import ProvenanceSidecar
-from stamp.utils.io import toml_none_to_empty
+from stamp.utils.io import write_sidecar
 
 # REAL_ADAPTERS: dictionary containing all implemented pickers
 REAL_ADAPTERS: dict[str, ToolAdapter] = {
@@ -75,26 +73,6 @@ def _load_manifests(
             )
         )
     return manifests
-
-# _current_stamp_commit: return the current git HEAD, or 'unknown' if it cannot be read
-def _current_stamp_commit() -> str:
-    try:
-        completed = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True)
-        return completed.stdout.strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return 'unknown'
-
-# _checksum_inputs: SHA-256 of each segmentation, streamed in chunks
-def _checksum_inputs(manifests: list[TomogramManifest]) -> dict[str, str]:
-    '''SHA-256 of each segmentation, streamed in chunks so this stays usable on full-size volumes'''
-    checksums: dict[str, str] = {}
-    for manifest in manifests:
-        digest = hashlib.sha256()
-        with manifest.segmentation_path.open('rb') as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b''):
-                digest.update(chunk)
-        checksums[manifest.segmentation_path.name] = digest.hexdigest()
-    return checksums
 
 # _run_picker: dispatch to the in-process, batched, or per-tomogram path
 def _run_picker(
@@ -198,7 +176,8 @@ def run_pick(
     particle_set_path = output_dir / 'particle_set.json'
     particle_set_path.write_text(particle_set.model_dump_json(indent=2))
 
-    sidecar = ProvenanceSidecar(
+    write_sidecar(
+        output_dir,
         stage='pick',
         tool='+'.join(picker_names),
         tool_version=None,
@@ -211,10 +190,8 @@ def run_pick(
             'backend': backend,
             'picker_params': extra_params,
         },
-        stamp_commit=_current_stamp_commit(),
-        timestamp=datetime.now(timezone.utc),
-        input_checksums=_checksum_inputs(manifests),
+        inputs=[(f'segmentation:{m.tomogram_id}', m.segmentation_path) for m in manifests]
+        + [(f'raw_tomogram:{m.tomogram_id}', m.raw_tomogram_path) for m in manifests],
     )
-    (output_dir / 'params.toml').write_text(tomli_w.dumps(toml_none_to_empty(sidecar.model_dump())))
 
     print(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')

@@ -3,8 +3,7 @@ STAMP: unsupervised classification logic
 '''
 
 # Import external dependencies
-import json, numpy as np, tomli_w
-from datetime import datetime, timezone
+import json, numpy as np
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -20,8 +19,7 @@ from stamp.classify.features import build_feature_matrix
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
-from stamp.schemas.provenance import ProvenanceSidecar
-from stamp.utils.io import toml_none_to_empty
+from stamp.utils.io import write_sidecar
 
 # run_classify: cluster picked particles by structural similarity
 def run_classify(
@@ -77,7 +75,8 @@ def run_classify(
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
 
-    sidecar = ProvenanceSidecar(
+    write_sidecar(
+        output_dir,
         stage='classify',
         tool='stamp-native-classifier',
         tool_version=None,
@@ -95,11 +94,9 @@ def run_classify(
             'n_extracted': len(kept),
             'n_skipped': len(skipped),
         },
-        stamp_commit='unknown',
-        timestamp=datetime.now(timezone.utc),
-        input_checksums={},
+        inputs=[('particle_set', particles)]
+        + [(f'raw_tomogram:{stem}', path) for stem, path in sorted(tomogram_paths.items())],
     )
-    (output_dir / 'params.toml').write_text(tomli_w.dumps(toml_none_to_empty(sidecar.model_dump())))
     print(f'Wrote {len(assignments)} class assignments to {assignments_path}')
 
 # _classify_combined: cluster all particles together, then average each half separately
