@@ -2,18 +2,115 @@
 STAMP: identification against predicted structures
 '''
 
-# Import external dependencies
-import typer
+# Import external dependencies
+import json, mrcfile, numpy as np, re
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
 
-# Initialise Typer app 
-identifyCli = typer.Typer(
-    no_args_is_help = True,
-    add_completion = False,
-)
+# Import STAMP objects
+from stamp.adapters.base import AdapterInputs
+from stamp.adapters.mock import get_mock_adapter
+from stamp.backends.local import LocalRunner
+from stamp.backends.mock import MockRunner
+from stamp.identify.decoy_check import evaluate_decoy_control
+from stamp.identify.fit import fit_candidate, rank_candidates
+from stamp.identify.panel import load_candidate_panel
+from stamp.identify.simulate import azimuthal_smear, estimate_resolution, simulate_density
+from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.utils.io import toml_none_to_empty
 
-# Define identify command
-@identifyCli.command()
-def identify():
-    '''Fit predicted structures to class averages and score candidates'''
-    print(f'stamp identify: not yet implemented')
-    raise SystemExit(0)
+# _CLASS_ID: leading cNN token of a class-average filename
+_CLASS_ID = re.compile(r'^(c\d+)')
+
+# load_class_averages: {class_id: (mean_volume, voxel_size)} merged across half-set MRCs
+def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
+    grouped: dict[str, list[np.ndarray]] = defaultdict(list)
+    voxel_sizes: dict[str, float] = {}
+    for path in sorted(directory.glob('*.mrc')):
+        match = _CLASS_ID.match(path.stem)
+        if not match:
+            continue
+        with mrcfile.open(str(path), permissive=True) as mrc:
+            grouped[match.group(1)].append(np.transpose(np.asarray(mrc.data), (2, 1, 0)))
+            voxel_sizes[match.group(1)] = float(mrc.voxel_size.x)
+    if not grouped:
+        raise ValueError(f'no cNN-named class averages in {directory}')
+    return {cid: (np.mean(volumes, axis=0), voxel_sizes[cid]) for cid, volumes in grouped.items()}
+
+# _score_panel: fit every candidate to every class average, returns {class_id: {candidate: score}}
+def _score_panel(class_averages, panel, resolution_override, fitter, backend):
+    all_scores: dict[str, dict[str, float]] = {}
+    for class_id, (average, voxel_size) in class_averages.items():
+        box_voxels = average.shape[-1]
+        resolution = resolution_override or estimate_resolution(average, voxel_size)
+        scores: dict[str, float] = {}
+        for candidate in panel:
+            simulated = simulate_density(candidate.structure_path, box_voxels, voxel_size, resolution)
+            simulated = azimuthal_smear(simulated)
+            scores[candidate.name] = fit_candidate(average, simulated)
+        all_scores[class_id] = scores
+    return all_scores
+
+# run_identify: fit the candidate panel to each class average and rank per class
+def run_identify(
+    classes: Path,
+    candidates: Path,
+    output_dir: Path,
+    decoy_classes: Path | None,
+    resolution: float | None,
+    backend: str,
+    fitter: str,
+    fetch_missing: bool
+) -> None:
+    panel = load_candidate_panel(candidates, fetch_missing=fetch_missing)
+    print(f'Loaded {len(panel)} candidates.')
+    class_averages = load_class_averages(classes)
+    print(f'Loaded {len(class_averages)} class averages.')
+
+    real_scores = _score_panel(class_averages, panel, resolution, fitter, backend)
+    results = [rank_candidates(class_id, scores, method=f'stamp-{fitter}') for class_id, scores in sorted(real_scores.items())]
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / 'identification.json').write_text(json.dumps([r.model_dump() for r in results], indent=2))
+
+    decoy_control = None
+    if decoy_classes is not None:
+        decoy_scores = _score_panel(load_class_averages(decoy_classes), panel, resolution, fitter, backend)
+        real_best = [max(s.values()) for s in real_scores.values()]
+        decoy_best = [max(s.values()) for s in decoy_scores.values()]
+        decoy_control = evaluate_decoy_control(real_best, decoy_best)
+        (output_dir / 'decoy_control.json').write_text(json.dumps(decoy_control.model_dump(), indent=2))
+
+    _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control)
+
+    sidecar = ProvenanceSidecar(
+        stage='identify',
+        tool=f'stamp-{fitter}',
+        tool_version=None,
+        parameters={
+            'fitter': fitter, 'backend': backend, 'resolution': resolution,
+            'n_candidates': len(panel), 'n_classes': len(class_averages),
+            'decoy_control': decoy_control.model_dump() if decoy_control else None,
+        },
+        stamp_commit='unknown',
+        timestamp=datetime.now(timezone.utc),
+        input_checksums={},
+    )
+    import tomli_w
+    (output_dir / 'params.toml').write_text(tomli_w.dumps(toml_none_to_empty(sidecar.model_dump())))
+    print(f'Wrote identification for {len(results)} classes to {output_dir}')
+
+# _write_report: human-readable ranked table per class, decoy verdict first if present
+def _write_report(path: Path, results, all_scores, decoy_control) -> None:
+    lines: list[str] = []
+    if decoy_control is not None:
+        banner = 'PASS' if decoy_control.passed else 'FAIL'
+        lines += [f'DECOY CONTROL: {banner}', f'  {decoy_control.reason}', '']
+    for result in results:
+        lines.append(f'{result.cluster_id}: {result.candidate_protein}  '
+                     f'score={result.fit_score:.3f}  gap={result.score_gap_to_runner_up:.3f}')
+        for name, score in sorted(all_scores[result.cluster_id].items(), key=lambda kv: -kv[1]):
+            lines.append(f'    {name:<24} {score:.3f}')
+        lines.append('')
+    path.write_text('\n'.join(lines))
