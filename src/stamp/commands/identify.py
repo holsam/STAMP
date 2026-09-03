@@ -5,7 +5,6 @@ STAMP: identification against predicted structures
 # Import external dependencies
 import json, mrcfile, numpy as np, re
 from collections import defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Import STAMP objects
@@ -17,8 +16,7 @@ from stamp.identify.decoy_check import evaluate_decoy_control
 from stamp.identify.fit import fit_candidate, rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.identify.simulate import azimuthal_smear, estimate_resolution, simulate_density
-from stamp.schemas.provenance import ProvenanceSidecar
-from stamp.utils.io import toml_none_to_empty
+from stamp.utils.io import write_sidecar
 
 # _CLASS_ID: leading cNN token of a class-average filename
 _CLASS_ID = re.compile(r'^(c\d+)')
@@ -84,7 +82,8 @@ def run_identify(
 
     _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control)
 
-    sidecar = ProvenanceSidecar(
+    write_sidecar(
+        output_dir,
         stage='identify',
         tool=f'stamp-{fitter}',
         tool_version=None,
@@ -93,12 +92,9 @@ def run_identify(
             'n_candidates': len(panel), 'n_classes': len(class_averages),
             'decoy_control': decoy_control.model_dump() if decoy_control else None,
         },
-        stamp_commit='unknown',
-        timestamp=datetime.now(timezone.utc),
-        input_checksums={},
+        inputs=[('class_averages', classes), ('candidates', candidates)]
+        + ([('decoy_classes', decoy_classes)] if decoy_classes else []),
     )
-    import tomli_w
-    (output_dir / 'params.toml').write_text(tomli_w.dumps(toml_none_to_empty(sidecar.model_dump())))
     print(f'Wrote identification for {len(results)} classes to {output_dir}')
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present

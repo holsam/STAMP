@@ -1,13 +1,15 @@
 '''
-STAMP: unit tests for half set utility functions
+STAMP: unit tests for utilities
 '''
 
 # Import external dependencies
-import pytest
+import pytest, subprocess, tomllib
 
 # Import internal functions and schema
 from stamp.utils.halfset import assign_half_sets, split_by_half_set, validate_single_half_set
 from stamp.schemas.particles import HalfSet, Particle
+from stamp.utils import io as io_utils
+from stamp.schemas.provenance import ProvenanceSidecar
 
 # _particle: returns a valid Particle instance
 def _particle(particle_id: str, half_set: HalfSet) -> Particle:
@@ -94,3 +96,46 @@ class TestSplitHalfSet:
         half_a, half_b = split_by_half_set(particles)
         assert {p.particle_id for p in half_a} == {'p001', 'p003'}
         assert {p.particle_id for p in half_b} == {'p002'}
+
+class TestIo:
+    def test_resolve_commit_reads_git_head(self):
+        assert io_utils.resolve_stamp_commit() != 'unknown'
+
+    def test_resolve_commit_falls_back_when_git_missing(self, monkeypatch):
+        def _no_git(*args, **kwargs):
+            raise FileNotFoundError
+
+        monkeypatch.setattr(subprocess, 'run', _no_git)
+        monkeypatch.setattr(io_utils, 'version', lambda _name: '9.9.9')
+        assert io_utils.resolve_stamp_commit() == 'stamp-9.9.9'
+
+    def test_checksum_is_stable_and_cache_hits(self, tmp_path):
+        target = tmp_path / 'a.bin'
+        target.write_bytes(b'stamp')
+        first = io_utils.checksum_file(target, cache_dir=tmp_path)
+        assert (tmp_path / '.stamp_checksums.json').is_file()
+        assert io_utils.checksum_file(target, cache_dir=tmp_path) == first
+
+    def test_directory_digest_changes_when_a_file_changes(self, tmp_path):
+        directory = tmp_path / 'averages'
+        directory.mkdir()
+        (directory / 'c00.mrc').write_bytes(b'one')
+        before = io_utils.checksum_inputs([('class_averages', directory)])['class_averages']
+        (directory / 'c00.mrc').write_bytes(b'two')
+        after = io_utils.checksum_inputs([('class_averages', directory)])['class_averages']
+        assert before != after
+
+    def test_write_sidecar_round_trips(self, tmp_path):
+        an_input = tmp_path / 'particle_set.json'
+        an_input.write_text('{}')
+        path = io_utils.write_sidecar(
+            tmp_path / 'out',
+            stage='classify',
+            tool='stamp-native-classifier',
+            tool_version=None,
+            parameters={'method': 'hdbscan'},
+            inputs=[('particle_set', an_input)],
+        )
+        parsed = ProvenanceSidecar.model_validate(tomllib.loads(path.read_text()))
+        assert parsed.stamp_commit != 'unknown'
+        assert parsed.input_checksums['particle_set']

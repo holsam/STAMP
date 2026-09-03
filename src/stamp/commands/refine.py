@@ -4,7 +4,6 @@ STAMP: refinement with enforced half-set independence
 
 # Import external dependencies
 import json, mrcfile, numpy as np
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Import STAMP objects
@@ -19,8 +18,7 @@ from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
 )
 from stamp.schemas.particles import ClassAssignment, ParticleSet
-from stamp.schemas.provenance import ProvenanceSidecar
-from stamp.utils.io import toml_none_to_empty
+from stamp.utils.io import write_sidecar
 
 # _ADAPTERS: real refine adapters by --tool name
 _ADAPTERS = {'relion': RelionRefineAdapter, 'm': MRefineAdapter}
@@ -110,7 +108,8 @@ def run_refine(
         write_fsc_files(fsc, tree['combined'])
         print(f'{target}: resolution {fsc.resolution_angstrom:.1f} A @ FSC=0.143')
 
-        sidecar = ProvenanceSidecar(
+        write_sidecar(
+            tree['combined'],
             stage='refine',
             tool=f'stamp-{tool}',
             tool_version=None,
@@ -124,9 +123,10 @@ def run_refine(
                 'n_half_b': len(half_b),
                 'mask': str(mask) if mask else None,
             },
-            stamp_commit='unknown',
-            timestamp=datetime.now(timezone.utc),
-            input_checksums={},
+            inputs=[
+                ('particle_set', particles),
+                ('class_assignments', class_assignments),
+                ('reference:A', reference_a),
+                ('reference:B', reference_b),
+            ] + ([('mask', mask)] if mask else []),
         )
-        import tomli_w
-        (tree['combined'] / 'params.toml').write_text(tomli_w.dumps(toml_none_to_empty(sidecar.model_dump())))
