@@ -32,6 +32,7 @@ class PickStage(_Strict):
     consensus_rule: Literal['union', 'intersection'] = 'intersection'
     distance_threshold: float = 15.0
     half_set_seed: int = 0
+    backend: Literal['local', 'mock', 'cluster'] | None = None
 
 class ClassifyStage(_Strict):
     method: Literal['hdbscan', 'kmeans'] = 'hdbscan'
@@ -48,12 +49,14 @@ class IdentifyStage(_Strict):
     resolution: float | None = None
     fitter: Literal['native'] = 'native'
     fetch_missing: bool = False
+    backend: Literal['local', 'mock', 'cluster'] | None = None
 
 class RefineStage(_Strict):
     tool: Literal['relion', 'm'] = 'relion'
     class_id: str = 'all'
     iterations: int = 5
     mask: Path | None = None
+    backend: Literal['local', 'mock', 'cluster'] | None = None
 
 # StageConfigs: the [stage.*] tables
 class StageConfigs(_Strict):
@@ -87,4 +90,10 @@ def load_run_config(path: Path) -> RunConfig:
     config.stage.identify.candidates = (base / config.stage.identify.candidates).resolve()
     if config.stage.refine.mask is not None:
         config.stage.refine.mask = (base / config.stage.refine.mask).resolve()
+    if config.stage.pick.backend is None:
+        config.stage.pick.backend = config.run.backend
+    if config.stage.identify.backend is None:
+        config.stage.identify.backend = config.run.backend
+    if config.stage.refine.backend is None:
+        config.stage.refine.backend = config.run.backend
     return config

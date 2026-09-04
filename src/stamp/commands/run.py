@@ -23,6 +23,9 @@ def run_full_pipeline(
         config.decoy.enabled = False
     if backend:
         config.run.backend = backend
+        config.stage.pick.backend = backend
+        config.stage.identify.backend = backend
+        config.stage.refine.backend = backend
     outcome = run_pipeline(config, config.run.output_dir, force=force, from_stage=from_stage)
     md_path, _ = write_report(outcome, config.run.output_dir)
     print(f'Run complete. Report: {md_path}')

@@ -40,7 +40,7 @@ def _real_pick(config: RunConfig, output_dir: Path) -> Path:
         consensus_rule=config.stage.pick.consensus_rule,
         distance_threshold=config.stage.pick.distance_threshold,
         half_set_seed=config.stage.pick.half_set_seed,
-        backend=config.run.backend,
+        backend=config.stage.pick.backend,
     )
     return target / 'particle_set.json'
 
@@ -134,7 +134,7 @@ def run_pipeline(
             output_dir=identify_dir,
             decoy_classes=decoy_classes if (config.decoy.enabled and decoy_classes.is_dir()) else None,
             resolution=config.stage.identify.resolution,
-            backend=config.run.backend if config.run.backend != 'cluster' else 'local',
+            backend=config.stage.identify.backend if config.stage.identify.backend != 'cluster' else 'local',
             fitter=config.stage.identify.fitter,
             fetch_missing=config.stage.identify.fetch_missing,
         )
@@ -159,7 +159,7 @@ def run_pipeline(
             tool=config.stage.refine.tool,
             mask=config.stage.refine.mask,
             iterations=config.stage.refine.iterations,
-            backend=config.run.backend if config.run.backend != 'cluster' else 'local',
+            backend=config.stage.refine.backend if config.stage.refine.backend != 'cluster' else 'local',
             voxel_size_angstrom=config.run.voxel_size_angstrom,
             combined_halfset=False,
         )
