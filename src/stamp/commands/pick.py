@@ -30,7 +30,7 @@ def _execute(adapter: ToolAdapter, inputs: AdapterInputs, runner: Runner) -> lis
     result = runner.run(command)
     if not result.succeeded:
         print(f'{adapter.name} failed (exit {result.exit_code}): {result.stderr}')
-        raise SystemExit(code=1)
+        raise SystemExit(1)
     output = adapter.parse_output(result)
     return [RawPick(**raw) for raw in output.parsed.get('picks', [])]
 
@@ -49,7 +49,7 @@ def _select_adapter(picker_name: str, backend: str) -> ToolAdapter:
     adapter = REAL_ADAPTERS.get(picker_name)
     if platform.system() == 'Darwin' and not adapter.mac_compatible:
         print(f'{picker_name} cannot run on macOS (needs CUDA). Use {NATIVE_PICKER_NAME}, or run on the cluster.')
-        raise SystemExit(code=1)
+        raise SystemExit(1)
     return adapter
 
 # _load_manifests: match segmentations to raw tomograms by filename stem
@@ -132,7 +132,7 @@ def run_pick(
     manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
     if not manifests:
         print(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
-        raise SystemExit(code=1)
+        raise SystemExit(1)
     print(f'Matched {len(manifests)} tomograms/segmentations.')
 
     runner = _select_runner(backend)
@@ -164,7 +164,7 @@ def run_pick(
 
     if not all_reconciled:
         print('No particles survived reconciliation. If using stamp-native, try lowering n_mad or check density_sign matches your tomograms (-1 for conventional dark-protein contrast).')
-        raise SystemExit(code=1)
+        raise SystemExit(1)
 
     particle_set = build_particle_set(
         reconciled_picks=all_reconciled,

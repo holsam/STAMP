@@ -53,7 +53,7 @@ def run_classify(
         print(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram')
     if not kept:
         print('No particles could be extracted. Check --raw-tomogram-dir and --box-angstrom')
-        raise SystemExit(code=1)
+        raise SystemExit(1)
     print(f'Extracted {len(kept)} subvolumes at box {box_voxels}')
 
     features = build_feature_matrix(subvolumes, n_radial_bins=n_radial_bins)
@@ -139,7 +139,7 @@ def _classify_strict(
     indices_b = np.array([index_of[p.particle_id] for p in half_b])
     if indices_a.size == 0 or indices_b.size == 0:
         print('Strict mode needs particles in both half-sets')
-        raise SystemExit(code=1)
+        raise SystemExit(1)
 
     result_a = reduce_and_cluster(features[indices_a], config)
     result_b = reduce_and_cluster(features[indices_b], config)

@@ -54,7 +54,7 @@ def run_decoy(
         shape = tuple(int(value) for value in synthetic_shape.split(','))
         if len(shape) != 3:
             print('--synthetic-shape must be three integers')
-            raise SystemExit(code=1)
+            raise SystemExit(1)
         decoy_set, decoy_manifests = generate_synthetic_noise_decoys(
             tomogram_shape=shape,
             n_tomograms=n_synthetic_tomograms,
@@ -69,12 +69,12 @@ def run_decoy(
     else:
         if not (real_particle_set and segmentation_dir and raw_tomogram_dir):
             print(f'--method {method} requires --real-particle-set, --segmentation-dir and --raw-tomogram-dir.')
-            raise SystemExit(code=1)
+            raise SystemExit(1)
         real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
         manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
         if not manifests:
             print('No matched segmentation/tomogram pairs found')
-            raise SystemExit(code=1)
+            raise SystemExit(1)
 
         if method == METHOD_REJECTED_SURFACE:
             decoy_set = generate_rejected_surface_decoys(
@@ -98,7 +98,7 @@ def run_decoy(
 
     if decoy_set is None or not decoy_set.particles:
         print('No decoy positions generated. For rejected-surface, check that --min-distance-from-real-angstrom isn\'t excluding the whole surface; for shifted, that the shift range fits inside the volume.')
-        raise SystemExit(code=1)
+        raise SystemExit(1)
 
     decoy_path = output_dir / 'decoy_particle_set.json'
     decoy_path.write_text(decoy_set.model_dump_json(indent=2))
