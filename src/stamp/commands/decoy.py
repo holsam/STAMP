@@ -15,7 +15,9 @@ from stamp.decoy.generate import (
     generate_shifted_decoys,
     generate_synthetic_noise_decoys,
 )
+from stamp.backends.base import ToolCommand
 from stamp.picking.native import NativePickerConfig
+from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.io import write_sidecar
@@ -127,6 +129,23 @@ def run_decoy(
         ),
     )
     print(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
+
+
+# build_decoy_commands: create ToolCommand for `stamp decoy`
+def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
+    target = stage_dir(output_dir, 'decoy', 'pick')
+    real_particles = stage_dir(output_dir, 'real', 'pick') / 'particle_set.json'
+    argv = [
+        'stamp', 'decoy',
+        '--out-dir', str(target),
+        '--voxel-size-a', str(config.run.voxel_size_angstrom),
+        '--method', config.decoy.method,
+        '--real-particle-set', str(real_particles),
+        '--seg-dir', str(config.run.segmentation_dir),
+        '--raw-dir', str(config.run.raw_tomogram_dir),
+        '--seed', str(config.stage.pick.half_set_seed),
+    ]
+    return [ToolCommand(tool='decoy', argv=argv, working_directory=target, output_paths=[target / 'decoy_particle_set.json'])]
 
 
 # _load_manifests: match segmentations to raw tomograms by filename stem

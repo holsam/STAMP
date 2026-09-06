@@ -10,11 +10,12 @@ from pathlib import Path
 from stamp.adapters.base import AdapterInputs, ToolAdapter
 from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.native import NativePickerAdapter
-from stamp.backends.base import Runner
+from stamp.backends.base import Runner, ToolCommand
 from stamp.backends.local import LocalRunner
 from stamp.backends.mock import MockRunner
 from stamp.picking.consensus import build_particle_set, reconcile_picks
 from stamp.picking.native import PICKER_NAME as NATIVE_PICKER_NAME
+from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.io import write_sidecar
@@ -195,3 +196,19 @@ def run_pick(
     )
 
     print(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
+
+# build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
+def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
+    target = stage_dir(output_dir, 'real', 'pick')
+    argv = [
+        'stamp', 'pick', ','.join(config.stage.pick.pickers),
+        '--seg-dir', str(config.run.segmentation_dir),
+        '--raw-dir', str(config.run.raw_tomogram_dir),
+        '--out-dir', str(target),
+        '--voxel-size-a', str(config.run.voxel_size_angstrom),
+        '--consensus-rule', config.stage.pick.consensus_rule,
+        '--distance-threshold', str(config.stage.pick.distance_threshold),
+        '--half-set-seed', str(config.stage.pick.half_set_seed),
+        '--backend', 'local',
+    ]
+    return [ToolCommand(tool='pick', argv=argv, working_directory=target, output_paths=[target / 'particle_set.json'])]

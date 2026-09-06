@@ -10,9 +10,11 @@ from pathlib import Path
 # Import STAMP objects
 from stamp.adapters.base import AdapterInputs
 from stamp.adapters.mock import get_mock_adapter
+from stamp.backends.base import ToolCommand
 from stamp.backends.local import LocalRunner
 from stamp.backends.mock import MockRunner
 from stamp.identify.decoy_check import evaluate_decoy_control
+from stamp.run.state import stage_dir
 from stamp.identify.fit import fit_candidate, rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.identify.simulate import azimuthal_smear, estimate_resolution, simulate_density
@@ -96,6 +98,27 @@ def run_identify(
         + ([('decoy_classes', decoy_classes)] if decoy_classes else []),
     )
     print(f'Wrote identification for {len(results)} classes to {output_dir}')
+
+# build_identify_commands: create ToolCommand for `stamp identify`
+def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
+    target = stage_dir(output_dir, 'real', 'identify')
+    real_classes = stage_dir(output_dir, 'real', 'classify') / 'class_averages'
+    decoy_classes = stage_dir(output_dir, 'decoy', 'classify') / 'class_averages'
+    argv = [
+        'stamp', 'identify',
+        '--classes', str(real_classes),
+        '--candidates', str(config.stage.identify.candidates),
+        '--output-dir', str(target),
+        '--fitter', config.stage.identify.fitter,
+        '--backend', 'local',
+    ]
+    if config.decoy.enabled:
+        argv += ['--decoy-classes', str(decoy_classes)]
+    if config.stage.identify.resolution is not None:
+        argv += ['--resolution', str(config.stage.identify.resolution)]
+    if config.stage.identify.fetch_missing:
+        argv.append('--fetch-missing')
+    return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present
 def _write_report(path: Path, results, all_scores, decoy_control) -> None:
