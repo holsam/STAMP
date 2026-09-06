@@ -3,7 +3,6 @@ STAMP: consensus picking logic
 '''
 
 # Import external dependencies
-import platform
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -11,8 +10,7 @@ from stamp.adapters.base import AdapterInputs, ToolAdapter
 from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.native import NativePickerAdapter
 from stamp.backends.base import Runner, ToolCommand
-from stamp.backends.local import LocalRunner
-from stamp.backends.mock import MockRunner
+from stamp.backends.factory import check_backend_supports, select_runner
 from stamp.picking.consensus import build_particle_set, reconcile_picks
 from stamp.picking.native import PICKER_NAME as NATIVE_PICKER_NAME
 from stamp.run.state import stage_dir
@@ -35,22 +33,16 @@ def _execute(adapter: ToolAdapter, inputs: AdapterInputs, runner: Runner) -> lis
     output = adapter.parse_output(result)
     return [RawPick(**raw) for raw in output.parsed.get('picks', [])]
 
-# _select_runner: return the Runner for the requested backend
-def _select_runner(backend: str) -> Runner:
-    if backend == 'mock':
-        return MockRunner()
-    if backend == 'local':
-        return LocalRunner()
-
-# _select_adapter: return the adapter for a picker name, rejecting Mac-incompatible tools on macOS
+# _select_adapter: return the adapter for a picker name, guarding it against the chosen backend
 def _select_adapter(picker_name: str, backend: str) -> ToolAdapter:
     if backend == 'mock':
         return get_mock_adapter(picker_name)
 
     adapter = REAL_ADAPTERS.get(picker_name)
-    if platform.system() == 'Darwin' and not adapter.mac_compatible:
-        print(f'{picker_name} cannot run on macOS (needs CUDA). Use {NATIVE_PICKER_NAME}, or run on the cluster.')
+    if adapter is None:
+        print(f'unknown picker {picker_name!r}')
         raise SystemExit(1)
+    check_backend_supports(adapter, backend)
     return adapter
 
 # _load_manifests: match segmentations to raw tomograms by filename stem
@@ -136,7 +128,7 @@ def run_pick(
         raise SystemExit(1)
     print(f'Matched {len(manifests)} tomograms/segmentations.')
 
-    runner = _select_runner(backend)
+    runner = select_runner(backend)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     picks_by_picker: dict[str, list[RawPick]] = {}

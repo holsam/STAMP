@@ -12,8 +12,7 @@ from stamp.adapters.m_refine import MRefineAdapter
 from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.relion import RelionRefineAdapter
 from stamp.backends.base import ToolCommand
-from stamp.backends.local import LocalRunner
-from stamp.backends.mock import MockRunner
+from stamp.backends.factory import check_backend_supports, select_runner
 from stamp.refine.fsc import compute_fsc, soft_sphere_mask, write_fsc_files
 from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
@@ -80,7 +79,8 @@ def run_refine(
     targets = sorted(identified) if class_id == 'all' else [class_id]
     output_dir.mkdir(parents=True, exist_ok=True)
     adapter = get_mock_adapter('relion' if tool == 'relion' else 'm-refine') if backend == 'mock' else _ADAPTERS[tool]()
-    runner = MockRunner() if backend == 'mock' else LocalRunner()
+    check_backend_supports(adapter, backend)
+    runner = select_runner(backend, requires_gpu=getattr(adapter, 'requires_gpu', False))
     parameters = {'voxel_size_angstrom': voxel_size_angstrom, 'iterations': iterations}
 
     for target in targets:
