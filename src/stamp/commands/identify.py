@@ -136,8 +136,10 @@ def _write_report(path: Path, results, all_scores, decoy_control, resolution) ->
         banner = 'PASS' if decoy_control.passed else 'FAIL'
         lines += [f'DECOY CONTROL: {banner}', f'  {decoy_control.reason}', '']
     for result in results:
+        gap = result.score_gap_to_runner_up
+        gap_text = f'{gap:.3f}' if gap is not None else 'n/a (single candidate)'
         lines.append(f'{result.cluster_id}: {result.candidate_protein}  '
-                     f'score={result.fit_score:.3f}  gap={result.score_gap_to_runner_up:.3f}')
+                     f'score={result.fit_score:.3f}  gap={gap_text}')
         for name, score in sorted(all_scores[result.cluster_id].items(), key=lambda kv: -kv[1]):
             lines.append(f'    {name:<24} {score:.3f}')
         lines.append('')

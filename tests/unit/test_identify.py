@@ -152,6 +152,10 @@ class TestFit:
         rolled = np.rot90(target, 1, axes=(0, 1))
         assert fit_candidate(target, rolled) > 0.8
 
+    def test_single_candidate_has_no_gap(self):
+        result = rank_candidates('c00', {'only': 0.7}, 'm')
+        assert result.score_gap_to_runner_up is None
+
 # TestDecoyCheck: class containing unit tests for src/stamp/identify/decoy_check.py
 class TestDecoyControl:
     def test_clear_separation_passes(self):
