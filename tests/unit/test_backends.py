@@ -74,7 +74,7 @@ class TestBackends:
     
 # TestSlurmBackend: class containing unit tests for SLURM backend helpers
     def test_script_adds_gpus_only_when_required(self, tmp_path):
-        profile = ClusterProfile(partition='cpu', gpus_per_job=2, cpus_per_task=4, module_loads=['relion/5.0'])
+        profile = ClusterProfile(partition='cpu', gpus=2, cpus_per_task=4, module_loads=['relion/5.0'])
         gpu_script = render_job_script(_command(tmp_path), True, profile, tmp_path)
         cpu_script = render_job_script(_command(tmp_path), False, profile, tmp_path)
         assert '--partition=cpu' in gpu_script and '--partition=cpu' in cpu_script

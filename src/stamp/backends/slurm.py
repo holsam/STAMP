@@ -41,7 +41,7 @@ def render_job_script(
         f'#SBATCH --error={workdir}/slurm-%j.err',
     ]
     if requires_gpu:
-        directives.append(f'#SBATCH --gpus={profile.gpus_per_job}')
+        directives.append(f'#SBATCH --gpus={profile.gpus}')
 
     module_lines = [f'module load {name}' for name in profile.module_loads]
     body = ' '.join(shlex.quote(part) for part in command.argv)
