@@ -54,3 +54,17 @@ def azimuthal_smear(volume: np.ndarray, n_angles: int = 72) -> np.ndarray:
             volume, angle, axes=(0, 1), reshape=False, order=1, mode='constant'
         )
     return (accumulator / n_angles).astype(volume.dtype)
+
+# to_comparable: reduce density maps for comparability by band-limiting to common resolution and azimuthally averaging about z
+def to_comparable(
+    volume: np.ndarray,
+    voxel_size_angstrom: float,
+    resolution_angstrom: float,
+    *,
+    already_bandlimited: bool = False,
+) -> np.ndarray:
+    prepared = volume.astype(np.float64)
+    if not already_bandlimited:
+        sigma_voxels = resolution_angstrom * _FWHM_TO_SIGMA / voxel_size_angstrom
+        prepared = gaussian_filter(prepared, sigma=max(sigma_voxels, 0.5))
+    return azimuthal_smear(prepared).astype(np.float32)

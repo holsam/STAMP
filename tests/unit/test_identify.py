@@ -78,6 +78,30 @@ class TestFit:
         assert without.score_gap_to_runner_up > with_distractor.score_gap_to_runner_up
         assert with_distractor.candidate_protein == 'real'
 
+    def test_species_discrimination(self):
+        box, voxel, resolution = 32, 4.0, 20.0
+
+        def cylinder(height_voxels):
+            centre = box // 2
+            yy, xx = np.ogrid[-centre:box - centre, -centre:box - centre]
+            disk = (xx * xx + yy * yy) <= 16
+            mask = np.zeros((box, box, box), dtype=bool)
+            z0, z1 = centre - height_voxels // 2, centre + height_voxels // 2
+            mask[..., z0:z1] = disk[..., None]
+            volume = np.zeros((box, box, box))
+            volume[mask] = 1.0
+            return volume
+
+        tall_template = to_comparable(cylinder(20), voxel, resolution)
+        short_template = to_comparable(cylinder(6), voxel, resolution)
+
+        rng = np.random.default_rng(0)
+        average = -1.0 * cylinder(20) + rng.normal(0.0, 0.2, (box, box, box))
+        comparable_average = to_comparable(average, voxel, resolution)
+
+        tall_score = fit_candidate(comparable_average, tall_template)
+        short_score = fit_candidate(comparable_average, short_template)
+        assert tall_score > short_score
 # TestDecoyCheck: class containing unit tests for src/stamp/identify/decoy_check.py
 class TestDecoyCheck:
     def test_fires_on_overlapping_distributions(self):
