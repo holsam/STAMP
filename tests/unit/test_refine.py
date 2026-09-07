@@ -55,6 +55,21 @@ class TestRefineFsc:
         default = compute_fsc(a, b, 3.0)
         assert not np.allclose(masked.fsc_masked, default.fsc_masked)
 
+    def test_identical_half_maps_correlate_at_dc(self):
+        '''Shell 0 is ~1 for identical maps.'''
+        rng = np.random.default_rng(0)
+        volume = rng.random((24, 24, 24)).astype(np.float32)
+        result = compute_fsc(volume, volume.copy(), voxel_size_angstrom=4.0)
+        assert result.fsc_masked[0] > 0.99
+
+    def test_uncorrelated_maps_drop_off(self):
+        '''Independent noise gives a low high-frequency FSC.'''
+        rng = np.random.default_rng(1)
+        a = rng.random((24, 24, 24)).astype(np.float32)
+        b = rng.random((24, 24, 24)).astype(np.float32)
+        result = compute_fsc(a, b, voxel_size_angstrom=4.0)
+        assert result.fsc_masked[-1] < 0.3
+
 # TestGeometry: unit tests for refine/halfset_guard.py
 class TestRefineHalfsetGuard:
     def test_split_class_by_half(self):

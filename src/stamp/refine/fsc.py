@@ -32,15 +32,17 @@ def soft_sphere_mask(
     mask[taper >= 1] = 0.0
     return mask
 
+# _shell_map: integer shell index per Fourier voxel, DC at index 0 to match np.fft.fftn
+def _shell_map(shape: tuple[int, int, int]) -> tuple[np.ndarray, int]:
+    centre = np.array(shape) // 2
+    grid = np.indices(shape) - centre[:, None, None, None]
+    radius = np.sqrt((grid ** 2).sum(axis=0))
+    return np.fft.ifftshift(radius).astype(int), int(centre.min())
+
 # _shell_fsc: shell-wise Fourier ring correlation between two maps
-def _shell_fsc(map_a: np.ndarray, map_b: np.ndarray) -> np.ndarray:
+def _shell_fsc(map_a: np.ndarray, map_b: np.ndarray, shell: np.ndarray, n_shells: int) -> np.ndarray:
     fft_a = np.fft.fftn(map_a)
     fft_b = np.fft.fftn(map_b)
-    centre = np.array(map_a.shape) // 2
-    grid = np.indices(map_a.shape) - centre[:, None, None, None]
-    shell = np.fft.fftshift(np.sqrt((grid ** 2).sum(axis=0))).astype(int)
-    shell = np.fft.ifftshift(shell)
-    n_shells = centre.min()
     correlation = np.zeros(n_shells)
     for index in range(n_shells):
         selection = shell == index
