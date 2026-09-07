@@ -102,6 +102,30 @@ class TestFit:
         tall_score = fit_candidate(comparable_average, tall_template)
         short_score = fit_candidate(comparable_average, short_template)
         assert tall_score > short_score
+
+    def test_matches_through_opposite_contrast(self):
+        # a protein-dark class average must recognise its own (protein-bright) template, flipped the way _score_panel flips it, above a mismatched one
+        box, voxel, resolution = 32, 4.0, 20.0
+
+        def cylinder(height_voxels):
+            centre = box // 2
+            yy, xx = np.ogrid[-centre:box - centre, -centre:box - centre]
+            disk = (xx * xx + yy * yy) <= 16
+            mask = np.zeros((box, box, box), dtype=bool)
+            z0, z1 = centre - height_voxels // 2, centre + height_voxels // 2
+            mask[..., z0:z1] = disk[..., None]
+            volume = np.zeros((box, box, box))
+            volume[mask] = 1.0
+            return volume
+
+        rng = np.random.default_rng(0)
+        average = to_comparable(-1.0 * cylinder(20) + rng.normal(0.0, 0.2, (box, box, box)), voxel, resolution)
+        tall = -to_comparable(cylinder(20), voxel, resolution)
+        short = -to_comparable(cylinder(6), voxel, resolution)
+
+        assert fit_candidate(average, tall) > 0.3
+        assert fit_candidate(average, tall) > fit_candidate(average, short)
+
 # TestDecoyCheck: class containing unit tests for src/stamp/identify/decoy_check.py
 class TestDecoyCheck:
     def test_fires_on_overlapping_distributions(self):

@@ -47,7 +47,8 @@ def _score_panel(class_averages, panel, resolution, fitter, backend):
         scores: dict[str, float] = {}
         for candidate in panel:
             simulated = simulate_density(candidate.structure_path, box_voxels, voxel_size, resolution)
-            simulated = to_comparable(simulated, voxel_size, resolution, already_bandlimited=True)
+            # simulate_density is protein-bright so flip to match tomogram convention
+            simulated = -to_comparable(simulated, voxel_size, resolution, already_bandlimited=True)
             scores[candidate.name] = fit_candidate(comparable_average, simulated)
         all_scores[class_id] = scores
     return all_scores

@@ -24,8 +24,8 @@ def fit_candidate(
     tilt_degrees: float = 15.0,
     tilt_step: float = 5.0
 ) -> float:
-    threshold = class_average.mean() + class_average.std()
-    mask = class_average > threshold
+    deviation = np.abs(class_average - class_average.mean())
+    mask = deviation > class_average.std()
     if not mask.any():
         mask = np.ones_like(class_average, dtype=bool)
     reference = _standardise(class_average[mask])
