@@ -46,22 +46,6 @@ def simulate_density(
     peak = blurred.max()
     return (blurred / peak).astype(np.float32) if peak > 0 else blurred.astype(np.float32)
 
-# estimate_resolution: radial power-spectrum falloff, used when --resolution is not given
-def estimate_resolution(class_average: np.ndarray, voxel_size_angstrom: float) -> float:
-    box_voxels = class_average.shape[-1]
-    spectrum = np.abs(np.fft.fftshift(np.fft.fftn(class_average))) ** 2
-    centre = np.array(spectrum.shape) // 2
-    grid = np.indices(spectrum.shape) - centre[:, None, None, None]
-    radius = np.sqrt((grid ** 2).sum(axis=0)).astype(int)
-    radial_power = np.bincount(radius.ravel(), weights=spectrum.ravel()) / np.maximum(
-        np.bincount(radius.ravel()), 1
-    )
-    plateau = radial_power[1:4].mean()
-    below = np.argwhere(radial_power < plateau / np.e).ravel()
-    shell = int(below[0]) if below.size else len(radial_power) - 1
-    frequency = shell / (box_voxels * voxel_size_angstrom)
-    return float(1.0 / frequency) if frequency > 0 else float(box_voxels * voxel_size_angstrom)
-
 # azimuthal_smear: rotational average about z, to match class average
 def azimuthal_smear(volume: np.ndarray, n_angles: int = 72) -> np.ndarray:
     accumulator = np.zeros_like(volume, dtype=np.float64)

@@ -54,6 +54,7 @@ class TestIdentifyCommand:
             '--candidates', str(tmp_path / 'candidates.yaml'),
             '--decoy-classes', str(decoys),
             '--output-dir', str(out),
+            '--resolution', '30.0',
         ])
         assert result.exit_code == 0, result.output
 
