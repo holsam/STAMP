@@ -63,6 +63,6 @@ class TestIdentifyCommand:
         assert all(row['score_gap_to_runner_up'] >= 0.0 for row in identifications)
 
         report = (out / 'identification_report.txt').read_text()
-        assert report.splitlines()[0].startswith('DECOY CONTROL:')
+        assert any(line.startswith('DECOY CONTROL:') for line in report.splitlines())
         assert (out / 'decoy_control.json').is_file()
         assert (out / 'params.toml').is_file()

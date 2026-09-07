@@ -26,7 +26,7 @@ _CONFIG_DICT = {
     },
     'decoy': {'enabled': True},
     'stage': {
-        'identify': {'candidates': 'candidates.yaml'},
+        'identify': {'candidates': 'candidates.yaml', 'resolution': 25.0},
         'refine': {'tool': 'relion', 'backend': 'local'},
     },
 }
