@@ -38,6 +38,9 @@ def run_classify(
     n_components,
     strict_halfset_independence,
     random_state,
+    azimuthal_modes = 4,
+    min_radius_fraction = 0.25,
+    n_azimuthal_samples = 64,
 ) -> None:
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
@@ -62,7 +65,15 @@ def run_classify(
         raise SystemExit(1)
     print(f'Extracted {len(kept)} subvolumes at box {box_voxels} {" (membrane subtracted)" if segmentation_paths else ""}')
 
-    features = build_feature_matrix(subvolumes, n_radial_bins=n_radial_bins)
+    features = build_feature_matrix(
+        subvolumes,
+        n_radial_bins=n_radial_bins,
+        max_azimuthal_mode=azimuthal_modes,
+        n_azimuthal_samples=n_azimuthal_samples,
+        min_radius_fraction=min_radius_fraction,
+    )
+    print(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
+
     config = ClusteringConfig(
         method=method,
         n_components=n_components,
@@ -96,6 +107,9 @@ def run_classify(
             'n_components': n_components,
             'strict_halfset_independence': strict_halfset_independence,
             'random_state': random_state,
+            'azimuthal_modes': azimuthal_modes,
+            'n_azimuthal_samples': n_azimuthal_samples,
+            'min_radius_fraction': min_radius_fraction,
             'is_decoy': is_decoy,
             'membrane_subtracted': bool(segmentation_paths),
             'n_extracted': len(kept),

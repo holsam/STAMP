@@ -20,7 +20,7 @@ from stamp.classify.extract import (
     extract_subvolume,
     quaternion_to_matrix,
 )
-from stamp.classify.features import build_feature_matrix, cylindrical_bins, rotational_average
+from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.picking.geometry import quaternion_from_reference_to
 from stamp.schemas.particles import HalfSet, Particle
 
@@ -31,6 +31,23 @@ def _three_blobs(n_per_group: int = 40, seed: int = 0) -> np.ndarray:
     return np.vstack(
         [rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres]
     )
+
+# _c_n_particle: a ring of n_fold blobs above the canonical mid-plane (idealised C-n oligomer on a membrane)
+def _c_n_particle(box: int = 25, n_fold: int = 4, radius: float = 6.0) -> np.ndarray:
+    volume = np.zeros((box, box, box))
+    centre = (box - 1) / 2.0
+    z_plane = int(centre + 4)
+
+    for index in range(n_fold):
+        angle = 2.0 * np.pi * index / n_fold
+        x = int(round(centre + radius * np.cos(angle)))
+        y = int(round(centre + radius * np.sin(angle)))
+        volume[x - 1 : x + 2, y - 1 : y + 2, z_plane - 1 : z_plane + 2] = 1.0
+    return volume
+
+# _rotate_in_plane: rotate a canonical (x, y, z) volume in-plane about axes (0, 1)
+def _rotate_in_plane(volume: np.ndarray, degrees: float) -> np.ndarray:
+    return rotate(volume, angle=degrees, axes=(0, 1), reshape=False, order=1)
 
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
@@ -127,7 +144,7 @@ class TestFeatures:
         # Blur slightly so interpolation during rotation doesn't dominate.
         subvolume = np.cumsum(np.cumsum(subvolume, axis=0), axis=1) / 100.0
         rotated = rotate(subvolume, angle=37.0, axes=(0, 1), reshape=False, order=1)
-        features = build_feature_matrix(np.stack([subvolume, rotated]), n_radial_bins=8)
+        features = build_feature_matrix(np.stack([subvolume, rotated]), n_radial_bins=8, max_azimuthal_mode=0)
         correlation = np.corrcoef(features[0], features[1])[0, 1]
         assert correlation > 0.9, f'in-plane rotation changed the features (r={correlation:.3f})'
 
@@ -146,6 +163,85 @@ class TestFeatures:
         features = build_feature_matrix(np.empty((0, 11, 11, 11)), n_radial_bins=4)
         assert features.shape[0] == 0
 
+    def test_mode_zero_reproduces_rotational_average(self) -> None:
+        '''max_azimuthal_mode=0 must give features equivalent to rotational average.'''
+        rng = np.random.default_rng(0)
+        raw = rng.normal(size=(4, 21, 21, 21))
+        subvolumes = np.cumsum(np.cumsum(raw, axis=1), axis=2) / 100.0
+
+        azimuthal = build_feature_matrix(subvolumes, n_radial_bins=10, max_azimuthal_mode=0)
+        bin_index, valid = cylindrical_bins(21, n_radial_bins=10)
+        classic = np.stack([rotational_average(v, bin_index, valid, 10).ravel() for v in subvolumes])
+        classic = (classic - classic.mean(axis=1, keepdims=True)) / classic.std(axis=1, keepdims=True)
+
+        for row_a, row_b in zip(azimuthal, classic):
+            assert np.corrcoef(row_a, row_b)[0, 1] > 0.95
+
+    def test_azimuthal_magnitudes_are_rotation_invariant(self) -> None:
+        particle = _c_n_particle(n_fold=4)
+        rotated = _rotate_in_plane(particle, 31.0)
+        original = azimuthal_magnitudes(particle, 12, 64, 6)
+        turned = azimuthal_magnitudes(rotated, 12, 64, 6)
+        correlation = np.corrcoef(original.ravel(), turned.ravel())[0, 1]
+        assert correlation > 0.95, (f'azimuthal magnitudes changed under in-plane rotation (r={correlation:.3f})')
+
+    def test_c4_particle_has_power_at_mode_four(self) -> None:
+        '''A four-fold ring should put conspicuous power in m=4 relative to its neighbouring modes.'''
+        magnitudes = azimuthal_magnitudes(_c_n_particle(n_fold=4), 12, 64, 6)
+        per_mode = magnitudes.reshape(magnitudes.shape[0], -1).sum(axis=1)
+        assert per_mode[4] > per_mode[3]
+        assert per_mode[4] > per_mode[5]
+
+    def test_c3_particle_has_power_at_mode_three(self) -> None:
+        '''A three-fold ring puts conspicuous power in m=3.'''
+        magnitudes = azimuthal_magnitudes(_c_n_particle(n_fold=3), 12, 64, 6)
+        per_mode = magnitudes.reshape(magnitudes.shape[0], -1).sum(axis=1)
+        assert per_mode[3] > per_mode[2]
+        assert per_mode[3] > per_mode[4]
+
+    def test_c3_and_c4_separate_with_azimuthal_features_but_not_without(self) -> None:
+        '''Two particles differing only in symmetry are indistinguishable to a rotational average and distinguishable once azimuthal modes are included.'''
+        rng = np.random.default_rng(0)
+        subvolumes = []
+        labels = []
+        for _ in range(15):
+            for n_fold in (3, 4):
+                particle = _c_n_particle(n_fold=n_fold)
+                particle = _rotate_in_plane(particle, rng.uniform(0, 360))
+                particle = particle + rng.normal(0, 0.05, size=particle.shape)
+                subvolumes.append(particle)
+                labels.append(n_fold)
+        subvolumes = np.stack(subvolumes)
+        labels = np.array(labels)
+
+        def _between_group_separation(features: np.ndarray) -> float:
+            '''Ratio of between-group to within-group distance (1 means the groups are indistinguishable).'''
+            group_three = features[labels == 3]
+            group_four = features[labels == 4]
+            between = np.linalg.norm(group_three.mean(0) - group_four.mean(0))
+            within = 0.5 * (group_three.std(0).mean() + group_four.std(0).mean())
+            return between / max(within, 1e-9)
+
+        rotational_only = build_feature_matrix(subvolumes, n_radial_bins=12, max_azimuthal_mode=0)
+        with_azimuthal = build_feature_matrix(subvolumes, n_radial_bins=12, max_azimuthal_mode=4)
+
+        assert _between_group_separation(with_azimuthal) > (1.5 * _between_group_separation(rotational_only)), 'azimuthal features did not improve C3-vs-C4 separation'
+
+    def test_azimuthal_sampling_must_resolve_requested_mode(self) -> None:
+        '''Undersampled FFT raises rather than aliasing.'''
+        with pytest.raises(ValueError, match='aliasing'):
+            azimuthal_magnitudes(_c_n_particle(), n_radial_bins=12, n_azimuthal_samples=6, max_mode=6)
+
+    def test_inner_bins_excluded_from_azimuthal_block(self) -> None:
+        '''Raising min_radius_fraction should shrink the feature vector.'''
+        subvolumes = np.stack([_c_n_particle() for _ in range(3)])
+        wide = build_feature_matrix(
+            subvolumes, n_radial_bins=12, max_azimuthal_mode=4, min_radius_fraction=0.0
+        )
+        narrow = build_feature_matrix(
+            subvolumes, n_radial_bins=12, max_azimuthal_mode=4, min_radius_fraction=0.5
+        )
+        assert narrow.shape[1] < wide.shape[1]
 
 # TestCluster: class containing unit tests for test_cluster.py
 class TestCluster:
