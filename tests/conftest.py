@@ -75,6 +75,7 @@ box_angstrom = 300
 
 [stage.identify]
 candidates = "candidates.yaml"
+resolution = 25.0
 
 [stage.refine]
 tool = "relion"

@@ -27,6 +27,7 @@ from stamp.utils.io import write_sidecar
 def run_classify(
     particles,
     raw_tomogram_dir,
+    segmentation_dir,
     output_dir,
     voxel_size_angstrom,
     box_angstrom,
@@ -44,19 +45,22 @@ def run_classify(
     tomogram_paths = {
         path.stem: path for path in sorted(raw_tomogram_dir.glob('*.mrc'))
     }
+    segmentation_paths = (
+        {path.stem: str(path) for path in sorted(segmentation_dir.glob('*.mrc'))} if segmentation_dir is not None else {}
+    )
     box_voxels = int(round(box_angstrom / voxel_size_angstrom))
     if box_voxels % 2 == 0:
         box_voxels += 1  # odd box keeps the particle exactly centred
 
     subvolumes, kept, skipped = extract_particle_set(
-        particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels
+        particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels, segmentation_paths=segmentation_paths,
     )
     if skipped:
         print(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram')
     if not kept:
-        print('No particles could be extracted. Check --raw-tomogram-dir and --box-angstrom')
+        print('No particles could be extracted. Check --raw-dir and --box-length-a')
         raise SystemExit(1)
-    print(f'Extracted {len(kept)} subvolumes at box {box_voxels}')
+    print(f'Extracted {len(kept)} subvolumes at box {box_voxels} {" (membrane subtracted)" if segmentation_paths else ""}')
 
     features = build_feature_matrix(subvolumes, n_radial_bins=n_radial_bins)
     config = ClusteringConfig(
@@ -93,6 +97,7 @@ def run_classify(
             'strict_halfset_independence': strict_halfset_independence,
             'random_state': random_state,
             'is_decoy': is_decoy,
+            'membrane_subtracted': bool(segmentation_paths),
             'n_extracted': len(kept),
             'n_skipped': len(skipped),
         },
@@ -111,6 +116,7 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
         'stamp', 'classify',
         '--particles', str(particles),
         '--raw-dir', str(config.run.raw_tomogram_dir),
+        '--seg-dir', str(config.run.segmentation_dir),
         '--out-dir', str(target),
         '--voxel-size-a', str(config.run.voxel_size_angstrom),
         '--box-length-a', str(settings.box_angstrom),

@@ -17,7 +17,7 @@ from stamp.identify.decoy_check import evaluate_decoy_control
 from stamp.run.state import stage_dir
 from stamp.identify.fit import fit_candidate, rank_candidates
 from stamp.identify.panel import load_candidate_panel
-from stamp.identify.simulate import azimuthal_smear, estimate_resolution, simulate_density
+from stamp.identify.simulate import simulate_density, to_comparable
 from stamp.utils.io import write_sidecar
 
 # _CLASS_ID: leading cNN token of a class-average filename
@@ -39,16 +39,17 @@ def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
     return {cid: (np.mean(volumes, axis=0), voxel_sizes[cid]) for cid, volumes in grouped.items()}
 
 # _score_panel: fit every candidate to every class average, returns {class_id: {candidate: score}}
-def _score_panel(class_averages, panel, resolution_override, fitter, backend):
+def _score_panel(class_averages, panel, resolution, fitter, backend):
     all_scores: dict[str, dict[str, float]] = {}
     for class_id, (average, voxel_size) in class_averages.items():
         box_voxels = average.shape[-1]
-        resolution = resolution_override or estimate_resolution(average, voxel_size)
+        comparable_average = to_comparable(average, voxel_size, resolution)
         scores: dict[str, float] = {}
         for candidate in panel:
             simulated = simulate_density(candidate.structure_path, box_voxels, voxel_size, resolution)
-            simulated = azimuthal_smear(simulated)
-            scores[candidate.name] = fit_candidate(average, simulated)
+            # simulate_density is protein-bright so flip to match tomogram convention
+            simulated = -to_comparable(simulated, voxel_size, resolution, already_bandlimited=True)
+            scores[candidate.name] = fit_candidate(comparable_average, simulated)
         all_scores[class_id] = scores
     return all_scores
 
@@ -63,6 +64,8 @@ def run_identify(
     fitter: str,
     fetch_missing: bool
 ) -> None:
+    if resolution is None:
+        raise ValueError('resolution is required: use --resolution or set [stage.identify].resolution')
     panel = load_candidate_panel(candidates, fetch_missing=fetch_missing)
     print(f'Loaded {len(panel)} candidates.')
     class_averages = load_class_averages(classes)
@@ -82,7 +85,7 @@ def run_identify(
         decoy_control = evaluate_decoy_control(real_best, decoy_best)
         (output_dir / 'decoy_control.json').write_text(json.dumps(decoy_control.model_dump(), indent=2))
 
-    _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control)
+    _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control, resolution)
 
     write_sidecar(
         output_dir,
@@ -90,7 +93,11 @@ def run_identify(
         tool=f'stamp-{fitter}',
         tool_version=None,
         parameters={
-            'fitter': fitter, 'backend': backend, 'resolution': resolution,
+            'fitter': fitter,
+            'backend': backend,
+            'resolution': resolution,
+            'effective_resolution_angstrom': resolution,
+            'symmetry': 'Cinf_z',
             'n_candidates': len(panel), 'n_classes': len(class_averages),
             'decoy_control': decoy_control.model_dump() if decoy_control else None,
         },
@@ -121,8 +128,11 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
     return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present
-def _write_report(path: Path, results, all_scores, decoy_control) -> None:
-    lines: list[str] = []
+def _write_report(path: Path, results, all_scores, decoy_control, resolution) -> None:
+    lines: list[str] = [
+        f'Comparison space: low-pass {resolution:.1f} Å, azimuthal average about the membrane normal (Cinf assumed; asymmetric features discarded, symmetry discrimination is done in classify).',
+        '',
+    ]
     if decoy_control is not None:
         banner = 'PASS' if decoy_control.passed else 'FAIL'
         lines += [f'DECOY CONTROL: {banner}', f'  {decoy_control.reason}', '']

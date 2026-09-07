@@ -35,6 +35,10 @@ def classify(
         float,
         typer.Option('--voxel-size-a', help='Voxel size, in Å.'),
     ],
+    segmentation_dir: Annotated[
+        Path | None,
+        typer.Option('-s', '--seg-dir', help='Segmentation directory for membrane voxel replacement.', exists=True, file_okay=False),
+    ] = None,
     box_angstrom: Annotated[
         float,
         typer.Option('--box-length-a', help='Extraction box edge length, in Å.')
@@ -72,6 +76,7 @@ def classify(
     classifyfuncs.run_classify(
         particles=particles,
         raw_tomogram_dir=raw_tomogram_dir,
+        segmentation_dir=segmentation_dir,
         output_dir=output_dir,
         voxel_size_angstrom=voxel_size_angstrom,
         box_angstrom=box_angstrom,

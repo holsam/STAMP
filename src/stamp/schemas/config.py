@@ -77,6 +77,8 @@ class RunConfig(_Strict):
         needs_identify = stop in (None, 'identify', 'refine')
         if needs_identify and not self.stage.identify.candidates:
             raise ValueError('[stage.identify].candidates is required unless stop_after is "pick" or "classify"')
+        if needs_identify and self.stage.identify.resolution is None:
+            raise ValueError('[stage.identify].resolution is required (Å) unless stop_after is "pick" or "classify"')
         return self
 
 # load_run_config: parse and validate stamp_run.toml, resolving paths relative to the file

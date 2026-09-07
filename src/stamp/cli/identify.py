@@ -28,13 +28,13 @@ def identify(
         Path,
         typer.Option('-o', '--output-dir', file_okay=False, help='Output directory.')
     ],
+    resolution: Annotated[
+        float,
+        typer.Option('-r', '--resolution', help='Class-average resolution in Å (used for low-pass filtering).')
+    ],
     decoy_classes: Annotated[
         Path | None,
         typer.Option('--decoy-classes', exists=True, file_okay=False, help='Decoy class averages.')
-    ] = None,
-    resolution: Annotated[
-        float | None,
-        typer.Option('--resolution', help='Class-average resolution in Å; estimated from power spectrum if omitted.')
     ] = None,
     backend: Annotated[
         Literal['local', 'mock'],
