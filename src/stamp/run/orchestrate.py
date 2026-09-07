@@ -73,6 +73,7 @@ def _classify_track(config: RunConfig, output_dir: Path, track: str, particles: 
     run_classify(
         particles=particles,
         raw_tomogram_dir=config.run.raw_tomogram_dir,
+        segmentation_dir=config.run.segmentation_dir,
         output_dir=target,
         voxel_size_angstrom=config.run.voxel_size_angstrom,
         box_angstrom=settings.box_angstrom,

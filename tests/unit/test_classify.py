@@ -3,7 +3,7 @@ STAMP: unit tests for subvolume extraction, feature classification, and clusteri
 '''
 
 # Import external dependencies
-import numpy as np, pytest
+import mrcfile, numpy as np, pytest
 from scipy.ndimage import rotate
 
 # Import internal STAMP objects
@@ -16,11 +16,13 @@ from stamp.classify.cluster import (
 from stamp.classify.extract import (
     box_fits_inside,
     canonical_grid,
+    extract_particle_set,
     extract_subvolume,
     quaternion_to_matrix,
 )
 from stamp.classify.features import build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.picking.geometry import quaternion_from_reference_to
+from stamp.schemas.particles import HalfSet, Particle
 
 # _three_blobs: three well-separated Gaussian blobs in 2D
 def _three_blobs(n_per_group: int = 40, seed: int = 0) -> np.ndarray:
@@ -78,6 +80,37 @@ class TestExtract:
         assert box_fits_inside((30.0, 30.0, 30.0), (60, 60, 60), 11) is True
         assert box_fits_inside((2.0, 30.0, 30.0), (60, 60, 60), 11) is False
 
+    def test_membrane_voxels_replaced_with_background(self, tmp_path) -> None:
+        shape = (40, 40, 40)
+        rng = np.random.default_rng(0)
+        tomogram = rng.normal(0.0, 1.0, shape).astype(np.float32)
+        tomogram[:, :, 20] += 50.0  # bright membrane plane
+        segmentation = np.zeros(shape, dtype=np.float32)
+        segmentation[:, :, 20] = 1.0
+
+        with mrcfile.new(tmp_path / 't.mrc', overwrite=True) as mrc:
+            mrc.set_data(tomogram)
+            mrc.voxel_size = 1.0
+        with mrcfile.new(tmp_path / 's.mrc', overwrite=True) as mrc:
+            mrc.set_data(segmentation)
+            mrc.voxel_size = 1.0
+
+        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=None, source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, segmentation_paths={'t': str(tmp_path / 's.mrc')})
+        assert len(kept) == 1
+        # the box centre sampled the membrane plane; it must now sit near background
+        assert abs(float(subvolumes[0, 5, 5, 5])) < 5.0
+
+    def test_no_segmentation_leaves_tomogram_untouched(self, tmp_path) -> None:
+        shape = (40, 40, 40)
+        tomogram = np.zeros(shape, dtype=np.float32)
+        tomogram[:, :, 20] = 50.0
+        with mrcfile.new(tmp_path / 't.mrc', overwrite=True) as mrc:
+            mrc.set_data(tomogram)
+            mrc.voxel_size = 1.0
+        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=None, source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11)
+        assert float(subvolumes[0, 5, 5, 5]) == 50.0
 
 # TestFeatures: class containing unit tests for src/stamp/classify/features.py
 class TestFeatures:
