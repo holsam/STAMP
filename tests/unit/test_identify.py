@@ -63,6 +63,16 @@ class TestSimulate:
         rotated = azimuthal_smear(np.rot90(volume, k=1, axes=(0, 1)), n_angles=36)
         assert np.corrcoef(smeared.ravel(), np.rot90(rotated, k=-1, axes=(0, 1)).ravel())[0, 1] > 0.95
 
+    def test_orient_puts_slab_normal_on_z(self):
+        from stamp.identify.simulate import orient_to_membrane_slab
+        rng = np.random.default_rng(0)
+        # a pancake in x/y, thin in z, then rotated into a random frame
+        slab = rng.normal(scale=[40.0, 40.0, 6.0], size=(2000, 3))
+        random_rotation = np.linalg.qr(rng.normal(size=(3, 3)))[0]
+        oriented = orient_to_membrane_slab(slab @ random_rotation.T, np.ones(len(slab)))
+        spread = oriented.std(axis=0)
+        assert spread[2] == pytest.approx(min(spread), rel=0.05)
+
 # TestFit: class containing unit tests for src/stamp/identify/fit.py
 class TestFit:
     def test_fit_recovers_planted_match(self):
