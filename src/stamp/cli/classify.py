@@ -71,6 +71,18 @@ def classify(
         int,
         typer.Option('--seed', help='Seed for PCA and KMeans.'),
     ] = 0,
+    azimuthal_modes: Annotated[
+        int,
+        typer.Option(help='Highest azimuthal Fourier mode retained. 0 reproduces pure rotational averaging; 4 captures C4 symmetry. Higher modes are increasingly noisy.'),
+    ] = 4,
+    min_radius_fraction: Annotated[
+        float,
+        typer.Option(help='Radial bins below this fraction of the box radius are excluded from azimuthal features (too few voxels to report symmetry).'),
+    ] = 0.25,
+    n_azimuthal_samples: Annotated[
+        int,
+        typer.Option(help='Azimuthal sampling points (must be at least 2*(modes+1)).'),
+    ] = 64,
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
     classifyfuncs.run_classify(
@@ -87,4 +99,7 @@ def classify(
         n_components=n_components,
         strict_halfset_independence=strict_halfset_independence,
         random_state=random_state,
+        azimuthal_modes=azimuthal_modes,
+        min_radius_fraction=min_radius_fraction,
+        n_azimuthal_samples=n_azimuthal_samples,
     )
