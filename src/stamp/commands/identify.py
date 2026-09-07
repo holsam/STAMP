@@ -94,8 +94,7 @@ def run_identify(
         parameters={
             'fitter': fitter,
             'backend': backend,
-            'resolution': resolution,
-            'effective_resolution_angstrom': resolution,
+            'resolution_angstrom': resolution,
             'symmetry': 'Cinf_z',
             'n_candidates': len(panel), 'n_classes': len(class_averages),
             'decoy_control': decoy_control.model_dump() if decoy_control else None,
