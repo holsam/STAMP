@@ -51,36 +51,65 @@ def _shell_fsc(map_a: np.ndarray, map_b: np.ndarray, shell: np.ndarray, n_shells
         correlation[index] = np.real(cross / power) if power > 0 else 0.0
     return correlation
 
-# compute_fsc: FSC, unmasked and masked, with the resolution readout
+# _phase_randomise: keep shell amplitudes, randomise phases at or beyond from_shell
+def _phase_randomise(
+    map_array: np.ndarray, shell: np.ndarray, from_shell: int, rng: np.random.Generator
+) -> np.ndarray:
+    transform = np.fft.fftn(map_array)
+    beyond = shell >= from_shell
+    phases = rng.uniform(0.0, 2.0 * np.pi, size=transform.shape)
+    transform[beyond] = np.abs(transform[beyond]) * np.exp(1j * phases[beyond])
+    return np.real(np.fft.ifftn(transform))
+
+# _first_below: index of the first shell whose value drops under level, or None
+def _first_below(curve: np.ndarray, level: float) -> int | None:
+    hits = np.argwhere(curve < level).ravel()
+    return int(hits[0]) if hits.size else None
+
+# _resolution_at: Angstrom at the first sub-threshold shell, else the finest resolved shell
+def _resolution_at(curve: np.ndarray, frequencies: np.ndarray, threshold: float) -> float:
+    below = np.argwhere(curve < threshold).ravel()
+    if below.size and below[0] > 0:
+        return float(1.0 / frequencies[below[0]])
+    return float(1.0 / frequencies[-1]) if frequencies[-1] > 0 else float('inf')
+
+# compute_fsc: FSC (unmasked + phase-randomisation-corrected masked) with the resolution readout
 def compute_fsc(
     half_map_a: np.ndarray,
     half_map_b: np.ndarray,
     voxel_size_angstrom: float,
     mask: np.ndarray | None = None,
-    threshold: float = 0.143
+    threshold: float = 0.143,
+    *,
+    seed: int = 0,
 ) -> FSCResult:
     if half_map_a.shape != half_map_b.shape:
         raise ValueError('half maps must have the same shape')
     if mask is None:
         mask = soft_sphere_mask(half_map_a.shape)
 
-    unmasked = _shell_fsc(half_map_a, half_map_b)
-    masked = _shell_fsc(half_map_a * mask, half_map_b * mask)
+    shell, n_shells = _shell_map(half_map_a.shape)
+    unmasked = _shell_fsc(half_map_a, half_map_b, shell, n_shells)
+    masked = _shell_fsc(half_map_a * mask, half_map_b * mask, shell, n_shells)
+
+    corrected = masked.copy()
+    randomise_from = _first_below(unmasked, 0.8)
+    if randomise_from is not None and randomise_from + 1 < n_shells:
+        rng = np.random.default_rng(seed)
+        rand_a = _phase_randomise(half_map_a, shell, randomise_from, rng) * mask
+        rand_b = _phase_randomise(half_map_b, shell, randomise_from, rng) * mask
+        fsc_rand = _shell_fsc(rand_a, rand_b, shell, n_shells)
+        high = np.arange(n_shells) > randomise_from
+        denom = np.clip(1.0 - fsc_rand, 1e-3, None)
+        corrected[high] = np.clip((masked[high] - fsc_rand[high]) / denom[high], -1.0, 1.0)
 
     box_voxels = half_map_a.shape[-1]
-    frequencies = np.arange(len(masked)) / (box_voxels * voxel_size_angstrom)
-
-    below = np.argwhere(masked < threshold).ravel()
-    if below.size and below[0] > 0:
-        resolution = float(1.0 / frequencies[below[0]])
-    else:
-        resolution = float(1.0 / frequencies[-1]) if frequencies[-1] > 0 else float('inf')
-
+    frequencies = np.arange(n_shells) / (box_voxels * voxel_size_angstrom)
     return FSCResult(
         frequencies_per_angstrom=frequencies,
         fsc_unmasked=unmasked,
-        fsc_masked=masked,
-        resolution_angstrom=resolution,
+        fsc_masked=corrected,
+        resolution_angstrom=_resolution_at(corrected, frequencies, threshold),
     )
 
 # write_fsc_files: fsc.txt (columns) and a minimal fsc.svg line plot

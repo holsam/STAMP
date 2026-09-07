@@ -70,6 +70,17 @@ class TestRefineFsc:
         result = compute_fsc(a, b, voxel_size_angstrom=4.0)
         assert result.fsc_masked[-1] < 0.3
 
+    def test_correction_lowers_masked_fsc(self):
+        '''Correlated noise under a mask is pulled down.'''
+        rng = np.random.default_rng(2)
+        signal = rng.random((28, 28, 28)).astype(np.float32)
+        a = signal + rng.normal(0, 1.0, signal.shape).astype(np.float32)
+        b = signal + rng.normal(0, 1.0, signal.shape).astype(np.float32)
+        mask = soft_sphere_mask(a.shape, radius_fraction=0.5)
+        raw = _shell_fsc(a * mask, b * mask, *_shell_map(a.shape))
+        corrected = compute_fsc(a, b, 4.0, mask=mask).fsc_masked
+        assert corrected[-1] <= raw[-1] + 1e-6
+
 # TestGeometry: unit tests for refine/halfset_guard.py
 class TestRefineHalfsetGuard:
     def test_split_class_by_half(self):
