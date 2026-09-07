@@ -153,7 +153,15 @@ class TestFit:
         assert fit_candidate(target, rolled) > 0.8
 
 # TestDecoyCheck: class containing unit tests for src/stamp/identify/decoy_check.py
-class TestDecoyCheck:
+class TestDecoyControl:
+    def test_clear_separation_passes(self):
+        result = evaluate_decoy_control([0.80, 0.78, 0.76], [0.30, 0.28, 0.31, 0.29])
+        assert result.passed and result.separation_sigma > 2.0
+
+    def test_overlap_fails_on_sigma(self):
+        result = evaluate_decoy_control([0.42], [0.40, 0.39, 0.41, 0.38])
+        assert not result.passed and 'sigma' in result.reason
+
     def test_fires_on_overlapping_distributions(self):
         result = evaluate_decoy_control([0.6, 0.55, 0.58], [0.59, 0.57, 0.56])
         assert not result.passed
