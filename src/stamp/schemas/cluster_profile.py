@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typer import get_app_dir
 
 # _DEFAULT_PROFILE_PATH: user-level fallback when the run config has no [cluster] table
-_DEFAULT_PROFILE_PATH = get_app_dir('stamp') / 'cluster.toml'
+_DEFAULT_PROFILE_PATH = Path(get_app_dir('stamp')) / 'cluster.toml'
 
 # ClusterProfile: partition name, resource defaults and module loads for one site
 class ClusterProfile(BaseModel):
@@ -18,7 +18,7 @@ class ClusterProfile(BaseModel):
     default_mem: str = '64G'
     cpus_per_task: int = 1
     ntasks: int = 1
-    gpus_per_job: int = 1
+    gpus: int = 1
     module_loads: list[str] = []
 
 # load_cluster_profile: from an explicit dict ([cluster] table), else the user file, else defaults
