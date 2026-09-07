@@ -73,6 +73,13 @@ class TestSimulate:
         spread = oriented.std(axis=0)
         assert spread[2] == pytest.approx(min(spread), rel=0.05)
 
+    def test_blank_element_column_is_hydrogen(self, tmp_path):
+        from stamp.identify.simulate import read_pdb_atoms
+        pdb = tmp_path / 'blank.pdb'
+        pdb.write_text('ATOM      1  H   ALA A   1       0.000   0.000   0.000  1.00  0.00\n')
+        _coords, weights, elements = read_pdb_atoms(pdb)
+        assert weights[0] == 1.0 and elements[0] == 'H'
+
 # TestFit: class containing unit tests for src/stamp/identify/fit.py
 class TestFit:
     def test_fit_recovers_planted_match(self):

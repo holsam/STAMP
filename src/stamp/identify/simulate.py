@@ -4,11 +4,12 @@ STAMP: predicted structure to density map
 
 # Import external dependencies
 import numpy as np
+from itertools import product
 from pathlib import Path
 from scipy.ndimage import gaussian_filter, rotate
 
-# _ELEMENT_WEIGHT: rough scattering weight per element (atomic number is close enough at this resolution)
-_ELEMENT_WEIGHT = {'H': 1.0, 'C': 6.0, 'N': 7.0, 'O': 8.0, 'P': 15.0, 'S': 16.0}
+# _ELEMENT_WEIGHT: approximate scattering weight per element; unknown non-blank elements fall back to carbon
+_ELEMENT_WEIGHT = { 'H': 1.0, 'C': 6.0, 'N': 7.0, 'O': 8.0, 'F': 9.0, 'P': 15.0, 'S': 16.0, 'CL': 17.0, 'FE': 26.0, 'ZN': 30.0, 'MG': 12.0, 'MN': 25.0, 'CA': 20.0}
 _FWHM_TO_SIGMA = 1.0 / 2.3548200450309493  # 2*sqrt(2*ln2)
 
 # read_pdb_atoms: (N, 3) coordinates in Angstrom, (N,) weights and (N,) element symbols
@@ -20,20 +21,25 @@ def read_pdb_atoms(structure_path: Path) -> tuple[np.ndarray, np.ndarray, list[s
         if not line.startswith(('ATOM  ', 'HETATM')):
             continue
         coordinates.append((float(line[30:38]), float(line[38:46]), float(line[46:54])))
-        element = (line[76:78].strip() or line[12:16].strip()[:1] or 'C').upper()
-        elements.append(element)
+        columns_element = line[76:78].strip().upper()
+        name_element = line[12:16].strip()[:1].upper()
+        element = columns_element or name_element or 'H'
         weights.append(_ELEMENT_WEIGHT.get(element, 6.0))
+        elements.append(element)
     if not coordinates:
         raise ValueError(f'{structure_path!r} has no ATOM/HETATM records')
     return np.array(coordinates), np.array(weights), elements
 
-# _splat: accumulate per-atom weight into the volume (nearest voxel)
+# _splat: trilinear deposition of per-atom weight into the volume
 def _splat(voxel_xyz: np.ndarray, weights: np.ndarray, box_voxels: int) -> np.ndarray:
-    nearest = np.rint(voxel_xyz).astype(int)
-    inside = np.all((nearest >= 0) & (nearest < box_voxels), axis=1)
-    nearest, kept_weights = nearest[inside], weights[inside]
     volume = np.zeros((box_voxels, box_voxels, box_voxels), dtype=np.float64)
-    np.add.at(volume, (nearest[:, 0], nearest[:, 1], nearest[:, 2]), kept_weights)
+    floor = np.floor(voxel_xyz).astype(int)
+    frac = voxel_xyz - floor
+    for corner in product((0, 1), repeat=3):
+        index = floor + corner
+        inside = np.all((index >= 0) & (index < box_voxels), axis=1)
+        weight = weights * np.prod(np.where(np.array(corner) == 1, frac, 1.0 - frac), axis=1)
+        np.add.at(volume, (index[inside, 0], index[inside, 1], index[inside, 2]), weight[inside])
     return volume
 
 # simulate_density: blurred density map from a predicted structure, on the class-average grid
