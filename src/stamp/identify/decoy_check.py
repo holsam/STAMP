@@ -4,6 +4,7 @@ STAMP: decoy pass/fail check for Stage E identification
 
 # Import external dependencies
 from dataclasses import dataclass
+from math import comb
 from scipy.stats import mannwhitneyu
 
 # DecoyControlResult: outcome of comparing real and decoy fit-score distributions
@@ -39,9 +40,11 @@ def evaluate_decoy_control(
     # one-sided test (checking if real scores stochastically greater than decoy scores)
     if len(real_scores) >= 2 and len(decoy_scores) >= 2:
         p_value = float(mannwhitneyu(real_scores, decoy_scores, alternative='greater').pvalue)
+        floor_p = 1.0 / comb(len(real_scores) + len(decoy_scores), len(real_scores))
     else:
         p_value = float('nan')
-    if p_value == p_value and p_value > 0.05:  # not NaN and not separable
+        floor_p = float('nan')
+    if p_value == p_value and floor_p <= 0.05 and p_value > 0.05:  # test is powered but cannot separate
         return DecoyControlResult(
             passed=False,
             reason=f'Mann-Whitney U cannot separate real from decoy (p={p_value:.3f} > 0.05)',

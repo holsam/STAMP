@@ -10,7 +10,7 @@ from scipy.ndimage import gaussian_filter
 from stamp.identify.decoy_check import evaluate_decoy_control
 from stamp.identify.fit import fit_candidate, rank_candidates
 from stamp.identify.panel import load_candidate_panel
-from stamp.identify.simulate import azimuthal_smear, simulate_density
+from stamp.identify.simulate import azimuthal_smear, simulate_density, to_comparable
 
 # _write_panel: helper to drop a candidates.yaml plus a stub PDB next to it
 def _write_panel(tmp_path, body):
@@ -135,3 +135,13 @@ class TestDecoyCheck:
     def test_passes_on_separated_distributions(self):
         result = evaluate_decoy_control([0.9, 0.88, 0.91, 0.87], [0.3, 0.25, 0.31, 0.28])
         assert result.passed
+
+    def test_small_class_counts_pass_on_margin_alone(self):
+        result = evaluate_decoy_control([0.80, 0.03], [0.13, 0.02])
+        assert result.passed
+        assert result.mann_whitney_p != result.mann_whitney_p or result.mann_whitney_p > 0.05
+
+    def test_rank_test_still_vetoes_when_powered(self):
+        result = evaluate_decoy_control([0.95, 0.50, 0.49, 0.10], [0.60, 0.55, 0.45, 0.05])
+        assert not result.passed
+        assert 'Mann-Whitney' in result.reason
