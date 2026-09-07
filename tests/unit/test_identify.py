@@ -136,6 +136,15 @@ class TestFit:
         assert fit_candidate(average, tall) > 0.3
         assert fit_candidate(average, tall) > fit_candidate(average, short)
 
+    def test_fit_is_contrast_blind(self):
+        target = _blob(21)
+        assert fit_candidate(target, -target.copy()) > 0.8
+
+    def test_fit_recovers_ninety_degree_misorientation(self):
+        target = _blob(21) + _blob(21, offset=5)
+        rolled = np.rot90(target, 1, axes=(0, 1))
+        assert fit_candidate(target, rolled) > 0.8
+
 # TestDecoyCheck: class containing unit tests for src/stamp/identify/decoy_check.py
 class TestDecoyCheck:
     def test_fires_on_overlapping_distributions(self):
