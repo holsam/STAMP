@@ -16,7 +16,9 @@ from stamp.classify.cluster import (
 )
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
+from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
+from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.utils.io import write_sidecar
@@ -98,6 +100,30 @@ def run_classify(
         + [(f'raw_tomogram:{stem}', path) for stem, path in sorted(tomogram_paths.items())],
     )
     print(f'Wrote {len(assignments)} class assignments to {assignments_path}')
+
+# build_classify_commands: create ToolCommand for `stamp classify`
+def build_classify_commands(config, output_dir: Path, track: str = 'real') -> list[ToolCommand]:
+    pick_name = 'particle_set.json' if track == 'real' else 'decoy_particle_set.json'
+    particles = stage_dir(output_dir, track, 'pick') / pick_name
+    target = stage_dir(output_dir, track, 'classify')
+    settings = config.stage.classify
+    argv = [
+        'stamp', 'classify',
+        '--particles', str(particles),
+        '--raw-dir', str(config.run.raw_tomogram_dir),
+        '--out-dir', str(target),
+        '--voxel-size-a', str(config.run.voxel_size_angstrom),
+        '--box-length-a', str(settings.box_angstrom),
+        '--n-bins', str(settings.n_radial_bins),
+        '--method', settings.method,
+        '--min-cluster-size', str(settings.min_cluster_size),
+        '--n-clusters', str(settings.n_clusters),
+        '--n-components', str(settings.n_components),
+        '--seed', str(settings.random_state),
+    ]
+    if settings.strict_halfset_independence:
+        argv.append('--strict-halfset-independence')
+    return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
 # _classify_combined: cluster all particles together, then average each half separately
 def _classify_combined(

@@ -8,11 +8,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # Import STAMP objects
+from stamp.backends.factory import check_backend_supports
 from stamp.commands.classify import run_classify
 from stamp.commands.decoy import run_decoy
 from stamp.commands.identify import run_identify
-from stamp.commands.pick import run_pick
-from stamp.commands.refine import run_refine
+from stamp.commands.pick import REAL_ADAPTERS, run_pick
+from stamp.commands.refine import _ADAPTERS as REFINE_ADAPTERS, run_refine
 from stamp.run.state import STAGE_ORDER, mark_complete, stage_dir, stages_to_run
 from stamp.schemas.config import RunConfig
 
@@ -85,6 +86,16 @@ def _classify_track(config: RunConfig, output_dir: Path, track: str, particles: 
     )
     return target
 
+# _guard_backends: raise before any stage runs if a stage's backend can't run its adapter
+def _guard_backends(config: RunConfig) -> None:
+    for picker in config.stage.pick.pickers:
+        adapter = REAL_ADAPTERS.get(picker)
+        if adapter is not None:
+            check_backend_supports(adapter, config.stage.pick.backend or config.run.backend)
+    refine_adapter = REFINE_ADAPTERS.get(config.stage.refine.tool)
+    if refine_adapter is not None:
+        check_backend_supports(refine_adapter(), config.stage.refine.backend or config.run.backend)
+
 # run_pipeline: chain pick -> (decoy) -> classify -> identify (real, with decoy control) -> refine
 def run_pipeline(
     config: RunConfig,
@@ -92,6 +103,7 @@ def run_pipeline(
     force: bool = False,
     from_stage: str | None = None
 ) -> RunOutcome:
+    _guard_backends(config)
     output_dir.mkdir(parents=True, exist_ok=True)
     planned = stages_to_run(config, output_dir, force, from_stage)
     stop_after = config.run.stop_after or STAGE_ORDER[-1]

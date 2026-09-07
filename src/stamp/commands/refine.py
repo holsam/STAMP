@@ -11,12 +11,13 @@ from stamp.adapters.base import AdapterInputs
 from stamp.adapters.m_refine import MRefineAdapter
 from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.relion import RelionRefineAdapter
-from stamp.backends.local import LocalRunner
-from stamp.backends.mock import MockRunner
+from stamp.backends.base import ToolCommand
+from stamp.backends.factory import check_backend_supports, select_runner
 from stamp.refine.fsc import compute_fsc, soft_sphere_mask, write_fsc_files
 from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
 )
+from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, ParticleSet
 from stamp.utils.io import write_sidecar
 
@@ -78,7 +79,8 @@ def run_refine(
     targets = sorted(identified) if class_id == 'all' else [class_id]
     output_dir.mkdir(parents=True, exist_ok=True)
     adapter = get_mock_adapter('relion' if tool == 'relion' else 'm-refine') if backend == 'mock' else _ADAPTERS[tool]()
-    runner = MockRunner() if backend == 'mock' else LocalRunner()
+    check_backend_supports(adapter, backend)
+    runner = select_runner(backend, requires_gpu=getattr(adapter, 'requires_gpu', False))
     parameters = {'voxel_size_angstrom': voxel_size_angstrom, 'iterations': iterations}
 
     for target in targets:
@@ -130,3 +132,24 @@ def run_refine(
                 ('reference:B', reference_b),
             ] + ([('mask', mask)] if mask else []),
         )
+
+# build_refine_commands: create ToolCommand for `stamp refine`
+def build_refine_commands(config, output_dir: Path) -> list[ToolCommand]:
+    target = stage_dir(output_dir, 'real', 'refine')
+    identify_dir = stage_dir(output_dir, 'real', 'identify')
+    argv = [
+        'stamp', 'refine',
+        '--class-id', config.stage.refine.class_id,
+        '--identification', str(identify_dir / 'identification.json'),
+        '--particles', str(stage_dir(output_dir, 'real', 'pick') / 'particle_set.json'),
+        '--class-assignments', str(stage_dir(output_dir, 'real', 'classify') / 'class_assignments.json'),
+        '--raw-dir', str(config.run.raw_tomogram_dir),
+        '--out-dir', str(target),
+        '--voxel-size-a', str(config.run.voxel_size_angstrom),
+        '--tool', config.stage.refine.tool,
+        '--iterations', str(config.stage.refine.iterations),
+        '--backend', 'local',
+    ]
+    if config.stage.refine.mask is not None:
+        argv += ['--mask', str(config.stage.refine.mask)]
+    return [ToolCommand(tool='refine', argv=argv, working_directory=target, output_paths=[target])]
