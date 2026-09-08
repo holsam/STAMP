@@ -12,6 +12,7 @@ from stamp.classify.cluster import (
     label_to_cluster_id,
     match_clusters_across_halves,
     reduce_and_cluster,
+    reduce_and_cluster_shared,
 )
 from stamp.classify.extract import (
     box_fits_inside,
@@ -303,3 +304,19 @@ class TestCluster:
         centroids_b = {0: np.array([0.1, 0.0]), 1: np.array([0.2, 0.0])}
         matches = match_clusters_across_halves(centroids_a, centroids_b)
         assert len([m for m in matches.values() if m[0] == 0]) == 1
+
+    def test_shared_basis_matches_recover_planted_split(self):
+        '''Two motifs, each split A/B, match A<->B correctly.'''
+        rng = np.random.default_rng(0)
+        motif_a = rng.normal(0.0, 1.0, 40)
+        motif_b = rng.normal(5.0, 1.0, 40)
+        rows, group_a, group_b = [], [], []
+        for i in range(40):
+            rows.append(motif_a + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
+        for i in range(40):
+            rows.append(motif_b + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
+        features = np.array(rows)
+        config = ClusteringConfig(method='kmeans', n_clusters=2, n_components=5)
+        results = reduce_and_cluster_shared(features, {'A': np.array(group_a), 'B': np.array(group_b)}, config)
+        matches = match_clusters_across_halves(results['A'].centroids, results['B'].centroids)
+        assert len(matches) == 2 and all(d < 1.0 for _, d in matches.values())

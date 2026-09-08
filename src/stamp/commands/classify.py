@@ -13,6 +13,7 @@ from stamp.classify.cluster import (
     label_to_cluster_id,
     match_clusters_across_halves,
     reduce_and_cluster,
+    reduce_and_cluster_shared,
 )
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
@@ -187,10 +188,10 @@ def _classify_strict(
         print('Strict mode needs particles in both half-sets')
         raise SystemExit(1)
 
-    result_a = reduce_and_cluster(features[indices_a], config)
-    result_b = reduce_and_cluster(features[indices_b], config)
+    results = reduce_and_cluster_shared(features, {'A': indices_a, 'B': indices_b}, config)
+    result_a, result_b = results['A'], results['B']
     matches = match_clusters_across_halves(result_a.centroids, result_b.centroids)
-    print('Cross-half cluster matching (B -> A, centroid distance):')
+    print('Cross-half cluster matching (B -> A, shared PCA space):')
     for label_b, (label_a, distance) in sorted(matches.items()):
         print(f'  c{label_b:02d} -> c{label_a:02d}  d={distance:.3f}')
 
