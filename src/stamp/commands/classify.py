@@ -85,6 +85,8 @@ def run_classify(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if not strict_halfset_independence:
+        print('WARNING: --no-strict-halfset-independence used, half-A and half-B particles are clustered together; FSC built on these classes will be inflated')
     if strict_halfset_independence:
         assignments = _classify_strict(kept, subvolumes, features, config, output_dir, voxel_size_angstrom)
     else:
@@ -142,8 +144,8 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
         '--n-components', str(settings.n_components),
         '--seed', str(settings.random_state),
     ]
-    if settings.strict_halfset_independence:
-        argv.append('--strict-halfset-independence')
+    if not settings.strict_halfset_independence:
+        argv.append('--no-strict-halfset-independence')
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
 # _classify_combined: cluster all particles together, then average each half separately

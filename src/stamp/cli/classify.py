@@ -66,7 +66,7 @@ def classify(
     strict_halfset_independence: Annotated[
         bool,
         typer.Option('--strict-halfset-independence', help='Cluster each half separately and match clusters afterwards.'),
-    ] = False,
+    ] = True,
     random_state: Annotated[
         int,
         typer.Option('--seed', help='Seed for PCA and KMeans.'),

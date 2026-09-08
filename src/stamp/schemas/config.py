@@ -41,7 +41,7 @@ class ClassifyStage(_Strict):
     n_components: int = 20
     box_angstrom: float = 300.0
     n_radial_bins: int = 12
-    strict_halfset_independence: bool = False
+    strict_halfset_independence: bool = True
     random_state: int = 0
 
 class IdentifyStage(_Strict):
