@@ -216,10 +216,13 @@ def _classify_strict(
                 classifier='stamp-native-classifier-strict',
             )
         )
-    for half_label, indices, result in (
-        ('A', indices_a, result_a), ('B', indices_b, result_b)
+    for half_label, half_particles, indices, result in (
+        ('A', half_a, indices_a, result_a), ('B', half_b, indices_b, result_b),
     ):
-        cluster_ids = [label_to_cluster_id(int(label)) for label in result.labels]
+        if half_label == 'B':
+            cluster_ids = [label_to_cluster_id(matches[int(label)][0]) if int(label) in matches else label_to_cluster_id(int(label)) for label in result.labels]
+        else:
+            cluster_ids = [label_to_cluster_id(int(label)) for label in result.labels]
         averages = compute_class_averages(subvolumes[indices], cluster_ids)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_label)
     return assignments
