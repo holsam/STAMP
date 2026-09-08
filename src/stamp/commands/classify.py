@@ -60,7 +60,7 @@ def run_classify(
         particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels, segmentation_paths=segmentation_paths,
     )
     if skipped:
-        print(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram')
+        print(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
     if not kept:
         print('No particles could be extracted. Check --raw-dir and --box-length-a')
         raise SystemExit(1)
