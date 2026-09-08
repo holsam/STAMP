@@ -12,5 +12,9 @@ dist/
 wheels/
 *.egg-info
 
+# Tool input/output files
+*.pdb
+*.png
+
 # Virtual environments
 .venv
