@@ -1,6 +1,6 @@
 [project]
 name = "stamp"
-version = "0.2.0"
+version = "0.3.0"
 description = "A workflow for Sub-Tomogram Averaging Membrane Proteins"
 readme = "README.md"
 authors = [
@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "matplotlib>=3.11.1",
     "mrcfile>=1.5.4",
     "numpy>=2.5.2",
     "pydantic>=2.13.4",
