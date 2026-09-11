@@ -4,7 +4,7 @@ STAMP: combines raw picks from multiple pickers into one half-set-tagged Particl
 
 # Import external dependencies
 import numpy as np
-from scipy.spatial import cKDTree
+from sklearn.cluster import AgglomerativeClustering
 from typing import Literal
 
 # Import internal STAMP objects
@@ -12,21 +12,20 @@ from stamp.utils.halfset import assign_half_sets
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 
-# _UnionFind: minimal disjoint-set structure for connected-components grouping
-class _UnionFind:
-    def __init__(self, size: int) -> None:
-        self._parent = list(range(size))
-
-    def find(self, index: int) -> int:
-        while self._parent[index] != index:
-            self._parent[index] = self._parent[self._parent[index]]
-            index = self._parent[index]
-        return index
-
-    def union(self, a: int, b: int) -> None:
-        root_a, root_b = self.find(a), self.find(b)
-        if root_a != root_b:
-            self._parent[root_a] = root_b
+# _components: complete-linkage groups of pick indices, each with diameter <= distance_threshold
+def _components(positions: np.ndarray, distance_threshold: float) -> dict[int, list[int]]:
+    if len(positions) == 1:
+        return {0: [0]}
+    labels = AgglomerativeClustering(
+        n_clusters=None,
+        distance_threshold=distance_threshold,
+        linkage='complete',
+        metric='euclidean',
+    ).fit_predict(positions)
+    groups: dict[int, list[int]] = {}
+    for index, label in enumerate(labels):
+        groups.setdefault(int(label), []).append(index)
+    return groups
 
 # reconcile_picks: reconcile raw picks from multiple pickers for a single tomogram
 def reconcile_picks(
@@ -47,33 +46,32 @@ def reconcile_picks(
         return []
     min_agreement = len(picks_by_picker) if consensus_rule == 'intersection' else 1
     positions = np.array([pick.position for pick in all_picks])
-    tree = cKDTree(positions)
-    union_find = _UnionFind(len(all_picks))
-    for i, j in tree.query_pairs(r=distance_threshold):
-        union_find.union(i, j)
-    components: dict[int, list[int]] = {}
-    for index in range(len(all_picks)):
-        components.setdefault(union_find.find(index), []).append(index)
     reconciled: list[RawPick] = []
-    for member_indices in components.values():
-        contributing_pickers = {picker_of[i] for i in member_indices}
+    for member_indices in _components(positions, distance_threshold).values():
+        contributing_pickers = {picker_of[index] for index in member_indices}
         if len(contributing_pickers) < min_agreement:
             continue
-        centroid = positions[member_indices].mean(axis=0)
-        confidences = [
-            all_picks[i].confidence
-            for i in member_indices
-            if all_picks[i].confidence is not None
-        ]
-        orientation = next(
-            (all_picks[i].orientation for i in member_indices if all_picks[i].orientation is not None),
-            None,
-        )
+        # one representative pick per picker (the member nearest that picker's own mean)
+        picker_mean: dict[str, np.ndarray] = {}
+        for picker in contributing_pickers:
+            own_indices = [index for index in member_indices if picker_of[index] == picker]
+            picker_mean[picker] = positions[own_indices].mean(axis=0)
+        representative: dict[str, int] = {}
+        for index in member_indices:
+            picker = picker_of[index]
+            distance = float(np.linalg.norm(positions[index] - picker_mean[picker]))
+            if picker not in representative or distance < representative[picker][1]:
+                representative[picker] = (index, distance)
+        rep_indices = [index for index, _ in representative.values()]
+        centroid = positions[rep_indices].mean(axis=0)
+        confidences = [all_picks[i].confidence for i in rep_indices if all_picks[i].confidence is not None]
+        # orientation from the representative closest to the centroid overall
+        nearest = min(rep_indices, key=lambda i: np.linalg.norm(positions[i] - centroid))
         reconciled.append(
             RawPick(
                 tomogram_id=tomogram_id,
                 position=tuple(float(coord) for coord in centroid),
-                orientation=orientation,
+                orientation=all_picks[nearest].orientation,
                 confidence=(sum(confidences) / len(confidences) if confidences else None),
                 source_picker='+'.join(sorted(contributing_pickers)),
             )
@@ -89,7 +87,10 @@ def build_particle_set(
     half_set_seed: int,
 ) -> ParticleSet:
     particle_ids = [f'p{index:06d}' for index in range(len(reconciled_picks))]
-    half_set_by_id = assign_half_sets(particle_ids, seed=half_set_seed)
+    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, reconciled_picks)}
+    if len(set(group_of.values())) < 2:
+        print('WARNING: one tomogram only; half-sets are not independent (all particles in half A).')
+    half_set_by_id = assign_half_sets(particle_ids, seed=half_set_seed, group_of=group_of)
     particles = [
         Particle(
             particle_id=particle_id,

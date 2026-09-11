@@ -62,7 +62,6 @@ def sample_along_normals(
     )
     return densities.reshape(n_samples, points.shape[0]).mean(axis=0)
 
-
 # robust_normalise: median/MAD normalisation so score thresholds are comparable across tomograms
 def robust_normalise(values: np.ndarray) -> np.ndarray:
     median = np.median(values)
@@ -116,3 +115,24 @@ def exclude_near_boundary(points: np.ndarray, shape: tuple[int, ...], margin_vox
     lower = np.all(points >= margin_voxels, axis=1)
     upper = np.all(points <= (np.array(shape) - 1 - margin_voxels), axis=1)
     return lower & upper
+
+# score_membrane_faces: sample both faces of every surface point, normalise on the pooled distribution
+def score_membrane_faces(
+    tomogram: np.ndarray,
+    vertices: np.ndarray,
+    normals: np.ndarray,
+    offset_min_voxels: float,
+    offset_max_voxels: float,
+    n_samples: int,
+    density_sign: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    n_points = vertices.shape[0]
+    raw = []
+    face_normals = []
+    for direction in (1, -1):
+        densities = sample_along_normals(tomogram, vertices, normals, offset_min_voxels, offset_max_voxels, n_samples, direction)
+        raw.append(density_sign * densities)
+        face_normals.append(direction * normals)
+    scores = robust_normalise(np.concatenate(raw))
+    points = np.concatenate([vertices, vertices])
+    return points, np.concatenate(face_normals), scores

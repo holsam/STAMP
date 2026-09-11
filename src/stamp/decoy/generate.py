@@ -16,6 +16,7 @@ from stamp.picking.geometry import (
     quaternion_from_reference_to,
     robust_normalise,
     sample_along_normals,
+    score_membrane_faces
 )
 from stamp.picking.native import NativePickerConfig
 from stamp.schemas.manifest import TomogramManifest
@@ -265,21 +266,7 @@ def _score_surface(
     offset_min = config.to_voxels(config.offset_min_angstrom)
     offset_max = config.to_voxels(config.offset_max_angstrom)
 
-    points_parts, normals_parts, scores_parts = [], [], []
-    for direction in (1, -1):
-        densities = sample_along_normals(
-            tomogram, vertices, normals, offset_min, offset_max,
-            config.n_samples, direction,
-        )
-        points_parts.append(vertices)
-        normals_parts.append(direction * normals)
-        scores_parts.append(robust_normalise(config.density_sign * densities))
-
-    return (
-        np.concatenate(points_parts),
-        np.concatenate(normals_parts),
-        np.concatenate(scores_parts),
-    )
+    return score_membrane_faces(tomogram, vertices, normals, offset_min, offset_max, config.n_samples, config.density_sign)
 
 
 # _finalise: assign decoy particle IDs and half-sets, returning a decoy ParticleSet or None if no decoys were generated
@@ -287,8 +274,8 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet |
     particle_ids = [f'decoy-{index:06d}' for index in range(len(raw_picks))]
     if not particle_ids:
         return None
-
-    half_set_by_id = assign_half_sets(particle_ids, seed=seed)
+    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, raw_picks)}
+    half_set_by_id = assign_half_sets(particle_ids, seed=seed, group_of=group_of)
     particles = [
         Particle(
             particle_id=particle_id,
