@@ -244,6 +244,12 @@ class TestFeatures:
         )
         assert narrow.shape[1] < wide.shape[1]
 
+    def test_degenerate_rows_are_all_zero(self):
+        '''build_feature_matrix z-scores a flat subvolume to zeros.'''
+        stack = np.stack([np.zeros((11, 11, 11)), np.random.default_rng(0).random((11, 11, 11))])
+        features = build_feature_matrix(stack, n_radial_bins=4, max_azimuthal_mode=0)
+        assert not features[0].any() and features[1].any()
+
 # TestCluster: class containing unit tests for test_cluster.py
 class TestCluster:
     def test_hdbscan_recovers_three_groups(self) -> None:

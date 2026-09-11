@@ -75,6 +75,16 @@ def run_classify(
     )
     print(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
 
+    degenerate = ~features.any(axis=1)
+    if degenerate.any():
+        print(f'Dropped {int(degenerate.sum())} particles with a constant/empty subvolume (edge fill)')
+        features = features[~degenerate]
+        subvolumes = subvolumes[~degenerate]
+        kept = [particle for particle, bad in zip(kept, degenerate) if not bad]
+    if not kept:
+        print('No particles left after dropping degenerate subvolumes.')
+        raise SystemExit(1)
+
     config = ClusteringConfig(
         method=method,
         n_components=n_components,
