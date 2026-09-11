@@ -62,6 +62,10 @@ class TestStagesToRun:
     def test_from_stage_slices_from_that_stage(self, fake_config, tmp_path):
         assert stages_to_run(fake_config, tmp_path, force=False, from_stage='identify') == ['identify', 'refine']
 
+    def test_resume_reruns_only_failed_decoy_track(self, fake_config, tmp_path):
+        _complete(tmp_path, 'real', 'pick')
+        assert stages_to_run(fake_config, tmp_path, force=False, from_stage=None) == STAGE_ORDER
+
 class TestState:
     def test_stage_dir_layout(self, tmp_path):
         assert stage_dir(tmp_path, 'decoy', 'pick') == tmp_path / 'decoy' / 'stage_pick'
