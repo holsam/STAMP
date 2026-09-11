@@ -7,7 +7,11 @@ from pathlib import Path
 from rich import print
 from rich.console import Console
 from rich.syntax import Syntax
+from typer._completion_classes import completion_init
 from typer._completion_shared import Shells
+
+# register typer's bash/zsh/fish/powershell completion classes into click's shell_completion registry
+completion_init()
 
 # PROG_NAME: pin program name as stamp
 PROG_NAME = 'stamp'
