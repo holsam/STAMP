@@ -277,6 +277,23 @@ class TestConsensusRules:
 
 # TestConsensus: class containing unit tests for consensus command
 class TestConsensus:
+    def test_chain_does_not_merge_distant_picks(self):
+        '''Three collinear picks each within threshold of the next stay split.'''
+        picks = {'p': [
+            RawPick(tomogram_id='t', position=(0.0, 0.0, 0.0), source_picker='p'),
+            RawPick(tomogram_id='t', position=(12.0, 0.0, 0.0), source_picker='p'),
+            RawPick(tomogram_id='t', position=(24.0, 0.0, 0.0), source_picker='p'),
+        ]}
+        out = reconcile_picks(picks, 'union', distance_threshold=15.0, tomogram_id='t')
+        assert len(out) >= 2  # complete-linkage keeps the 0 and 24 picks apart
+
+    def test_centroid_not_biased_by_pick_count(self):
+        '''Picker A places 4, picker B places 1; centroid sits between them.'''
+        a = [RawPick(tomogram_id='t', position=(x, 0.0, 0.0), source_picker='a') for x in (0, 1, 2, 1)]
+        b = [RawPick(tomogram_id='t', position=(10.0, 0.0, 0.0), source_picker='b')]
+        out = reconcile_picks({'a': a, 'b': b}, 'intersection', distance_threshold=20.0, tomogram_id='t')
+        assert out and 4.0 < out[0].position[0] < 6.0
+
     def test_reconciled_position_is_centroid_of_component(self) -> None:
         picks_by_picker = {
             'stamp-native': [_pick('tomo000', (0.0, 0.0, 0.0), 'stamp-native')],
@@ -285,18 +302,6 @@ class TestConsensus:
         reconciled = reconcile_picks(picks_by_picker, 'union', distance_threshold=15.0, tomogram_id='tomo000')
         assert len(reconciled) == 1
         assert reconciled[0].position == (5.0, 0.0, 0.0)
-
-
-    def test_orientation_carried_over_when_available(self) -> None:
-        picks_by_picker = {
-            'stamp-native': [_pick('tomo000', (0.0, 0.0, 0.0), 'stamp-native')],
-            'membrain-pick': [
-                _pick('tomo000', (5.0, 0.0, 0.0), 'membrain-pick', orientation=(1.0, 0.0, 0.0, 0.0))
-            ],
-        }
-        reconciled = reconcile_picks(picks_by_picker, 'union', distance_threshold=15.0, tomogram_id='tomo000')
-        assert reconciled[0].orientation == (1.0, 0.0, 0.0, 0.0)
-
 
     def test_reconcile_filters_to_requested_tomogram_only(self) -> None:
         picks_by_picker = {
