@@ -24,16 +24,18 @@ class ClusterJob:
     stage: str
     commands: list[ToolCommand]
     depends_on: list[str] = field(default_factory=list)
+    requires_gpu: bool = False
+
+# _pick_needs_gpu: True if any configured picker adapter wants a GPU
+def _pick_needs_gpu(config) -> bool:
+    from stamp.commands.pick import REAL_ADAPTERS
+    return any(getattr(REAL_ADAPTERS.get(name), 'requires_gpu', False) for name in config.stage.pick.pickers)
 
 # plan_pipeline_jobs: planned pipeline, skipping stages stages_to_run() excludes
-def plan_pipeline_jobs(
-    config,
-    output_dir: Path,
-    planned_stages: list[str]
-) -> list[ClusterJob]:
+def plan_pipeline_jobs(config, output_dir: Path, planned_stages: list[str]) -> list[ClusterJob]:
     jobs = []
     if 'pick' in planned_stages:
-        jobs.append(ClusterJob('real.pick', 'real', 'pick', build_pick_commands(config, output_dir)))
+        jobs.append(ClusterJob('real.pick', 'real', 'pick', build_pick_commands(config, output_dir), requires_gpu=_pick_needs_gpu(config)))
         if config.decoy.enabled:
             jobs.append(ClusterJob('decoy.pick', 'decoy', 'pick', build_decoy_commands(config, output_dir)))
     if 'classify' in planned_stages:
@@ -44,7 +46,7 @@ def plan_pipeline_jobs(
         deps = ['real.classify'] + (['decoy.classify'] if config.decoy.enabled else [])
         jobs.append(ClusterJob('real.identify', 'real', 'identify', build_identify_commands(config, output_dir), depends_on=deps))
     if 'refine' in planned_stages:
-        jobs.append(ClusterJob('real.refine', 'real', 'refine', build_refine_commands(config, output_dir), depends_on=['real.identify']))
+        jobs.append(ClusterJob('real.refine', 'real', 'refine', build_refine_commands(config, output_dir), depends_on=['real.identify'], requires_gpu=True))
     return jobs
 
 # submit_pipeline: render job scripts & submit using --dependency=afterok from known job ids; returns step -> job id(s)
@@ -70,7 +72,7 @@ def _submit_one(
     profile: ClusterProfile,
     output_dir: Path,
 ) -> str:
-    script = render_job_script(command, requires_gpu=False, profile=profile, workdir=command.working_directory)
+    script = render_job_script(command, requires_gpu=job.requires_gpu, profile=profile, workdir=command.working_directory)
     script += (
         'tool_exit=$?\n'
         f'if [ "$tool_exit" -eq 0 ]; then stamp internal mark-complete '
