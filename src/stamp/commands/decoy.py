@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 # Import internal STAMP objects
+from stamp.backends.base import ToolCommand
 from stamp.decoy.generate import (
     METHOD_REJECTED_SURFACE,
     METHOD_SHIFTED,
@@ -15,7 +16,7 @@ from stamp.decoy.generate import (
     generate_shifted_decoys,
     generate_synthetic_noise_decoys,
 )
-from stamp.backends.base import ToolCommand
+from stamp.decoy.validate import assert_comparable
 from stamp.picking.native import NativePickerConfig
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
@@ -103,6 +104,9 @@ def run_decoy(
     if decoy_set is None or not decoy_set.particles:
         print('No decoy positions generated. For rejected-surface, check that --min-distance-from-real-angstrom isn\'t excluding the whole surface; for shifted, that the shift range fits inside the volume.')
         raise SystemExit(1)
+
+    if method != METHOD_SYNTHETIC_NOISE and real_particle_set is not None:
+        assert_comparable(real_set, decoy_set)
 
     decoy_path = output_dir / 'decoy_particle_set.json'
     decoy_path.write_text(decoy_set.model_dump_json(indent=2))
