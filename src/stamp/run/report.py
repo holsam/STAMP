@@ -47,11 +47,16 @@ def write_report(outcome: RunOutcome, output_dir: Path) -> tuple[Path, Path]:
     lines.append('')
 
     if outcome.refine_results:
-        lines += ['## Resolution (FSC @ 0.143)', '', 'class | resolution (Å)',
-                  '--|--']
+        lines += ['## Resolution (FSC @ 0.143)', '', 'class | resolution (Å)', '--|--']
         for row in outcome.refine_results:
             resolution = row['resolution_angstrom']
-            lines.append(f'{row["class_id"]} | {resolution:.1f} |' if resolution else f'| {row["class_id"]} | n/a')
+            if resolution is None or resolution != resolution:  # None or NaN
+                cell = 'n/a'
+            elif resolution == float('inf'):
+                cell = '> Nyquist (no FSC crossing)'
+            else:
+                cell = f'{resolution:.1f}'
+            lines.append(f'{row["class_id"]} | {cell}')
         lines.append('')
 
     lines += ['## Provenance', '']

@@ -14,7 +14,7 @@ from stamp.commands.decoy import run_decoy
 from stamp.commands.identify import run_identify
 from stamp.commands.pick import REAL_ADAPTERS, run_pick
 from stamp.commands.refine import _ADAPTERS as REFINE_ADAPTERS, run_refine
-from stamp.run.state import STAGE_ORDER, mark_complete, stage_dir, stages_to_run
+from stamp.run.state import STAGE_ORDER, is_complete, mark_complete, stage_dir, stages_to_run
 from stamp.schemas.config import RunConfig
 
 # RunOutcome: completed run information reported
@@ -132,9 +132,11 @@ def run_pipeline(
         real_particles = _real_pick(config, output_dir)
         mark_complete(output_dir, 'real', 'pick')
     decoy_particles = None
-    if config.decoy.enabled and 'pick' in planned:
-        decoy_particles = _decoy_pick(config, output_dir, real_particles)
-        mark_complete(output_dir, 'decoy', 'pick')
+    if config.decoy.enabled:
+        decoy_particles = stage_dir(output_dir, 'decoy', 'pick') / 'decoy_particle_set.json'
+        if not is_complete(output_dir, 'decoy', 'pick'):
+            decoy_particles = _decoy_pick(config, output_dir, real_particles)
+            mark_complete(output_dir, 'decoy', 'pick')
     if stop_after == 'pick':
         return _finalise(outcome, output_dir)
 
@@ -142,11 +144,9 @@ def run_pipeline(
     if 'classify' in planned:
         _classify_track(config, output_dir, 'real', real_particles)
         mark_complete(output_dir, 'real', 'classify')
-        if config.decoy.enabled and decoy_particles is not None:
-            _classify_track(config, output_dir, 'decoy', decoy_particles)
-            mark_complete(output_dir, 'decoy', 'classify')
-    if stop_after == 'classify':
-        return _finalise(outcome, output_dir)
+    if config.decoy.enabled and decoy_particles is not None and not is_complete(output_dir, 'decoy', 'classify'):
+        _classify_track(config, output_dir, 'decoy', decoy_particles)
+        mark_complete(output_dir, 'decoy', 'classify')
 
     # --- identify ---
     identify_dir = stage_dir(output_dir, 'real', 'identify')

@@ -73,6 +73,7 @@ class TestBackends:
         assert isinstance(local_result.exit_code, int) and isinstance(mock_result.exit_code, int)
     
 # TestSlurmBackend: class containing unit tests for SLURM backend helpers
+class TestSlurmBackend:
     def test_script_adds_gpus_only_when_required(self, tmp_path):
         profile = ClusterProfile(partition='cpu', gpus=2, cpus_per_task=4, module_loads=['relion/5.0'])
         gpu_script = render_job_script(_command(tmp_path), True, profile, tmp_path)
@@ -99,6 +100,13 @@ class TestBackends:
     def test_job_state_parsing(self, monkeypatch, sacct_out, expected):
         monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=sacct_out, stderr=''))
         assert job_state('123456') == expected
+
+    def test_job_script_errexits_on_setup(self, tmp_path):
+        command = _command(tmp_path)
+        profile = ClusterProfile(partition='cpu')
+        script = render_job_script(command, requires_gpu=False, profile=profile, workdir=Path('/w'))
+        assert 'set -euo pipefail' in script
+        assert script.index('set -euo pipefail') < script.index('set +e') < script.rindex(command.argv[0])
 
 # TestClusterBackend: class containing unit tests for cluster backend
 class TestClusterBackend:
