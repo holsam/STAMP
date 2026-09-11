@@ -32,34 +32,54 @@ class ClusteringResult:
     explained_variance_ratio: np.ndarray
     centroids: dict[int, np.ndarray]    # label -> centroid in PCA space
 
+# _cluster_embedding: run the configured clusterer on an embedding, return (labels, centroids)
+def _cluster_embedding(embedding: np.ndarray, config: ClusteringConfig) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+    if config.method == 'hdbscan':
+        if embedding.shape[0] < config.min_cluster_size:
+            raise ValueError(f'only {embedding.shape[0]} particles but min_cluster_size is {config.min_cluster_size}')
+        labels = HDBSCAN(min_cluster_size=config.min_cluster_size).fit_predict(embedding)
+    else:
+        n_clusters = min(config.n_clusters, embedding.shape[0])
+        labels = KMeans(n_clusters=n_clusters, random_state=config.random_state, n_init=10).fit_predict(embedding)
+    centroids = {int(label): embedding[labels == label].mean(axis=0) for label in np.unique(labels) if label != -1}
+    return labels, centroids
+
 # reduce_and_cluster: PCA followed by HDBSCAN or KMeans
 def reduce_and_cluster(features: np.ndarray, config: ClusteringConfig) -> ClusteringResult:
     if features.shape[0] == 0:
-        raise ValueError('Cannot cluster an empty feature matrix')
-
+        raise ValueError('cannot cluster an empty feature matrix')
     n_components = min(config.n_components, features.shape[0] - 1, features.shape[1])
-    if n_components < 1:
+    if n_components < 2:
         raise ValueError(f'Too few particles ({features.shape[0]}) to run PCA (at least 2 needed)')
 
     pca = PCA(n_components=n_components, random_state=config.random_state)
     embedding = pca.fit_transform(features)
-
-    if config.method == 'hdbscan':
-        if features.shape[0] < config.min_cluster_size:
-            raise ValueError(f'Only {features.shape[0]} particles but min_cluster_size is {config.min_cluster_size}, lower min_cluster_size or use --method kmeans')
-        labels = HDBSCAN(min_cluster_size=config.min_cluster_size).fit_predict(embedding)
-    else:
-        n_clusters = min(config.n_clusters, features.shape[0])
-        labels = KMeans(n_clusters=n_clusters, random_state=config.random_state, n_init=10).fit_predict(embedding)
-
-    centroids = {int(label): embedding[labels == label].mean(axis=0) for label in np.unique(labels) if label != -1}
-
+    labels, centroids = _cluster_embedding(embedding, config)
     return ClusteringResult(
         labels=labels,
         embedding=embedding,
         explained_variance_ratio=pca.explained_variance_ratio_,
         centroids=centroids,
     )
+
+# reduce_and_cluster_shared: one PCA basis fitted on every particle, each index group clustered in that basis
+def reduce_and_cluster_shared(features: np.ndarray, groups: dict[str, np.ndarray], config: ClusteringConfig) -> dict[str, ClusteringResult]:
+    n_components = min(config.n_components, features.shape[0] - 1, features.shape[1])
+    if n_components < 1:
+        raise ValueError(f'too few particles ({features.shape[0]}) to run PCA (at least 2 needed)')
+    pca = PCA(n_components=n_components, random_state=config.random_state)
+    embedding_all = pca.fit_transform(features)
+    results: dict[str, ClusteringResult] = {}
+    for name, indices in groups.items():
+        embedding = embedding_all[indices]
+        labels, centroids = _cluster_embedding(embedding, config)
+        results[name] = ClusteringResult(
+            labels=labels,
+            embedding=embedding,
+            explained_variance_ratio=pca.explained_variance_ratio_,
+            centroids=centroids,
+        )
+    return results
 
 # label_to_cluster_id: turn a raw cluster label into a stable string id
 def label_to_cluster_id(label: int) -> str:

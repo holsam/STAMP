@@ -92,6 +92,9 @@ def extract_particle_set(
             tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
 
         for particle in group:
+            if particle.orientation is None:
+                skipped.append(particle)
+                continue
             if not box_fits_inside(particle.position, tomogram.shape, box_voxels):
                 skipped.append(particle)
                 continue

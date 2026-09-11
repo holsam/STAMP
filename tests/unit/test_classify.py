@@ -12,6 +12,7 @@ from stamp.classify.cluster import (
     label_to_cluster_id,
     match_clusters_across_halves,
     reduce_and_cluster,
+    reduce_and_cluster_shared,
 )
 from stamp.classify.extract import (
     box_fits_inside,
@@ -112,7 +113,7 @@ class TestExtract:
             mrc.set_data(segmentation)
             mrc.voxel_size = 1.0
 
-        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=None, source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
         subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, segmentation_paths={'t': str(tmp_path / 's.mrc')})
         assert len(kept) == 1
         # the box centre sampled the membrane plane; it must now sit near background
@@ -125,7 +126,7 @@ class TestExtract:
         with mrcfile.new(tmp_path / 't.mrc', overwrite=True) as mrc:
             mrc.set_data(tomogram)
             mrc.voxel_size = 1.0
-        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=None, source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
         subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11)
         assert float(subvolumes[0, 5, 5, 5]) == 50.0
 
@@ -243,6 +244,12 @@ class TestFeatures:
         )
         assert narrow.shape[1] < wide.shape[1]
 
+    def test_degenerate_rows_are_all_zero(self):
+        '''build_feature_matrix z-scores a flat subvolume to zeros.'''
+        stack = np.stack([np.zeros((11, 11, 11)), np.random.default_rng(0).random((11, 11, 11))])
+        features = build_feature_matrix(stack, n_radial_bins=4, max_azimuthal_mode=0)
+        assert not features[0].any() and features[1].any()
+
 # TestCluster: class containing unit tests for test_cluster.py
 class TestCluster:
     def test_hdbscan_recovers_three_groups(self) -> None:
@@ -303,3 +310,19 @@ class TestCluster:
         centroids_b = {0: np.array([0.1, 0.0]), 1: np.array([0.2, 0.0])}
         matches = match_clusters_across_halves(centroids_a, centroids_b)
         assert len([m for m in matches.values() if m[0] == 0]) == 1
+
+    def test_shared_basis_matches_recover_planted_split(self):
+        '''Two motifs, each split A/B, match A<->B correctly.'''
+        rng = np.random.default_rng(0)
+        motif_a = rng.normal(0.0, 1.0, 40)
+        motif_b = rng.normal(5.0, 1.0, 40)
+        rows, group_a, group_b = [], [], []
+        for i in range(40):
+            rows.append(motif_a + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
+        for i in range(40):
+            rows.append(motif_b + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
+        features = np.array(rows)
+        config = ClusteringConfig(method='kmeans', n_clusters=2, n_components=5)
+        results = reduce_and_cluster_shared(features, {'A': np.array(group_a), 'B': np.array(group_b)}, config)
+        matches = match_clusters_across_halves(results['A'].centroids, results['B'].centroids)
+        assert len(matches) == 2 and all(d < 1.0 for _, d in matches.values())

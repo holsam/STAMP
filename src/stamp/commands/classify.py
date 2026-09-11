@@ -13,6 +13,7 @@ from stamp.classify.cluster import (
     label_to_cluster_id,
     match_clusters_across_halves,
     reduce_and_cluster,
+    reduce_and_cluster_shared,
 )
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
@@ -59,7 +60,7 @@ def run_classify(
         particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels, segmentation_paths=segmentation_paths,
     )
     if skipped:
-        print(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram')
+        print(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
     if not kept:
         print('No particles could be extracted. Check --raw-dir and --box-length-a')
         raise SystemExit(1)
@@ -74,6 +75,16 @@ def run_classify(
     )
     print(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
 
+    degenerate = ~features.any(axis=1)
+    if degenerate.any():
+        print(f'Dropped {int(degenerate.sum())} particles with a constant/empty subvolume (edge fill)')
+        features = features[~degenerate]
+        subvolumes = subvolumes[~degenerate]
+        kept = [particle for particle, bad in zip(kept, degenerate) if not bad]
+    if not kept:
+        print('No particles left after dropping degenerate subvolumes.')
+        raise SystemExit(1)
+
     config = ClusteringConfig(
         method=method,
         n_components=n_components,
@@ -84,6 +95,8 @@ def run_classify(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if not strict_halfset_independence:
+        print('WARNING: --no-strict-halfset-independence used, half-A and half-B particles are clustered together; FSC built on these classes will be inflated')
     if strict_halfset_independence:
         assignments = _classify_strict(kept, subvolumes, features, config, output_dir, voxel_size_angstrom)
     else:
@@ -141,8 +154,8 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
         '--n-components', str(settings.n_components),
         '--seed', str(settings.random_state),
     ]
-    if settings.strict_halfset_independence:
-        argv.append('--strict-halfset-independence')
+    if not settings.strict_halfset_independence:
+        argv.append('--no-strict-halfset-independence')
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
 # _classify_combined: cluster all particles together, then average each half separately
@@ -187,10 +200,10 @@ def _classify_strict(
         print('Strict mode needs particles in both half-sets')
         raise SystemExit(1)
 
-    result_a = reduce_and_cluster(features[indices_a], config)
-    result_b = reduce_and_cluster(features[indices_b], config)
+    results = reduce_and_cluster_shared(features, {'A': indices_a, 'B': indices_b}, config)
+    result_a, result_b = results['A'], results['B']
     matches = match_clusters_across_halves(result_a.centroids, result_b.centroids)
-    print('Cross-half cluster matching (B -> A, centroid distance):')
+    print('Cross-half cluster matching (B -> A, shared PCA space):')
     for label_b, (label_a, distance) in sorted(matches.items()):
         print(f'  c{label_b:02d} -> c{label_a:02d}  d={distance:.3f}')
 
@@ -215,10 +228,13 @@ def _classify_strict(
                 classifier='stamp-native-classifier-strict',
             )
         )
-    for half_label, indices, result in (
-        ('A', indices_a, result_a), ('B', indices_b, result_b)
+    for half_label, half_particles, indices, result in (
+        ('A', half_a, indices_a, result_a), ('B', half_b, indices_b, result_b),
     ):
-        cluster_ids = [label_to_cluster_id(int(label)) for label in result.labels]
+        if half_label == 'B':
+            cluster_ids = [label_to_cluster_id(matches[int(label)][0]) if int(label) in matches else label_to_cluster_id(int(label)) for label in result.labels]
+        else:
+            cluster_ids = [label_to_cluster_id(int(label)) for label in result.labels]
         averages = compute_class_averages(subvolumes[indices], cluster_ids)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_label)
     return assignments
