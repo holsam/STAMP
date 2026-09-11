@@ -87,7 +87,10 @@ def build_particle_set(
     half_set_seed: int,
 ) -> ParticleSet:
     particle_ids = [f'p{index:06d}' for index in range(len(reconciled_picks))]
-    half_set_by_id = assign_half_sets(particle_ids, seed=half_set_seed)
+    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, reconciled_picks)}
+    if len(set(group_of.values())) < 2:
+        print('WARNING: one tomogram only; half-sets are not independent (all particles in half A).')
+    half_set_by_id = assign_half_sets(particle_ids, seed=half_set_seed, group_of=group_of)
     particles = [
         Particle(
             particle_id=particle_id,

@@ -274,8 +274,8 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet |
     particle_ids = [f'decoy-{index:06d}' for index in range(len(raw_picks))]
     if not particle_ids:
         return None
-
-    half_set_by_id = assign_half_sets(particle_ids, seed=seed)
+    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, raw_picks)}
+    half_set_by_id = assign_half_sets(particle_ids, seed=seed, group_of=group_of)
     particles = [
         Particle(
             particle_id=particle_id,

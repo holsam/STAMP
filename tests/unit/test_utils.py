@@ -68,6 +68,15 @@ class TestAssignHalfSet:
         with pytest.raises(ValueError, match='duplicates'):
             assign_half_sets(['p001', 'p001'], seed=0)
 
+    def test_split_keeps_tomograms_whole(self):
+        '''No tomogram straddles the A/B boundary.'''
+        ids = [f'p{i:04d}' for i in range(60)]
+        group_of = {pid: f't{i // 20}' for i, pid in enumerate(ids)}
+        assignment = assign_half_sets(ids, seed=3, group_of=group_of)
+        for tomogram in {'t0', 't1', 't2'}:
+            halves = {assignment[pid] for pid in ids if group_of[pid] == tomogram}
+            assert len(halves) == 1
+
 class TestValidateHalfSet:
     def test_validate_single_half_set_accepts_uniform_list(self) -> None:
         '''A list of particles in the same half set should return the corresponding half set'''
