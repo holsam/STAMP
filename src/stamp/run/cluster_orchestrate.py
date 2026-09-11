@@ -49,17 +49,17 @@ def plan_pipeline_jobs(config, output_dir: Path, planned_stages: list[str]) -> l
         jobs.append(ClusterJob('real.refine', 'real', 'refine', build_refine_commands(config, output_dir), depends_on=['real.identify'], requires_gpu=True))
     return jobs
 
-# submit_pipeline: render job scripts & submit using --dependency=afterok from known job ids; returns step -> job id(s)
-def submit_pipeline(
-    config,
-    output_dir: Path,
-    planned_stages: list[str],
-    profile: ClusterProfile
-) -> dict[str, list[str]]:
+# submit_pipeline: render job scripts & submit with --dependency=afterok from known job ids
+def submit_pipeline(config, output_dir: Path, planned_stages: list[str], profile: ClusterProfile) -> dict[str, list[str]]:
     jobs = plan_pipeline_jobs(config, output_dir, planned_stages)
+    planned_keys = {job.step_key for job in jobs}
     submitted: dict[str, list[str]] = {}
     for job in jobs:
-        dep_ids = [id for key in job.depends_on for id in submitted[key]]
+        dep_ids = [
+            job_id
+            for key in job.depends_on if key in planned_keys
+            for job_id in submitted[key]
+        ]
         assert len(job.commands) == 1, f'{job.step_key}: fan-out not supported'
         submitted[job.step_key] = [_submit_one(job.commands[0], job, dep_ids, profile, output_dir)]
     return submitted

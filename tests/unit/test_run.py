@@ -167,3 +167,10 @@ class TestClusterOrchestrate:
         script = (stage_dir(tmp_path, 'real', 'pick') / 'stamp-real.pick.sbatch').read_text()
         assert 'if [ "$tool_exit" -eq 0 ]; then stamp internal mark-complete' in script
         assert 'barrier' not in script
+
+    def test_cluster_resume_skips_completed_dependency(self, tmp_path, mock_config, monkeypatch):
+        submits = []
+        monkeypatch.setattr('stamp.run.cluster_orchestrate.submit', lambda p, dependency_ids=None: submits.append(dependency_ids) or 'JOB1')
+        monkeypatch.setattr('stamp.run.cluster_orchestrate.render_job_script', lambda *a, **k: '#!/bin/bash\n')
+        submit_pipeline(mock_config, tmp_path, ['refine'], mock_profile)
+        assert submits == [[]]
