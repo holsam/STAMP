@@ -38,6 +38,7 @@ def run_decoy(
     min_distance_from_real_angstrom,
     min_shift_angstrom,
     max_shift_angstrom,
+    min_distance_from_picks_angstrom,
     n_synthetic_tomograms,
     synthetic_shape,
     seed,
@@ -95,6 +96,7 @@ def run_decoy(
                 min_shift_angstrom=min_shift_angstrom,
                 max_shift_angstrom=max_shift_angstrom,
                 min_distance_from_surface_angstrom=min_distance_from_real_angstrom,
+                min_pick_distance=min_distance_from_picks_angstrom,
                 seed=seed,
             )
 

@@ -101,6 +101,7 @@ def generate_shifted_decoys(
     min_shift_angstrom: float,
     max_shift_angstrom: float,
     min_distance_from_surface_angstrom: float,
+    min_pick_distance: float,
     seed: int,
     max_attempts_per_particle: int = 200,
 ) -> ParticleSet | None:
@@ -125,6 +126,7 @@ def generate_shifted_decoys(
     min_shift = config.to_voxels(min_shift_angstrom)
     max_shift = config.to_voxels(max_shift_angstrom)
     min_surface_distance = config.to_voxels(min_distance_from_surface_angstrom)
+    min_pick_distance_voxels = config.to_voxels(min_pick_distance)
 
     raw_picks: list[RawPick] = []
     for tomogram_id, positions in real_by_tomogram.items():
@@ -149,7 +151,7 @@ def generate_shifted_decoys(
                     continue
                 if surface_distance < min_surface_distance:
                     continue
-                if pick_tree.query(candidate, k=1)[0] < min_surface_distance:
+                if pick_tree.query(candidate, k=1)[0] < min_pick_distance_voxels:
                     continue
 
                 raw_picks.append(

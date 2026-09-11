@@ -132,7 +132,7 @@ class TestDecoy:
         decoy_set = generate_shifted_decoys(
             real_particle_set=real_set, manifests=[manifest], config=config,
             min_shift_angstrom=100.0, max_shift_angstrom=200.0,
-            min_distance_from_surface_angstrom=50.0, seed=2,
+            min_distance_from_surface_angstrom=50.0, min_pick_distance=60.0, seed=2,
         )
         for particle in decoy_set.particles:
             assert particle.source_picker == 'decoy-shifted'
@@ -147,7 +147,7 @@ class TestDecoy:
         decoy_set = generate_shifted_decoys(
             real_particle_set=real_set, manifests=[manifest], config=config,
             min_shift_angstrom=100.0, max_shift_angstrom=200.0,
-            min_distance_from_surface_angstrom=50.0, seed=2,
+            min_distance_from_surface_angstrom=50.0,  min_pick_distance=60.0, seed=2,
         )
         for particle in decoy_set.particles:
             assert particle.orientation is not None

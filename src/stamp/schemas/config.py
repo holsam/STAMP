@@ -25,6 +25,13 @@ class RunSettings(_Strict):
 class DecoySettings(_Strict):
     enabled: bool = True
     method: Literal['rejected-surface', 'shifted', 'synthetic-noise'] = 'rejected-surface'
+    n_decoys_per_tomogram: int = 50
+    min_distance_from_real_angstrom: float = 100.0
+    min_distance_from_picks_angstrom: float = 60.0
+    min_shift_angstrom: float = 200.0
+    max_shift_angstrom: float = 600.0
+    n_synthetic_tomograms: int = 3
+    synthetic_shape_voxels: tuple[int, int, int] | None = None  # None = match the first real tomogram
 
 # Per-stage tables mirror each command's options
 class PickStage(_Strict):

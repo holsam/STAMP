@@ -3,7 +3,7 @@ STAMP: in-process chaining of the real and decoy tracks for `stamp run`
 '''
 
 # Import external dependencies
-import json, tomllib
+import json, mrcfile, tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,9 +45,20 @@ def _real_pick(config: RunConfig, output_dir: Path) -> Path:
     )
     return target / 'particle_set.json'
 
+# _synthetic_shape: configured synthetic box, else the shape of the first real tomogram, else 200^3
+def _synthetic_shape(config: RunConfig) -> tuple[int, int, int]:
+    if config.decoy.synthetic_shape_voxels is not None:
+        return config.decoy.synthetic_shape_voxels
+    first = next(iter(sorted(config.run.raw_tomogram_dir.glob('*.mrc'))), None)
+    if first is None:
+        return (200, 200, 200)
+    with mrcfile.open(str(first), permissive=True, header_only=True) as mrc:
+        return (int(mrc.header.nz), int(mrc.header.ny), int(mrc.header.nx))
+
 # _decoy_pick: run decoy generation
 def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) -> Path:
     target = stage_dir(output_dir, 'decoy', 'pick')
+    shape = _synthetic_shape(config)
     run_decoy(
         output_dir=target,
         method=config.decoy.method,
@@ -56,12 +67,13 @@ def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) ->
         segmentation_dir=config.run.segmentation_dir,
         raw_tomogram_dir=config.run.raw_tomogram_dir,
         voxel_size_angstrom=config.run.voxel_size_angstrom,
-        n_decoys_per_tomogram=50,
-        min_distance_from_real_angstrom=100.0,
-        min_shift_angstrom=200.0,
-        max_shift_angstrom=600.0,
-        n_synthetic_tomograms=3,
-        synthetic_shape='200,200,200',
+        n_decoys_per_tomogram=config.decoy.n_decoys_per_tomogram,
+        min_distance_from_real_angstrom=config.decoy.min_distance_from_real_angstrom,
+        min_distance_from_picks_angstrom=config.decoy.min_distance_from_picks_angstrom,
+        min_shift_angstrom=config.decoy.min_shift_angstrom,
+        max_shift_angstrom=config.decoy.max_shift_angstrom,
+        n_synthetic_tomograms=config.decoy.n_synthetic_tomograms,
+        synthetic_shape=','.join(str(dimension) for dimension in shape),
         seed=config.stage.pick.half_set_seed,
     )
     return target / 'decoy_particle_set.json'
