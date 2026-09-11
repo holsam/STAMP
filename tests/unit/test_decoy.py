@@ -139,6 +139,19 @@ class TestDecoy:
             for coordinate in particle.position:
                 assert 0 <= coordinate <= 59
 
+    def test_shifted_decoys_are_oriented(self, tmp_path: Path) -> None:
+        '''Shifted decoys have defined orientation.'''
+        manifest = _write_vesicle_pair(tmp_path)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5)
+        real_set = _real_set_from_picker(manifest, config)
+        decoy_set = generate_shifted_decoys(
+            real_particle_set=real_set, manifests=[manifest], config=config,
+            min_shift_angstrom=100.0, max_shift_angstrom=200.0,
+            min_distance_from_surface_angstrom=50.0, seed=2,
+        )
+        for particle in decoy_set.particles:
+            assert particle.orientation is not None
+
     def test_synthetic_noise_writes_matched_pairs(self, tmp_path: Path) -> None:
         '''Synthetic-noise writes matched segmentation/tomogram pairs'''
         config = NativePickerConfig(voxel_size_angstrom=10.0)
@@ -154,6 +167,15 @@ class TestDecoy:
             with mrcfile.open(manifest.segmentation_path) as mrc:
                 assert mrc.data.shape == (40, 40, 40)
         assert len(decoy_set.particles) == 10
+
+    def test_synthetic_decoys_are_oriented(self, tmp_path: Path) -> None:
+        '''Synthetic decoys have defined orientation.'''
+        config = NativePickerConfig(voxel_size_angstrom=10.0)
+        decoy_set, manifests = generate_synthetic_noise_decoys(
+            tomogram_shape=(40, 40, 40), n_tomograms=2, n_decoys_per_tomogram=5,
+            output_dir=tmp_path / 'noise', config=config, seed=3,
+        )
+        assert all(p.orientation is not None for p in decoy_set.particles)
 
     def test_is_decoy_particle_set_detects_mixture(self) -> None:
         '''A mixed decoy/real set raises DecoyContaminationError'''
