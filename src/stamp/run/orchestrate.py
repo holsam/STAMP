@@ -14,7 +14,7 @@ from stamp.commands.decoy import run_decoy
 from stamp.commands.identify import run_identify
 from stamp.commands.pick import REAL_ADAPTERS, run_pick
 from stamp.commands.refine import _ADAPTERS as REFINE_ADAPTERS, run_refine
-from stamp.run.state import STAGE_ORDER, mark_complete, stage_dir, stages_to_run
+from stamp.run.state import STAGE_ORDER, is_complete, mark_complete, stage_dir, stages_to_run
 from stamp.schemas.config import RunConfig
 
 # RunOutcome: completed run information reported
