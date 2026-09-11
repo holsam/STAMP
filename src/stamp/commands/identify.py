@@ -47,8 +47,7 @@ def _score_panel(class_averages, panel, resolution, fitter, backend):
         scores: dict[str, float] = {}
         for candidate in panel:
             simulated = simulate_density(candidate.structure_path, box_voxels, voxel_size, resolution)
-            # simulate_density is protein-bright so flip to match tomogram convention
-            simulated = -to_comparable(simulated, voxel_size, resolution, already_bandlimited=True)
+            simulated = to_comparable(simulated, voxel_size, resolution, already_bandlimited=True)
             scores[candidate.name] = fit_candidate(comparable_average, simulated)
         all_scores[class_id] = scores
     return all_scores
@@ -95,8 +94,7 @@ def run_identify(
         parameters={
             'fitter': fitter,
             'backend': backend,
-            'resolution': resolution,
-            'effective_resolution_angstrom': resolution,
+            'resolution_angstrom': resolution,
             'symmetry': 'Cinf_z',
             'n_candidates': len(panel), 'n_classes': len(class_averages),
             'decoy_control': decoy_control.model_dump() if decoy_control else None,
@@ -137,8 +135,10 @@ def _write_report(path: Path, results, all_scores, decoy_control, resolution) ->
         banner = 'PASS' if decoy_control.passed else 'FAIL'
         lines += [f'DECOY CONTROL: {banner}', f'  {decoy_control.reason}', '']
     for result in results:
+        gap = result.score_gap_to_runner_up
+        gap_text = f'{gap:.3f}' if gap is not None else 'n/a (single candidate)'
         lines.append(f'{result.cluster_id}: {result.candidate_protein}  '
-                     f'score={result.fit_score:.3f}  gap={result.score_gap_to_runner_up:.3f}')
+                     f'score={result.fit_score:.3f}  gap={gap_text}')
         for name, score in sorted(all_scores[result.cluster_id].items(), key=lambda kv: -kv[1]):
             lines.append(f'    {name:<24} {score:.3f}')
         lines.append('')

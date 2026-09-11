@@ -41,7 +41,9 @@ def write_report(outcome: RunOutcome, output_dir: Path) -> tuple[Path, Path]:
     lines += ['## Identifications', '', 'class | candidate | fit score | gap to runner-up',
               '--|--|--|--']
     for row in outcome.identifications:
-        lines.append(f'{row["cluster_id"]} | {row["candidate_protein"]} | {row["fit_score"]:.3f} | {row["score_gap_to_runner_up"]:.3f}')
+        gap = row['score_gap_to_runner_up']
+        gap_text = f'{gap:.3f}' if gap is not None else 'n/a'
+        lines.append(f'{row["cluster_id"]} | {row["candidate_protein"]} | {row["fit_score"]:.3f} | {gap_text}')
     lines.append('')
 
     if outcome.refine_results:

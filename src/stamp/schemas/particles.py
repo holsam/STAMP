@@ -57,4 +57,4 @@ class IdentificationResult(BaseModel):
     candidate_protein: str
     fit_score: float
     method: str
-    score_gap_to_runner_up: float
+    score_gap_to_runner_up: float | None = None
