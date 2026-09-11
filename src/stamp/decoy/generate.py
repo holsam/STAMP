@@ -102,21 +102,23 @@ def generate_shifted_decoys(
     min_shift_angstrom: float,
     max_shift_angstrom: float,
     min_distance_from_surface_angstrom: float,
+    min_pick_distance: float,
     seed: int,
     max_attempts_per_particle: int = 200,
 ) -> ParticleSet | None:
     rng = np.random.default_rng(seed)
     shape_by_tomogram = {}
-    surface_tree_by_tomogram = {}
+
+    surface_by_tomogram: dict[str, tuple[cKDTree, np.ndarray]] = {}
     for manifest in manifests:
         with mrcfile.open(str(manifest.segmentation_path), permissive=True) as mrc:
             segmentation = np.asarray(mrc.data)
         shape_by_tomogram[manifest.tomogram_id] = segmentation.shape
         try:
-            vertices, _normals = extract_surface(segmentation)
+            vertices, normals = extract_surface(segmentation)
         except ValueError:
             continue
-        surface_tree_by_tomogram[manifest.tomogram_id] = cKDTree(vertices[:, ::-1])
+        surface_by_tomogram[manifest.tomogram_id] = (cKDTree(vertices[:, ::-1]), normals[:, ::-1])
 
     real_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
     for particle in real_particle_set.particles:
@@ -125,13 +127,15 @@ def generate_shifted_decoys(
     min_shift = config.to_voxels(min_shift_angstrom)
     max_shift = config.to_voxels(max_shift_angstrom)
     min_surface_distance = config.to_voxels(min_distance_from_surface_angstrom)
+    min_pick_distance_voxels = config.to_voxels(min_pick_distance)
 
     raw_picks: list[RawPick] = []
     for tomogram_id, positions in real_by_tomogram.items():
         shape = shape_by_tomogram.get(tomogram_id)
-        surface_tree = surface_tree_by_tomogram.get(tomogram_id)
-        if shape is None or surface_tree is None:
+        surface = surface_by_tomogram.get(tomogram_id)
+        if shape is None or surface is None:
             continue
+        surface_tree, surface_normals_xyz = surface
         pick_tree = cKDTree(np.array(positions))
         extent_xyz = np.array(shape)[::-1] - 1
 
@@ -142,19 +146,20 @@ def generate_shifted_decoys(
                 direction /= np.linalg.norm(direction)
                 magnitude = rng.uniform(min_shift, max_shift)
                 candidate = origin + direction * magnitude
+                surface_distance, nearest_vertex = surface_tree.query(candidate, k=1)
 
                 if np.any(candidate < 0) or np.any(candidate > extent_xyz):
                     continue
-                if surface_tree.query(candidate, k=1)[0] < min_surface_distance:
+                if surface_distance < min_surface_distance:
                     continue
-                if pick_tree.query(candidate, k=1)[0] < min_surface_distance:
+                if pick_tree.query(candidate, k=1)[0] < min_pick_distance_voxels:
                     continue
 
                 raw_picks.append(
                     RawPick(
                         tomogram_id=tomogram_id,
                         position=tuple(float(c) for c in candidate),
-                        orientation=None,
+                        orientation=quaternion_from_reference_to(surface_normals_xyz[nearest_vertex]),
                         confidence=None,
                         source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_SHIFTED}',
                     )
@@ -219,11 +224,12 @@ def generate_synthetic_noise_decoys(
         )
         for voxel_index in chosen:
             position_zyx = shell_voxels[voxel_index].astype(float)
+            radial_xyz = (position_zyx - centre)[::-1]
             raw_picks.append(
                 RawPick(
                     tomogram_id=tomogram_id,
                     position=tuple(float(c) for c in position_zyx[::-1]),
-                    orientation=None,
+                    orientation=quaternion_from_reference_to(radial_xyz),
                     confidence=None,
                     source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_SYNTHETIC_NOISE}',
                 )
