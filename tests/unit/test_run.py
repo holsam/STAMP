@@ -101,6 +101,17 @@ class TestReport:
         assert 'should not be treated as trustworthy' in md
         assert json.loads(json_path.read_text())['decoy_control'] == {'passed': False, 'reason': 'decoy fits'}
 
+    def test_report_resolution_cells_are_two_column(self, tmp_path):
+        outcome = RunOutcome(output_dir=tmp_path, stop_after='refine', decoy_enabled=False)
+        outcome.refine_results = [
+            {'class_id': 'c00', 'resolution_angstrom': 8.3},
+            {'class_id': 'c01', 'resolution_angstrom': None},
+            {'class_id': 'c02', 'resolution_angstrom': float('inf')},
+        ]
+        md_path, _ = write_report(outcome, tmp_path)
+        rows = [ln for ln in md_path.read_text().splitlines() if ln.startswith('c0')]
+        assert all(ln.count('|') == 1 for ln in rows)
+
 class TestGuardBackends:
     def test_local_backend_rejects_a_gpu_only_refine_tool(self, fake_config):
         with pytest.raises(SystemExit):
