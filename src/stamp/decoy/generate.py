@@ -58,7 +58,7 @@ def generate_rejected_surface_decoys(
         if points_zyx.shape[0] == 0:
             continue
 
-        # convert positions (x, y, z) to geometry (z, y, x)
+        # convert positions (z, y, x) to position (x, y, z)
         points_xyz = points_zyx[:, ::-1]
         real_positions = real_by_tomogram.get(manifest.tomogram_id, [])
         if real_positions:

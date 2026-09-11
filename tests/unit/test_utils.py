@@ -125,6 +125,18 @@ class TestIo:
         after = io_utils.checksum_inputs([('class_averages', directory)])['class_averages']
         assert before != after
 
+    def test_directory_digest_sees_nested_files(self, tmp_path):
+        nested = tmp_path / 'root' / 'a' / 'b'
+        nested.mkdir(parents=True)
+        (nested / 'x.txt').write_text('one')
+        before = io_utils.checksum_inputs([('root', tmp_path / 'root')])['root']
+        (nested / 'x.txt').write_text('two')
+        after = io_utils.checksum_inputs([('root', tmp_path / 'root')])['root']
+        assert before != after
+
+    def test_missing_input_recorded_as_absent(self, tmp_path):        
+        assert io_utils.checksum_inputs([('gone', tmp_path / 'nope.mrc')]) == {'gone': 'absent'}
+
     def test_write_sidecar_round_trips(self, tmp_path):
         an_input = tmp_path / 'particle_set.json'
         an_input.write_text('{}')

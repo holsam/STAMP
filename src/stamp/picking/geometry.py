@@ -32,7 +32,7 @@ def downsample_points(points: np.ndarray, normals: np.ndarray, spacing_voxels: f
     if points.shape[0] == 0:
         return points, normals
     cells = np.floor(points / spacing_voxels).astype(np.int64)
-    # np.unique with return_index gives the first occurrence per cell if sorted stably; lexsort by original index preserves that
+    # np.unique with return_index gives the lowest original index per unique cell
     _unique_cells, first_indices = np.unique(cells, axis=0, return_index=True)
     keep = np.sort(first_indices)
     return points[keep], normals[keep]
