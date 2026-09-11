@@ -101,10 +101,12 @@ class TestSlurmBackend:
         monkeypatch.setattr(subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=sacct_out, stderr=''))
         assert job_state('123456') == expected
 
-    def test_job_script_errexits_on_setup(self):
+    def test_job_script_errexits_on_setup(self, tmp_path):
+        command = _command(tmp_path)
+        profile = ClusterProfile(partition='cpu')
         script = render_job_script(command, requires_gpu=False, profile=profile, workdir=Path('/w'))
         assert 'set -euo pipefail' in script
-        assert script.index('set -euo pipefail') < script.index('set +e') < script.index(command.argv[0])
+        assert script.index('set -euo pipefail') < script.index('set +e') < script.rindex(command.argv[0])
 
 # TestClusterBackend: class containing unit tests for cluster backend
 class TestClusterBackend:

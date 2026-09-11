@@ -53,6 +53,7 @@ class TestStagesToRun:
 
     def test_completed_stage_is_skipped(self, fake_config, tmp_path):
         _complete(tmp_path, 'real', 'pick')
+        _complete(tmp_path, 'decoy', 'pick')
         assert stages_to_run(fake_config, tmp_path, force=False, from_stage=None) == STAGE_ORDER[1:]
 
     def test_force_reruns_completed_stages(self, fake_config, tmp_path):
@@ -179,9 +180,13 @@ class TestClusterOrchestrate:
         assert 'if [ "$tool_exit" -eq 0 ]; then stamp internal mark-complete' in script
         assert 'barrier' not in script
 
-    def test_cluster_resume_skips_completed_dependency(self, tmp_path, mock_config, monkeypatch):
+    def test_cluster_resume_skips_completed_dependency(self, tmp_path, fake_config, monkeypatch):
         submits = []
         monkeypatch.setattr('stamp.run.cluster_orchestrate.submit', lambda p, dependency_ids=None: submits.append(dependency_ids) or 'JOB1')
         monkeypatch.setattr('stamp.run.cluster_orchestrate.render_job_script', lambda *a, **k: '#!/bin/bash\n')
-        submit_pipeline(mock_config, tmp_path, ['refine'], mock_profile)
+        jobs = plan_pipeline_jobs(fake_config, tmp_path, ['refine'])
+        for job in jobs:
+            for command in job.commands:
+                command.working_directory.mkdir(parents=True, exist_ok=True)
+        submit_pipeline(fake_config, tmp_path, ['refine'], ClusterProfile(partition='cpu'))
         assert submits == [[]]
