@@ -16,6 +16,7 @@ from stamp.picking.geometry import (
     quaternion_from_reference_to,
     robust_normalise,
     sample_along_normals,
+    score_membrane_faces
 )
 from stamp.picking.native import NativePickerConfig, pick_tomogram
 from stamp.schemas.picks import RawPick
@@ -166,6 +167,26 @@ class TestGeometry:
         points = np.array([[1.0, 1.0, 1.0], [20.0, 20.0, 20.0]])
         mask = exclude_near_boundary(points, (40, 40, 40), margin_voxels=5.0)
         assert mask.tolist() == [False, True]
+
+    def test_faces_share_one_scale(self):
+        '''A bright blob off one face does not inflate the other face's z-scores.'''
+        tomo = np.zeros((40, 40, 40), dtype=np.float32)
+        tomo[25, 20, 20] = -50.0  # dark blob on the +normal side of the y=20 vertex only
+        ys = np.array([5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0])
+        vertices = np.stack([np.full_like(ys, 20.0), ys, np.full_like(ys, 20.0)], axis=1)
+        normals = np.tile([1.0, 0.0, 0.0], (vertices.shape[0], 1))
+        n_points = vertices.shape[0]
+        contaminated = int(np.where(ys == 20.0)[0][0])
+        _points, _n, scores = score_membrane_faces(tomo, vertices, normals, 3.0, 6.0, 3, -1)
+        assert scores.shape == (2 * n_points,)
+        pos_face, neg_face = scores[:n_points], scores[n_points:]
+        clean = [i for i in range(n_points) if i != contaminated]
+        # the blob sits only on the +normal face of the contaminated vertex
+        assert abs(pos_face[contaminated]) > abs(neg_face[contaminated])
+        # every clean vertex, on either face, stays near the untouched baseline
+        for i in clean:
+            assert abs(pos_face[i]) < 1e-6
+            assert abs(neg_face[i]) < 1e-6
 
 # TestNativePicker: class containing unit tests for test_native_picker.py
 class TestNativePicker:
