@@ -109,6 +109,23 @@ def quaternion_from_reference_to(vector_xyz: np.ndarray) -> tuple[float, float, 
     quaternion /= np.linalg.norm(quaternion)
     return tuple(float(component) for component in quaternion)
 
+# compose_roll_about_normal: quaternion for "roll by angle_degrees about +z, then map +z onto the normal"
+def compose_roll_about_normal(
+    normal_quaternion: tuple[float, float, float, float],
+    angle_degrees: float,
+) -> tuple[float, float, float, float]:
+    half = np.radians(angle_degrees) / 2.0
+    roll = np.array([np.cos(half), 0.0, 0.0, np.sin(half)])  # rotation about +z, (w, x, y, z)
+    w0, x0, y0, z0 = normal_quaternion
+    w1, x1, y1, z1 = roll
+    product = np.array([
+        w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
+        w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
+        w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
+        w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
+    ])
+    product /= np.linalg.norm(product) or 1.0
+    return tuple(float(component) for component in product)
 
 # exclude_near_boundary: boolean mask of points at least margin_voxels from every face of the volume
 def exclude_near_boundary(points: np.ndarray, shape: tuple[int, ...], margin_voxels: float) -> np.ndarray:
