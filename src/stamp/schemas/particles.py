@@ -50,6 +50,7 @@ class ClassAssignment(BaseModel):
     particle_id: str
     cluster_id: str
     classifier: str
+    inplane_angle_degrees: float | None = None
 
 # IdentificationResult: candidate protein assignment for a cluster
 class IdentificationResult(BaseModel):
