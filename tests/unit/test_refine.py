@@ -6,7 +6,7 @@ STAMP: unit tests for refinement FSC and halfset guard functions
 import numpy as np, pytest
 
 # Import internal STAMP objects
-from stamp.refine.fsc import compute_fsc, soft_sphere_mask
+from stamp.refine.fsc import compute_fsc, soft_sphere_mask, _shell_fsc, _shell_map
 from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
 )
