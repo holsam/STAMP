@@ -4,9 +4,10 @@ STAMP: unit tests for subvolume extraction, feature classification, and clusteri
 
 # Import external dependencies
 import mrcfile, numpy as np, pytest
-from scipy.ndimage import rotate
+from scipy.ndimage import gaussian_filter, rotate
 
 # Import internal STAMP objects
+from stamp.classify.align import align_inplane, roll_about_normal
 from stamp.classify.cluster import (
     ClusteringConfig,
     label_to_cluster_id,
@@ -49,6 +50,13 @@ def _c_n_particle(box: int = 25, n_fold: int = 4, radius: float = 6.0) -> np.nda
 # _rotate_in_plane: rotate a canonical (x, y, z) volume in-plane about axes (0, 1)
 def _rotate_in_plane(volume: np.ndarray, degrees: float) -> np.ndarray:
     return rotate(volume, angle=degrees, axes=(0, 1), reshape=False, order=1)
+
+# _asymmetric_blob: a subvolume with a clear azimuthal feature (an off-axis lobe)
+def _asymmetric_blob(box: int) -> np.ndarray:
+    volume = np.zeros((box, box, box))
+    volume[box // 2 + 4, box // 2, box // 2] = 1.0
+    volume[box // 2, box // 2, box // 2] = 1.0
+    return gaussian_filter(volume, 1.5)
 
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
@@ -250,7 +258,7 @@ class TestFeatures:
         features = build_feature_matrix(stack, n_radial_bins=4, max_azimuthal_mode=0)
         assert not features[0].any() and features[1].any()
 
-# TestCluster: class containing unit tests for test_cluster.py
+# TestCluster: class containing unit tests for src/stamp/classify/cluster.py
 class TestCluster:
     def test_hdbscan_recovers_three_groups(self) -> None:
         '''HDBSCAN finds three groups in three-blob data.'''
@@ -326,3 +334,24 @@ class TestCluster:
         results = reduce_and_cluster_shared(features, {'A': np.array(group_a), 'B': np.array(group_b)}, config)
         matches = match_clusters_across_halves(results['A'].centroids, results['B'].centroids)
         assert len(matches) == 2 and all(d < 1.0 for _, d in matches.values())
+
+# TestAlign: class containing unit tests for src/stamp/classify/align.py
+class TestAlign:
+    def test_recovers_planted_rolls(self):
+        '''Rolled copies of one motif align back to a common frame.'''
+        box = 21
+        base = _asymmetric_blob(box)
+        planted = [0.0, 40.0, 120.0, 250.0, 300.0]
+        stack = np.stack([roll_about_normal(base, angle) for angle in planted])
+        angles = align_inplane(stack, ['c00'] * len(planted), angular_step_degrees=10.0, iterations=4)
+
+        aligned = np.stack([roll_about_normal(stack[i], angles[i]) for i in range(len(planted))])
+        reference = aligned.mean(axis=0)
+        for frame in aligned:
+            assert np.corrcoef(frame.ravel(), reference.ravel())[0, 1] > 0.98
+
+    def test_noise_cluster_skipped(self):
+        '''Noise rows get no angle.'''
+        stack = np.random.default_rng(0).random((4, 15, 15, 15))
+        angles = align_inplane(stack, ['noise', 'noise', 'c00', 'c00'])
+        assert set(angles) == {2, 3}

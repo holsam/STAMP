@@ -9,6 +9,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.picking.consensus import build_particle_set, reconcile_picks
 from stamp.picking.geometry import (
+    compose_roll_about_normal,
     downsample_points,
     exclude_near_boundary,
     extract_surface,
@@ -187,6 +188,22 @@ class TestGeometry:
         for i in clean:
             assert abs(pos_face[i]) < 1e-6
             assert abs(neg_face[i]) < 1e-6
+
+    # test_compose_roll_is_identity_at_zero: zero angle leaves the normal quaternion unchanged
+    def test_compose_roll_is_identity_at_zero(self):
+        base = quaternion_from_reference_to(np.array([0.3, -0.5, 0.8]))
+        rolled = compose_roll_about_normal(base, 0.0)
+        assert np.allclose(rolled, base, atol=1e-9)
+
+    # test_compose_roll_preserves_normal: rolling about the normal does not move +z's image
+    def test_compose_roll_preserves_normal(self):
+        from stamp.classify.extract import quaternion_to_matrix
+        target = np.array([0.1, 0.2, 0.97])
+        target /= np.linalg.norm(target)
+        base = quaternion_from_reference_to(target)
+        rolled = compose_roll_about_normal(base, 73.0)
+        moved = quaternion_to_matrix(rolled) @ np.array([0.0, 0.0, 1.0])
+        assert np.allclose(moved, target, atol=1e-6)
 
 # TestNativePicker: class containing unit tests for test_native_picker.py
 class TestNativePicker:
