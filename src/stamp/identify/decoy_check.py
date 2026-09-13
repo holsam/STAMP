@@ -5,7 +5,7 @@ STAMP: decoy pass/fail check for Stage E identification
 # Import external dependencies
 from dataclasses import dataclass
 from math import comb
-from statistics import mean, pstdev
+from statistics import mean, stdev
 from scipy.stats import mannwhitneyu
 
 # DecoyControlResult: outcome of comparing real and decoy fit-score distributions
@@ -31,7 +31,7 @@ def evaluate_decoy_control(
         raise ValueError('need at least one real and one decoy score')
     real_best = max(real_scores)
     decoy_best = max(decoy_scores)
-    decoy_spread = pstdev(decoy_scores) if len(decoy_scores) > 1 else 0.0
+    decoy_spread = stdev(decoy_scores) if len(decoy_scores) > 1 else 0.0
     separation = (real_best - mean(decoy_scores)) / decoy_spread if decoy_spread > 0 else float('inf')
 
     if separation < min_separation_sigma:
