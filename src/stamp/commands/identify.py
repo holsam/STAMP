@@ -3,7 +3,7 @@ STAMP: identification against predicted structures
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np, re
+import json, mrcfile, numpy as np, re, tomllib
 from collections import defaultdict
 from pathlib import Path
 
@@ -22,6 +22,13 @@ from stamp.utils.io import write_sidecar
 
 # _CLASS_ID: leading cNN token of a class-average filename
 _CLASS_ID = re.compile(r'^(c\d+)')
+
+# _classify_was_inplane_aligned: read the classify sidecar
+def _classify_was_inplane_aligned(classes: Path) -> bool:
+    sidecar = classes.parent / 'params.toml'
+    if not sidecar.is_file():
+        return False
+    return bool(tomllib.loads(sidecar.read_text()).get('parameters', {}).get('inplane_alignment'))
 
 # load_class_averages: {class_id: (mean_volume, voxel_size)} merged across half-set MRCs
 def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
@@ -69,6 +76,7 @@ def run_identify(
     print(f'Loaded {len(panel)} candidates.')
     class_averages = load_class_averages(classes)
     print(f'Loaded {len(class_averages)} class averages.')
+    inplane_aligned = _classify_was_inplane_aligned(classes)
 
     real_scores = _score_panel(class_averages, panel, resolution, fitter, backend)
     results = [rank_candidates(class_id, scores, method=f'stamp-{fitter}') for class_id, scores in sorted(real_scores.items())]
@@ -84,7 +92,7 @@ def run_identify(
         decoy_control = evaluate_decoy_control(real_best, decoy_best)
         (output_dir / 'decoy_control.json').write_text(json.dumps(decoy_control.model_dump(), indent=2))
 
-    _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control, resolution)
+    _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control, resolution, inplane_aligned)
 
     write_sidecar(
         output_dir,
@@ -95,7 +103,8 @@ def run_identify(
             'fitter': fitter,
             'backend': backend,
             'resolution_angstrom': resolution,
-            'symmetry': 'Cinf_z',
+            'inplane_aligned_class_averages': inplane_aligned,
+            'symmetry': 'C1' if inplane_aligned else 'Cinf_z',
             'n_candidates': len(panel), 'n_classes': len(class_averages),
             'decoy_control': decoy_control.model_dump() if decoy_control else None,
         },
@@ -126,9 +135,10 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
     return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present
-def _write_report(path: Path, results, all_scores, decoy_control, resolution) -> None:
+def _write_report(path: Path, results, all_scores, decoy_control, resolution, inplane_aligned) -> None:
+    space = f'low-pass {resolution:.1f} Å, in-plane angles estimated in classify (C1)' if inplane_aligned else f'low-pass {resolution:.1f} Å, azimuthal average about the membrane normal (Cinf assumed; asymmetric features discarded)'
     lines: list[str] = [
-        f'Comparison space: low-pass {resolution:.1f} Å, azimuthal average about the membrane normal (Cinf assumed; asymmetric features discarded, symmetry discrimination is done in classify).',
+        f'Comparison space: {space}.',
         '',
     ]
     if decoy_control is not None:

@@ -96,6 +96,9 @@ def _classify_track(config: RunConfig, output_dir: Path, track: str, particles: 
         n_components=settings.n_components,
         strict_halfset_independence=settings.strict_halfset_independence,
         random_state=settings.random_state,
+        inplane_alignment=settings.inplane_alignment,
+        inplane_angular_step_degrees=settings.inplane_angular_step_degrees,
+        inplane_iterations=settings.inplane_iterations,
     )
     return target
 
