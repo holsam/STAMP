@@ -15,6 +15,16 @@ from stamp.schemas.provenance import ProvenanceSidecar
 _CACHE_NAME = '.stamp_checksums.json'
 _CHUNK = 1024 * 1024
 
+# -- _resolve_abspath: returns a Path for the absolute path for a given path
+def _resolve_abspath(path: Path):
+    return path.expanduser().resolve()
+
+# -- _is_writable: returns bool indicating if supplied directory is writable
+def _is_writable(directory: Path):
+    from os import access, W_OK
+    directory = _resolve_abspath(directory)
+    return access(directory, W_OK)
+
 # toml_none_to_empty: map any None instances to an empty string for TOML serialisation
 def toml_none_to_empty(obj):
     if isinstance(obj, dict):
