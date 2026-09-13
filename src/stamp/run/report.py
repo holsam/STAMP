@@ -41,15 +41,22 @@ def write_report(outcome: RunOutcome, output_dir: Path) -> tuple[Path, Path]:
     lines += ['## Identifications', '', 'class | candidate | fit score | gap to runner-up',
               '--|--|--|--']
     for row in outcome.identifications:
-        lines.append(f'{row["cluster_id"]} | {row["candidate_protein"]} | {row["fit_score"]:.3f} | {row["score_gap_to_runner_up"]:.3f}')
+        gap = row['score_gap_to_runner_up']
+        gap_text = f'{gap:.3f}' if gap is not None else 'n/a'
+        lines.append(f'{row["cluster_id"]} | {row["candidate_protein"]} | {row["fit_score"]:.3f} | {gap_text}')
     lines.append('')
 
     if outcome.refine_results:
-        lines += ['## Resolution (FSC @ 0.143)', '', 'class | resolution (Å)',
-                  '--|--']
+        lines += ['## Resolution (FSC @ 0.143)', '', 'class | resolution (Å)', '--|--']
         for row in outcome.refine_results:
             resolution = row['resolution_angstrom']
-            lines.append(f'{row["class_id"]} | {resolution:.1f} |' if resolution else f'| {row["class_id"]} | n/a')
+            if resolution is None or resolution != resolution:  # None or NaN
+                cell = 'n/a'
+            elif resolution == float('inf'):
+                cell = '> Nyquist (no FSC crossing)'
+            else:
+                cell = f'{resolution:.1f}'
+            lines.append(f'{row["class_id"]} | {cell}')
         lines.append('')
 
     lines += ['## Provenance', '']

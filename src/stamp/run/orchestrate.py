@@ -3,7 +3,7 @@ STAMP: in-process chaining of the real and decoy tracks for `stamp run`
 '''
 
 # Import external dependencies
-import json, tomllib
+import json, mrcfile, tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,7 +14,7 @@ from stamp.commands.decoy import run_decoy
 from stamp.commands.identify import run_identify
 from stamp.commands.pick import REAL_ADAPTERS, run_pick
 from stamp.commands.refine import _ADAPTERS as REFINE_ADAPTERS, run_refine
-from stamp.run.state import STAGE_ORDER, mark_complete, stage_dir, stages_to_run
+from stamp.run.state import STAGE_ORDER, is_complete, mark_complete, stage_dir, stages_to_run
 from stamp.schemas.config import RunConfig
 
 # RunOutcome: completed run information reported
@@ -45,9 +45,20 @@ def _real_pick(config: RunConfig, output_dir: Path) -> Path:
     )
     return target / 'particle_set.json'
 
+# _synthetic_shape: configured synthetic box, else the shape of the first real tomogram, else 200^3
+def _synthetic_shape(config: RunConfig) -> tuple[int, int, int]:
+    if config.decoy.synthetic_shape_voxels is not None:
+        return config.decoy.synthetic_shape_voxels
+    first = next(iter(sorted(config.run.raw_tomogram_dir.glob('*.mrc'))), None)
+    if first is None:
+        return (200, 200, 200)
+    with mrcfile.open(str(first), permissive=True, header_only=True) as mrc:
+        return (int(mrc.header.nz), int(mrc.header.ny), int(mrc.header.nx))
+
 # _decoy_pick: run decoy generation
 def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) -> Path:
     target = stage_dir(output_dir, 'decoy', 'pick')
+    shape = _synthetic_shape(config)
     run_decoy(
         output_dir=target,
         method=config.decoy.method,
@@ -56,12 +67,13 @@ def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) ->
         segmentation_dir=config.run.segmentation_dir,
         raw_tomogram_dir=config.run.raw_tomogram_dir,
         voxel_size_angstrom=config.run.voxel_size_angstrom,
-        n_decoys_per_tomogram=50,
-        min_distance_from_real_angstrom=100.0,
-        min_shift_angstrom=200.0,
-        max_shift_angstrom=600.0,
-        n_synthetic_tomograms=3,
-        synthetic_shape='200,200,200',
+        n_decoys_per_tomogram=config.decoy.n_decoys_per_tomogram,
+        min_distance_from_real_angstrom=config.decoy.min_distance_from_real_angstrom,
+        min_distance_from_picks_angstrom=config.decoy.min_distance_from_picks_angstrom,
+        min_shift_angstrom=config.decoy.min_shift_angstrom,
+        max_shift_angstrom=config.decoy.max_shift_angstrom,
+        n_synthetic_tomograms=config.decoy.n_synthetic_tomograms,
+        synthetic_shape=','.join(str(dimension) for dimension in shape),
         seed=config.stage.pick.half_set_seed,
     )
     return target / 'decoy_particle_set.json'
@@ -84,6 +96,9 @@ def _classify_track(config: RunConfig, output_dir: Path, track: str, particles: 
         n_components=settings.n_components,
         strict_halfset_independence=settings.strict_halfset_independence,
         random_state=settings.random_state,
+        inplane_alignment=settings.inplane_alignment,
+        inplane_angular_step_degrees=settings.inplane_angular_step_degrees,
+        inplane_iterations=settings.inplane_iterations,
     )
     return target
 
@@ -120,9 +135,11 @@ def run_pipeline(
         real_particles = _real_pick(config, output_dir)
         mark_complete(output_dir, 'real', 'pick')
     decoy_particles = None
-    if config.decoy.enabled and 'pick' in planned:
-        decoy_particles = _decoy_pick(config, output_dir, real_particles)
-        mark_complete(output_dir, 'decoy', 'pick')
+    if config.decoy.enabled:
+        decoy_particles = stage_dir(output_dir, 'decoy', 'pick') / 'decoy_particle_set.json'
+        if not is_complete(output_dir, 'decoy', 'pick'):
+            decoy_particles = _decoy_pick(config, output_dir, real_particles)
+            mark_complete(output_dir, 'decoy', 'pick')
     if stop_after == 'pick':
         return _finalise(outcome, output_dir)
 
@@ -130,11 +147,9 @@ def run_pipeline(
     if 'classify' in planned:
         _classify_track(config, output_dir, 'real', real_particles)
         mark_complete(output_dir, 'real', 'classify')
-        if config.decoy.enabled and decoy_particles is not None:
-            _classify_track(config, output_dir, 'decoy', decoy_particles)
-            mark_complete(output_dir, 'decoy', 'classify')
-    if stop_after == 'classify':
-        return _finalise(outcome, output_dir)
+    if config.decoy.enabled and decoy_particles is not None and not is_complete(output_dir, 'decoy', 'classify'):
+        _classify_track(config, output_dir, 'decoy', decoy_particles)
+        mark_complete(output_dir, 'decoy', 'classify')
 
     # --- identify ---
     identify_dir = stage_dir(output_dir, 'real', 'identify')

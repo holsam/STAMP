@@ -55,6 +55,10 @@ def decoy(
         float,
         typer.Option('--min-distance-from-real-a', help='Minimum separation from any real pick (rejected-surface).'),
     ] = 100.0,
+    min_distance_from_picks_angstrom: Annotated[
+        float,
+        typer.Option('--min-pick-distance-a', help='Minimum separation from any real pick (shifted).'),
+    ] = 60.0,
     min_shift_angstrom: Annotated[
         float,
         typer.Option('--min-shift-a', help='Minimum displacement (shifted).'),
@@ -94,6 +98,7 @@ def decoy(
         voxel_size_angstrom=voxel_size_angstrom,
         n_decoys_per_tomogram=n_decoys_per_tomogram,
         min_distance_from_real_angstrom=min_distance_from_real_angstrom,
+        min_distance_from_picks_angstrom=min_distance_from_picks_angstrom,
         min_shift_angstrom=min_shift_angstrom,
         max_shift_angstrom=max_shift_angstrom,
         n_synthetic_tomograms=n_synthetic_tomograms,

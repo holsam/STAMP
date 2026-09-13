@@ -66,11 +66,21 @@ def classify(
     strict_halfset_independence: Annotated[
         bool,
         typer.Option('--strict-halfset-independence', help='Cluster each half separately and match clusters afterwards.'),
-    ] = False,
+    ] = True,
     random_state: Annotated[
         int,
         typer.Option('--seed', help='Seed for PCA and KMeans.'),
     ] = 0,
+    inplane_alignment: Annotated[
+        bool,
+        typer.Option('--inplane-alignment/--no-inplane-alignment', help='Estimate per-particle in-plane angle for averaging.'),
+    ] = True,
+    inplane_angular_step_degrees: Annotated[
+        float, typer.Option('--inplane-step-deg', help='In-plane search step in degrees.'),
+    ] = 10.0,
+    inplane_iterations: Annotated[
+        int, typer.Option('--inplane-iterations', help='Number of reference refinement rounds to run.'),
+    ] = 3,
     azimuthal_modes: Annotated[
         int,
         typer.Option(help='Highest azimuthal Fourier mode retained. 0 reproduces pure rotational averaging; 4 captures C4 symmetry. Higher modes are increasingly noisy.'),
@@ -99,6 +109,9 @@ def classify(
         n_components=n_components,
         strict_halfset_independence=strict_halfset_independence,
         random_state=random_state,
+        inplane_alignment=inplane_alignment,
+        inplane_angular_step_degrees=inplane_angular_step_degrees,
+        inplane_iterations=inplane_iterations,
         azimuthal_modes=azimuthal_modes,
         min_radius_fraction=min_radius_fraction,
         n_azimuthal_samples=n_azimuthal_samples,

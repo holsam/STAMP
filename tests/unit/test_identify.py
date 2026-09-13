@@ -63,6 +63,23 @@ class TestSimulate:
         rotated = azimuthal_smear(np.rot90(volume, k=1, axes=(0, 1)), n_angles=36)
         assert np.corrcoef(smeared.ravel(), np.rot90(rotated, k=-1, axes=(0, 1)).ravel())[0, 1] > 0.95
 
+    def test_orient_puts_slab_normal_on_z(self):
+        from stamp.identify.simulate import orient_to_membrane_slab
+        rng = np.random.default_rng(0)
+        # a pancake in x/y, thin in z, then rotated into a random frame
+        slab = rng.normal(scale=[40.0, 40.0, 6.0], size=(2000, 3))
+        random_rotation = np.linalg.qr(rng.normal(size=(3, 3)))[0]
+        oriented = orient_to_membrane_slab(slab @ random_rotation.T, np.ones(len(slab)))
+        spread = oriented.std(axis=0)
+        assert spread[2] == pytest.approx(min(spread), rel=0.05)
+
+    def test_blank_element_column_is_hydrogen(self, tmp_path):
+        from stamp.identify.simulate import read_pdb_atoms
+        pdb = tmp_path / 'blank.pdb'
+        pdb.write_text('ATOM      1  H   ALA A   1       0.000   0.000   0.000  1.00  0.00\n')
+        _coords, weights, elements = read_pdb_atoms(pdb)
+        assert weights[0] == 1.0 and elements[0] == 'H'
+
 # TestFit: class containing unit tests for src/stamp/identify/fit.py
 class TestFit:
     def test_fit_recovers_planted_match(self):
@@ -126,8 +143,29 @@ class TestFit:
         assert fit_candidate(average, tall) > 0.3
         assert fit_candidate(average, tall) > fit_candidate(average, short)
 
+    def test_fit_is_contrast_blind(self):
+        target = _blob(21)
+        assert fit_candidate(target, -target.copy()) > 0.8
+
+    def test_fit_recovers_ninety_degree_misorientation(self):
+        target = _blob(21) + _blob(21, offset=5)
+        rolled = np.rot90(target, 1, axes=(0, 1))
+        assert fit_candidate(target, rolled) > 0.8
+
+    def test_single_candidate_has_no_gap(self):
+        result = rank_candidates('c00', {'only': 0.7}, 'm')
+        assert result.score_gap_to_runner_up is None
+
 # TestDecoyCheck: class containing unit tests for src/stamp/identify/decoy_check.py
-class TestDecoyCheck:
+class TestDecoyControl:
+    def test_clear_separation_passes(self):
+        result = evaluate_decoy_control([0.80, 0.78, 0.76], [0.30, 0.28, 0.31, 0.29])
+        assert result.passed and result.separation_sigma > 2.0
+
+    def test_overlap_fails_on_sigma(self):
+        result = evaluate_decoy_control([0.42], [0.40, 0.39, 0.41, 0.38])
+        assert not result.passed and 'sigma' in result.reason
+
     def test_fires_on_overlapping_distributions(self):
         result = evaluate_decoy_control([0.6, 0.55, 0.58], [0.59, 0.57, 0.56])
         assert not result.passed

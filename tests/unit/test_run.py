@@ -53,6 +53,7 @@ class TestStagesToRun:
 
     def test_completed_stage_is_skipped(self, fake_config, tmp_path):
         _complete(tmp_path, 'real', 'pick')
+        _complete(tmp_path, 'decoy', 'pick')
         assert stages_to_run(fake_config, tmp_path, force=False, from_stage=None) == STAGE_ORDER[1:]
 
     def test_force_reruns_completed_stages(self, fake_config, tmp_path):
@@ -61,6 +62,10 @@ class TestStagesToRun:
 
     def test_from_stage_slices_from_that_stage(self, fake_config, tmp_path):
         assert stages_to_run(fake_config, tmp_path, force=False, from_stage='identify') == ['identify', 'refine']
+
+    def test_resume_reruns_only_failed_decoy_track(self, fake_config, tmp_path):
+        _complete(tmp_path, 'real', 'pick')
+        assert stages_to_run(fake_config, tmp_path, force=False, from_stage=None) == STAGE_ORDER
 
 class TestState:
     def test_stage_dir_layout(self, tmp_path):
@@ -96,6 +101,17 @@ class TestReport:
         assert 'DECOY CONTROL: FAIL' in md
         assert 'should not be treated as trustworthy' in md
         assert json.loads(json_path.read_text())['decoy_control'] == {'passed': False, 'reason': 'decoy fits'}
+
+    def test_report_resolution_cells_are_two_column(self, tmp_path):
+        outcome = RunOutcome(output_dir=tmp_path, stop_after='refine', decoy_enabled=False)
+        outcome.refine_results = [
+            {'class_id': 'c00', 'resolution_angstrom': 8.3},
+            {'class_id': 'c01', 'resolution_angstrom': None},
+            {'class_id': 'c02', 'resolution_angstrom': float('inf')},
+        ]
+        md_path, _ = write_report(outcome, tmp_path)
+        rows = [ln for ln in md_path.read_text().splitlines() if ln.startswith('c0')]
+        assert all(ln.count('|') == 1 for ln in rows)
 
 class TestGuardBackends:
     def test_local_backend_rejects_a_gpu_only_refine_tool(self, fake_config):
@@ -163,3 +179,14 @@ class TestClusterOrchestrate:
         script = (stage_dir(tmp_path, 'real', 'pick') / 'stamp-real.pick.sbatch').read_text()
         assert 'if [ "$tool_exit" -eq 0 ]; then stamp internal mark-complete' in script
         assert 'barrier' not in script
+
+    def test_cluster_resume_skips_completed_dependency(self, tmp_path, fake_config, monkeypatch):
+        submits = []
+        monkeypatch.setattr('stamp.run.cluster_orchestrate.submit', lambda p, dependency_ids=None: submits.append(dependency_ids) or 'JOB1')
+        monkeypatch.setattr('stamp.run.cluster_orchestrate.render_job_script', lambda *a, **k: '#!/bin/bash\n')
+        jobs = plan_pipeline_jobs(fake_config, tmp_path, ['refine'])
+        for job in jobs:
+            for command in job.commands:
+                command.working_directory.mkdir(parents=True, exist_ok=True)
+        submit_pipeline(fake_config, tmp_path, ['refine'], ClusterProfile(partition='cpu'))
+        assert submits == [[]]

@@ -15,7 +15,6 @@ from stamp.schemas.provenance import ProvenanceSidecar
 _CACHE_NAME = '.stamp_checksums.json'
 _CHUNK = 1024 * 1024
 
-
 # toml_none_to_empty: map any None instances to an empty string for TOML serialisation
 def toml_none_to_empty(obj):
     if isinstance(obj, dict):
@@ -23,7 +22,6 @@ def toml_none_to_empty(obj):
     if isinstance(obj, list):
         return [toml_none_to_empty(v) for v in obj]
     return '' if obj is None else obj
-
 
 # resolve_stamp_commit: git HEAD (+ '-dirty'), else installed package version, else 'unknown'
 def resolve_stamp_commit() -> str:
@@ -51,7 +49,6 @@ def resolve_stamp_commit() -> str:
     except PackageNotFoundError:
         return 'unknown'
 
-
 # _load_cache / _save_cache: the optional per-directory checksum cache
 def _load_cache(cache_dir: Path | None) -> dict:
     if cache_dir is None:
@@ -64,11 +61,9 @@ def _load_cache(cache_dir: Path | None) -> dict:
             return {}
     return {}
 
-
 def _save_cache(cache_dir: Path | None, cache: dict) -> None:
     if cache_dir is not None:
         (cache_dir / _CACHE_NAME).write_text(json.dumps(cache, indent=2))
-
 
 # checksum_file: SHA-256 of contents, cached on (path, size, mtime) when cache_dir is given
 def checksum_file(path: Path, cache_dir: Path | None = None) -> str:
@@ -89,27 +84,27 @@ def checksum_file(path: Path, cache_dir: Path | None = None) -> str:
     _save_cache(cache_dir, cache)
     return hexdigest
 
-
-# _digest_directory: digest of a directory's sorted (name, sha256) pairs
+# _digest_directory: digest of a directory's sorted (relative path, sha256) pairs, recursively
 def _digest_directory(directory: Path, cache_dir: Path | None) -> str:
     parts = [
-        f'{child.name}:{checksum_file(child, cache_dir)}'
-        for child in sorted(directory.iterdir())
-        if child.is_file()
+        f'{child.relative_to(directory).as_posix()}:{checksum_file(child, cache_dir)}'
+        for child in sorted(directory.rglob('*'))
+        if child.is_file() and child.name != _CACHE_NAME
     ]
     return hashlib.sha256('\n'.join(parts).encode()).hexdigest()
 
-
-# checksum_inputs: role -> hash; a directory role gets the directory digest
+# checksum_inputs: role -> hash; a directory role gets the recursive digest; a missing input is recorded as 'absent'
 def checksum_inputs(inputs: list[tuple[str, Path]], cache_dir: Path | None = None) -> dict[str, str]:
     checksums: dict[str, str] = {}
     for role, path in inputs:
         path = Path(path)
         if not path.exists():
+            checksums[role] = 'absent'
             continue
-        checksums[role] = (_digest_directory(path, cache_dir) if path.is_dir() else checksum_file(path, cache_dir))
+        checksums[role] = (
+            _digest_directory(path, cache_dir) if path.is_dir() else checksum_file(path, cache_dir)
+        )
     return checksums
-
 
 # write_sidecar: build a ProvenanceSidecar, resolve the commit, hash inputs, write params.toml
 def write_sidecar(

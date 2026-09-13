@@ -32,7 +32,7 @@ def downsample_points(points: np.ndarray, normals: np.ndarray, spacing_voxels: f
     if points.shape[0] == 0:
         return points, normals
     cells = np.floor(points / spacing_voxels).astype(np.int64)
-    # np.unique with return_index gives the first occurrence per cell if sorted stably; lexsort by original index preserves that
+    # np.unique with return_index gives the lowest original index per unique cell
     _unique_cells, first_indices = np.unique(cells, axis=0, return_index=True)
     keep = np.sort(first_indices)
     return points[keep], normals[keep]
@@ -61,7 +61,6 @@ def sample_along_normals(
         tomogram.astype(np.float32), flat, order=1, mode='nearest'
     )
     return densities.reshape(n_samples, points.shape[0]).mean(axis=0)
-
 
 # robust_normalise: median/MAD normalisation so score thresholds are comparable across tomograms
 def robust_normalise(values: np.ndarray) -> np.ndarray:
@@ -110,9 +109,47 @@ def quaternion_from_reference_to(vector_xyz: np.ndarray) -> tuple[float, float, 
     quaternion /= np.linalg.norm(quaternion)
     return tuple(float(component) for component in quaternion)
 
+# compose_roll_about_normal: quaternion for "roll by angle_degrees about +z, then map +z onto the normal"
+def compose_roll_about_normal(
+    normal_quaternion: tuple[float, float, float, float],
+    angle_degrees: float,
+) -> tuple[float, float, float, float]:
+    half = np.radians(angle_degrees) / 2.0
+    roll = np.array([np.cos(half), 0.0, 0.0, np.sin(half)])  # rotation about +z, (w, x, y, z)
+    w0, x0, y0, z0 = normal_quaternion
+    w1, x1, y1, z1 = roll
+    product = np.array([
+        w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
+        w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
+        w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
+        w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
+    ])
+    product /= np.linalg.norm(product) or 1.0
+    return tuple(float(component) for component in product)
 
 # exclude_near_boundary: boolean mask of points at least margin_voxels from every face of the volume
 def exclude_near_boundary(points: np.ndarray, shape: tuple[int, ...], margin_voxels: float) -> np.ndarray:
     lower = np.all(points >= margin_voxels, axis=1)
     upper = np.all(points <= (np.array(shape) - 1 - margin_voxels), axis=1)
     return lower & upper
+
+# score_membrane_faces: sample both faces of every surface point, normalise on the pooled distribution
+def score_membrane_faces(
+    tomogram: np.ndarray,
+    vertices: np.ndarray,
+    normals: np.ndarray,
+    offset_min_voxels: float,
+    offset_max_voxels: float,
+    n_samples: int,
+    density_sign: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    n_points = vertices.shape[0]
+    raw = []
+    face_normals = []
+    for direction in (1, -1):
+        densities = sample_along_normals(tomogram, vertices, normals, offset_min_voxels, offset_max_voxels, n_samples, direction)
+        raw.append(density_sign * densities)
+        face_normals.append(direction * normals)
+    scores = robust_normalise(np.concatenate(raw))
+    points = np.concatenate([vertices, vertices])
+    return points, np.concatenate(face_normals), scores

@@ -123,3 +123,67 @@ class TestDecoyCommand:
         assert (output_dir / 'decoy_manifests.json').exists()
         assert (output_dir / 'segmentations').is_dir()
         assert (output_dir / 'tomograms').is_dir()
+
+    def test_decoy_rejects_undersized_set(self, tmp_path: Path) -> None:
+        '''Too few decoys per tomogram fails comparability check.'''
+        seg_dir, raw_dir = tmp_path / 'seg', tmp_path / 'raw'
+        shape = (60, 60, 60)
+        centre = np.array(shape) / 2.0
+        grid = np.stack(np.meshgrid(*[np.arange(s) for s in shape], indexing='ij'), axis=-1)
+        distance = np.linalg.norm(grid - centre, axis=-1)
+        segmentation = ((distance > 16.0) & (distance < 20.0)).astype(np.float32)
+        tomogram = np.zeros(shape, dtype=np.float32)
+        tomogram[segmentation > 0] = -1.0
+
+        rng = np.random.default_rng(3)
+        for _ in range(8):
+            z, y, x = rng.integers(10, 50, 3)
+            tomogram[z - 2:z + 3, y - 2:y + 3, x - 2:x + 3] = -8.0
+
+        seg_dir.mkdir(parents=True, exist_ok=True)
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        with mrcfile.new(seg_dir / 'tomo000.mrc', overwrite=True) as mrc:
+            mrc.set_data(segmentation)
+        with mrcfile.new(raw_dir / 'tomo000.mrc', overwrite=True) as mrc:
+            mrc.set_data(tomogram)
+
+        pick_out = tmp_path / 'pick'
+        pick_result = runner.invoke(
+            stamp,
+            [
+                'pick',
+                '--seg-dir', str(seg_dir),
+                '--raw-dir', str(raw_dir),
+                '--out-dir', str(pick_out),
+                '--voxel-size-a', '10.0',
+                '--picker-params', json.dumps({'n_mad': 2.0}),
+                '--backend', 'local',
+                'stamp-native'
+            ],
+        )
+        assert pick_result.exit_code == 0, pick_result.output
+        particle_set_path = pick_out / 'particle_set.json'
+        real_set = ParticleSet.model_validate(json.loads(particle_set_path.read_text()))
+        assert len(real_set.particles) >= 3
+
+        output_dir = tmp_path / 'decoy_undersized'
+        result = runner.invoke(
+            stamp,
+            [
+                'decoy',
+                '--method', 'rejected-surface',
+                '--real-particle-set', str(particle_set_path),
+                '--seg-dir', str(seg_dir),
+                '--raw-dir', str(raw_dir),
+                '--out-dir', str(output_dir),
+                '--voxel-size-a', '10.0',
+                '--picker-params', json.dumps({'n_mad': 2.0}),
+                '--n-decoys-per-tomogram', '1',
+                '--seed', '1',
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert isinstance(result.exception, ValueError)
+        assert 'less than half the size of the real set' in str(result.exception)
+        assert not (output_dir / 'decoy_particle_set.json').exists()

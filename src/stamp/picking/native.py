@@ -15,6 +15,7 @@ from stamp.picking.geometry import (
     quaternion_from_reference_to,
     robust_normalise,
     sample_along_normals,
+    score_membrane_faces
 )
 from stamp.schemas.picks import RawPick
 
@@ -82,26 +83,8 @@ def pick_tomogram(
 
     offset_min = config.to_voxels(config.offset_min_angstrom)
     offset_max = config.to_voxels(config.offset_max_angstrom)
-
-    # score both membrane faces independently
-    candidate_points: list[np.ndarray] = []
-    candidate_normals: list[np.ndarray] = []
-    candidate_scores: list[np.ndarray] = []
-
-    for direction in (1, -1):
-        densities = sample_along_normals(
-            tomogram, vertices, normals, offset_min, offset_max,
-            config.n_samples, direction,
-        )
-        scores = robust_normalise(config.density_sign * densities)
-        candidate_points.append(vertices)
-        candidate_normals.append(direction * normals)
-        candidate_scores.append(scores)
-
-    points = np.concatenate(candidate_points)
-    outward_normals = np.concatenate(candidate_normals)
-    scores = np.concatenate(candidate_scores)
-
+    
+    points, outward_normals, scores = score_membrane_faces(tomogram, vertices, normals, offset_min, offset_max, config.n_samples, config.density_sign)
     above_threshold = scores >= config.n_mad
     points, outward_normals, scores = (
         points[above_threshold],

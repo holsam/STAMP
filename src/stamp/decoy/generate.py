@@ -16,6 +16,7 @@ from stamp.picking.geometry import (
     quaternion_from_reference_to,
     robust_normalise,
     sample_along_normals,
+    score_membrane_faces
 )
 from stamp.picking.native import NativePickerConfig
 from stamp.schemas.manifest import TomogramManifest
@@ -58,7 +59,7 @@ def generate_rejected_surface_decoys(
         if points_zyx.shape[0] == 0:
             continue
 
-        # convert positions (x, y, z) to geometry (z, y, x)
+        # convert positions (z, y, x) to position (x, y, z)
         points_xyz = points_zyx[:, ::-1]
         real_positions = real_by_tomogram.get(manifest.tomogram_id, [])
         if real_positions:
@@ -101,21 +102,23 @@ def generate_shifted_decoys(
     min_shift_angstrom: float,
     max_shift_angstrom: float,
     min_distance_from_surface_angstrom: float,
+    min_pick_distance: float,
     seed: int,
     max_attempts_per_particle: int = 200,
 ) -> ParticleSet | None:
     rng = np.random.default_rng(seed)
     shape_by_tomogram = {}
-    surface_tree_by_tomogram = {}
+
+    surface_by_tomogram: dict[str, tuple[cKDTree, np.ndarray]] = {}
     for manifest in manifests:
         with mrcfile.open(str(manifest.segmentation_path), permissive=True) as mrc:
             segmentation = np.asarray(mrc.data)
         shape_by_tomogram[manifest.tomogram_id] = segmentation.shape
         try:
-            vertices, _normals = extract_surface(segmentation)
+            vertices, normals = extract_surface(segmentation)
         except ValueError:
             continue
-        surface_tree_by_tomogram[manifest.tomogram_id] = cKDTree(vertices[:, ::-1])
+        surface_by_tomogram[manifest.tomogram_id] = (cKDTree(vertices[:, ::-1]), normals[:, ::-1])
 
     real_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
     for particle in real_particle_set.particles:
@@ -124,13 +127,15 @@ def generate_shifted_decoys(
     min_shift = config.to_voxels(min_shift_angstrom)
     max_shift = config.to_voxels(max_shift_angstrom)
     min_surface_distance = config.to_voxels(min_distance_from_surface_angstrom)
+    min_pick_distance_voxels = config.to_voxels(min_pick_distance)
 
     raw_picks: list[RawPick] = []
     for tomogram_id, positions in real_by_tomogram.items():
         shape = shape_by_tomogram.get(tomogram_id)
-        surface_tree = surface_tree_by_tomogram.get(tomogram_id)
-        if shape is None or surface_tree is None:
+        surface = surface_by_tomogram.get(tomogram_id)
+        if shape is None or surface is None:
             continue
+        surface_tree, surface_normals_xyz = surface
         pick_tree = cKDTree(np.array(positions))
         extent_xyz = np.array(shape)[::-1] - 1
 
@@ -141,19 +146,20 @@ def generate_shifted_decoys(
                 direction /= np.linalg.norm(direction)
                 magnitude = rng.uniform(min_shift, max_shift)
                 candidate = origin + direction * magnitude
+                surface_distance, nearest_vertex = surface_tree.query(candidate, k=1)
 
                 if np.any(candidate < 0) or np.any(candidate > extent_xyz):
                     continue
-                if surface_tree.query(candidate, k=1)[0] < min_surface_distance:
+                if surface_distance < min_surface_distance:
                     continue
-                if pick_tree.query(candidate, k=1)[0] < min_surface_distance:
+                if pick_tree.query(candidate, k=1)[0] < min_pick_distance_voxels:
                     continue
 
                 raw_picks.append(
                     RawPick(
                         tomogram_id=tomogram_id,
                         position=tuple(float(c) for c in candidate),
-                        orientation=None,
+                        orientation=quaternion_from_reference_to(surface_normals_xyz[nearest_vertex]),
                         confidence=None,
                         source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_SHIFTED}',
                     )
@@ -218,11 +224,12 @@ def generate_synthetic_noise_decoys(
         )
         for voxel_index in chosen:
             position_zyx = shell_voxels[voxel_index].astype(float)
+            radial_xyz = (position_zyx - centre)[::-1]
             raw_picks.append(
                 RawPick(
                     tomogram_id=tomogram_id,
                     position=tuple(float(c) for c in position_zyx[::-1]),
-                    orientation=None,
+                    orientation=quaternion_from_reference_to(radial_xyz),
                     confidence=None,
                     source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_SYNTHETIC_NOISE}',
                 )
@@ -265,21 +272,7 @@ def _score_surface(
     offset_min = config.to_voxels(config.offset_min_angstrom)
     offset_max = config.to_voxels(config.offset_max_angstrom)
 
-    points_parts, normals_parts, scores_parts = [], [], []
-    for direction in (1, -1):
-        densities = sample_along_normals(
-            tomogram, vertices, normals, offset_min, offset_max,
-            config.n_samples, direction,
-        )
-        points_parts.append(vertices)
-        normals_parts.append(direction * normals)
-        scores_parts.append(robust_normalise(config.density_sign * densities))
-
-    return (
-        np.concatenate(points_parts),
-        np.concatenate(normals_parts),
-        np.concatenate(scores_parts),
-    )
+    return score_membrane_faces(tomogram, vertices, normals, offset_min, offset_max, config.n_samples, config.density_sign)
 
 
 # _finalise: assign decoy particle IDs and half-sets, returning a decoy ParticleSet or None if no decoys were generated
@@ -287,8 +280,8 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet |
     particle_ids = [f'decoy-{index:06d}' for index in range(len(raw_picks))]
     if not particle_ids:
         return None
-
-    half_set_by_id = assign_half_sets(particle_ids, seed=seed)
+    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, raw_picks)}
+    half_set_by_id = assign_half_sets(particle_ids, seed=seed, group_of=group_of)
     particles = [
         Particle(
             particle_id=particle_id,

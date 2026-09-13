@@ -48,9 +48,10 @@ def render_job_script(
     return '\n'.join([
         '#!/bin/bash',
         *directives,
-        'set -uo pipefail',
+        'set -euo pipefail',
         f'cd {shlex.quote(str(command.working_directory))}',
         *module_lines,
+        'set +e',
         body,
         '',
     ])

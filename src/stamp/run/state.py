@@ -54,7 +54,7 @@ def stages_to_run(
     config: RunConfig,
     output_dir: Path,
     force: bool,
-    from_stage: str | None
+    from_stage: str | None,
 ) -> list[str]:
     stop_after = config.run.stop_after or STAGE_ORDER[-1]
     planned = STAGE_ORDER[: STAGE_ORDER.index(stop_after) + 1]
@@ -62,7 +62,17 @@ def stages_to_run(
         return planned
     if from_stage:
         return planned[planned.index(from_stage):]
-    return [
-        stage for stage in planned
-        if not is_complete(output_dir, 'real', stage)
-    ]
+
+    decoy_stages = {'pick', 'classify'}
+
+    def incomplete(stage: str) -> bool:
+        if not is_complete(output_dir, 'real', stage):
+            return True
+        if not config.decoy.enabled:
+            return False
+        if stage in decoy_stages and not is_complete(output_dir, 'decoy', stage):
+            return True
+        # identify consumes the decoy class averages
+        return stage == 'identify' and not is_complete(output_dir, 'decoy', 'classify')
+
+    return [stage for stage in planned if incomplete(stage)]

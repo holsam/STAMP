@@ -13,6 +13,7 @@ from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.relion import RelionRefineAdapter
 from stamp.backends.base import ToolCommand
 from stamp.backends.factory import check_backend_supports, select_runner
+from stamp.picking.geometry import compose_roll_about_normal
 from stamp.refine.fsc import compute_fsc, soft_sphere_mask, write_fsc_files
 from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
@@ -30,6 +31,13 @@ def _seed_reference(class_averages_dir: Path, class_id: str, half: str) -> Path:
     if not matches:
         raise ValueError(f'no class average for {class_id} half {half} in {class_averages_dir}')
     return matches[0]
+
+# _with_inplane: return a copy of the particle with the estimated in-plane roll folded into its orientation
+def _with_inplane(particle, angle_by_particle: dict[str, float]):
+    angle = angle_by_particle.get(particle.particle_id)
+    if angle is None or particle.orientation is None:
+        return particle
+    return particle.model_copy(update={'orientation': compose_roll_about_normal(particle.orientation, angle)})
 
 # _run_half: one independent half-set refinement, returns the final map path
 def _run_half(adapter, runner, particles, reference, workdir, parameters, backend) -> Path:
@@ -73,6 +81,7 @@ def run_refine(
 ) -> None:
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     assignments = [ClassAssignment.model_validate(row) for row in json.loads(class_assignments.read_text())]
+    angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None}
     class_averages_dir = class_assignments.parent / 'class_averages'
     identified = {row['cluster_id'] for row in json.loads(identification.read_text())}
 
@@ -87,6 +96,8 @@ def run_refine(
         if combined_halfset:
             raise NotImplementedError('--combined-halfset escape hatch is A2 future work')
         half_a, half_b = split_class_by_half(target, assignments, particle_set.particles)
+        half_a = [_with_inplane(p, angle_by_particle) for p in half_a]
+        half_b = [_with_inplane(p, angle_by_particle) for p in half_b]
         tree = refine_output_tree(output_dir, target)
         reference_a = _seed_reference(class_averages_dir, target, 'A')
         reference_b = _seed_reference(class_averages_dir, target, 'B')
