@@ -101,7 +101,7 @@ def compute_fsc(
         fsc_rand = _shell_fsc(rand_a, rand_b, shell, n_shells)
         high = np.arange(n_shells) > randomise_from
         denom = np.clip(1.0 - fsc_rand, 1e-3, None)
-        corrected[high] = np.clip((masked[high] - fsc_rand[high]) / denom[high], -1.0, 1.0)
+        corrected[high] = np.minimum(np.clip((masked[high] - fsc_rand[high]) / denom[high], -1.0, 1.0), masked[high])
 
     box_voxels = half_map_a.shape[-1]
     frequencies = np.arange(n_shells) / (box_voxels * voxel_size_angstrom)
