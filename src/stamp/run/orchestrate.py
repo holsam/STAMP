@@ -16,6 +16,7 @@ from stamp.commands.pick import REAL_ADAPTERS, run_pick
 from stamp.commands.refine import _ADAPTERS as REFINE_ADAPTERS, run_refine
 from stamp.run.state import STAGE_ORDER, is_complete, mark_complete, stage_dir, stages_to_run
 from stamp.schemas.config import RunConfig
+from stamp.utils.log import log
 
 # RunOutcome: completed run information reported
 @dataclass
@@ -51,6 +52,7 @@ def _synthetic_shape(config: RunConfig) -> tuple[int, int, int]:
         return config.decoy.synthetic_shape_voxels
     first = next(iter(sorted(config.run.raw_tomogram_dir.glob('*.mrc'))), None)
     if first is None:
+        log.debug('No real tomograms found to infer synthetic shape from, defaulting to (200, 200, 200)')
         return (200, 200, 200)
     with mrcfile.open(str(first), permissive=True, header_only=True) as mrc:
         return (int(mrc.header.nz), int(mrc.header.ny), int(mrc.header.nx))
@@ -107,9 +109,11 @@ def _guard_backends(config: RunConfig) -> None:
     for picker in config.stage.pick.pickers:
         adapter = REAL_ADAPTERS.get(picker)
         if adapter is not None:
+            log.debug(f'Checking backend {config.stage.pick.backend or config.run.backend!r} supports pick adapter {picker!r}')
             check_backend_supports(adapter, config.stage.pick.backend or config.run.backend)
     refine_adapter = REFINE_ADAPTERS.get(config.stage.refine.tool)
     if refine_adapter is not None:
+        log.debug(f'Checking backend {config.stage.refine.backend or config.run.backend!r} supports refine adapter {config.stage.refine.tool!r}')
         check_backend_supports(refine_adapter(), config.stage.refine.backend or config.run.backend)
 
 # run_pipeline: chain pick -> (decoy) -> classify -> identify (real, with decoy control) -> refine
@@ -122,6 +126,7 @@ def run_pipeline(
     _guard_backends(config)
     output_dir.mkdir(parents=True, exist_ok=True)
     planned = stages_to_run(config, output_dir, force, from_stage)
+    log.debug(f'Planned stages: {planned}')
     stop_after = config.run.stop_after or STAGE_ORDER[-1]
     outcome = RunOutcome(
         output_dir=output_dir,
@@ -132,30 +137,46 @@ def run_pipeline(
     # --- pick ---
     real_particles = stage_dir(output_dir, 'real', 'pick') / 'particle_set.json'
     if 'pick' in planned:
+        log.progress('Stage: pick (real)')
         real_particles = _real_pick(config, output_dir)
         mark_complete(output_dir, 'real', 'pick')
+    else:
+        log.debug('Stage pick (real) already complete, skipping')
     decoy_particles = None
     if config.decoy.enabled:
         decoy_particles = stage_dir(output_dir, 'decoy', 'pick') / 'decoy_particle_set.json'
         if not is_complete(output_dir, 'decoy', 'pick'):
+            log.progress('Stage: pick (decoy)')
             decoy_particles = _decoy_pick(config, output_dir, real_particles)
             mark_complete(output_dir, 'decoy', 'pick')
+        else:
+            log.debug('Stage pick (decoy) already complete, skipping')
     if stop_after == 'pick':
+        log.info(f'Stopping after stage {stop_after!r} as configured')
         return _finalise(outcome, output_dir)
 
     # --- classify ---
     if 'classify' in planned:
+        log.progress('Stage: classify (real)')
         _classify_track(config, output_dir, 'real', real_particles)
         mark_complete(output_dir, 'real', 'classify')
+    else:
+        log.debug('Stage classify (real) already complete, skipping')
     if config.decoy.enabled and decoy_particles is not None and not is_complete(output_dir, 'decoy', 'classify'):
+        log.progress('Stage: classify (decoy)')
         _classify_track(config, output_dir, 'decoy', decoy_particles)
         mark_complete(output_dir, 'decoy', 'classify')
+    elif config.decoy.enabled:
+        log.debug('Stage classify (decoy) already complete, skipping')
 
     # --- identify ---
     identify_dir = stage_dir(output_dir, 'real', 'identify')
     real_classes = stage_dir(output_dir, 'real', 'classify') / 'class_averages'
     decoy_classes = stage_dir(output_dir, 'decoy', 'classify') / 'class_averages'
     if 'identify' in planned:
+        log.progress('Stage: identify')
+        if config.stage.identify.backend == 'cluster':
+            log.debug('Identify stage backend "cluster" downgraded to "local" (identify does not support cluster dispatch)')
         run_identify(
             classes=real_classes,
             candidates=config.stage.identify.candidates,
@@ -172,11 +193,15 @@ def run_pipeline(
     if control_path.is_file():
         outcome.decoy_control = json.loads(control_path.read_text())
     if stop_after == 'identify':
+        log.info(f'Stopping after stage {stop_after!r} as configured')
         return _finalise(outcome, output_dir)
 
     # --- refine ---
     refine_dir = stage_dir(output_dir, 'real', 'refine')
     if 'refine' in planned:
+        log.progress('Stage: refine')
+        if config.stage.refine.backend == 'cluster':
+            log.debug('Refine stage backend "cluster" downgraded to "local" (refine does not support cluster dispatch)')
         run_refine(
             class_id=config.stage.refine.class_id,
             identification=identify_dir / 'identification.json',
@@ -198,6 +223,7 @@ def run_pipeline(
             'class_id': class_dir.name,
             'resolution_angstrom': sidecar['parameters'].get('resolution_angstrom'),
         })
+    log.progress(f'Pipeline finished ({stop_after})')
     return _finalise(outcome, output_dir)
 
 # _finalise: collect each sidecar into outcome for appendix

@@ -21,6 +21,7 @@ from stamp.refine.halfset_guard import (
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, ParticleSet
 from stamp.utils.io import write_sidecar
+from stamp.utils.log import log
 
 # _ADAPTERS: real refine adapters by --tool name
 _ADAPTERS = {'relion': RelionRefineAdapter, 'm': MRefineAdapter}
@@ -29,7 +30,8 @@ _ADAPTERS = {'relion': RelionRefineAdapter, 'm': MRefineAdapter}
 def _seed_reference(class_averages_dir: Path, class_id: str, half: str) -> Path:
     matches = sorted(class_averages_dir.glob(f'{class_id}_half{half}_*.mrc'))
     if not matches:
-        raise ValueError(f'no class average for {class_id} half {half} in {class_averages_dir}')
+        log.error(f'No class average for {class_id} half {half} in {class_averages_dir}')
+        raise SystemExit(1)
     return matches[0]
 
 # _with_inplane: return a copy of the particle with the estimated in-plane roll folded into its orientation
@@ -49,9 +51,11 @@ def _run_half(adapter, runner, particles, reference, workdir, parameters, backen
     if backend != 'mock':
         adapter.write_particle_star(particles, workdir / 'particles.star', {})
     command = adapter.build_command(inputs)
+    log.debug(f'{workdir.name}: dispatching {adapter.name} refinement')
     result = runner.run(command)
     if not result.succeeded:
-        raise RuntimeError(f'refine failed for {workdir.name}: {result.stderr}')
+        log.error(f'Refine failed for {workdir.name}: {result.stderr}')
+        raise SystemExit(1)
     final_map = workdir / f'final_{workdir.name[-1]}.mrc'
     if backend == 'mock':
         # mock backend runs nothing; synthesise a deterministic map from the seed
@@ -93,8 +97,10 @@ def run_refine(
     parameters = {'voxel_size_angstrom': voxel_size_angstrom, 'iterations': iterations}
 
     for target in targets:
+        log.progress(f'Refining class {target}')
         if combined_halfset:
-            raise NotImplementedError('--combined-halfset escape hatch is A2 future work')
+            log.error('--combined-halfset escape hatch is A2 future work')
+            raise SystemExit(1)
         half_a, half_b = split_class_by_half(target, assignments, particle_set.particles)
         half_a = [_with_inplane(p, angle_by_particle) for p in half_a]
         half_b = [_with_inplane(p, angle_by_particle) for p in half_b]
@@ -119,7 +125,7 @@ def run_refine(
         final_a.replace(tree['combined'] / 'final_A.mrc')
         final_b.replace(tree['combined'] / 'final_B.mrc')
         write_fsc_files(fsc, tree['combined'])
-        print(f'{target}: resolution {fsc.resolution_angstrom:.1f} A @ FSC=0.143')
+        log.info(f'{target}: resolution {fsc.resolution_angstrom:.1f} A @ FSC=0.143')
 
         write_sidecar(
             tree['combined'],
@@ -143,6 +149,7 @@ def run_refine(
                 ('reference:B', reference_b),
             ] + ([('mask', mask)] if mask else []),
         )
+    log.progress(f'Refinement complete for {len(targets)} class(es)')
 
 # build_refine_commands: create ToolCommand for `stamp refine`
 def build_refine_commands(config, output_dir: Path) -> list[ToolCommand]:

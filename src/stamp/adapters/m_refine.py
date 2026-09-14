@@ -8,6 +8,7 @@ from pathlib import Path
 # Import STAMP objects
 from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
+from stamp.utils.log import log
 
 # _M_ENTRYPOINT: unconfirmed M CLI signature, isolated to one constant
 _M_ENTRYPOINT = ('MTools', 'refine')
@@ -41,6 +42,7 @@ class MRefineAdapter:
             '--refine_particles', '--refine_ctf',
             '--out', str(refined_map),
         ]
+        log.debug(f'{self.name}: {" ".join(argv)}')
         return ToolCommand(
             tool=self.name,
             argv=argv,
@@ -52,6 +54,7 @@ class MRefineAdapter:
     def parse_output(self, result: RunResult) -> AdapterOutput:
         refined_map = next((p for p in result.output_paths if p.name.endswith('.mrc')), None)
         if refined_map is None or not Path(refined_map).is_file():
+            log.error('M produced no refined map')
             raise ValueError('M produced no refined map')
         return AdapterOutput(
             output_paths=[Path(refined_map)],

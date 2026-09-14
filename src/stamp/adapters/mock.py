@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 # Import internal STAMP classes
 from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
+from stamp.utils.log import log
 
 # MockAdapter: a class for stand-in adapters for named tools
 @dataclass
@@ -108,4 +109,5 @@ def get_mock_adapter(name: str) -> MockAdapter:
         return MOCK_ADAPTERS[name]
     except KeyError as exc:
         known = ', '.join(sorted(MOCK_ADAPTERS))
+        log.debug(f'Unknown mock adapter {name!r}; known: {known}')
         raise KeyError(f'No mock adapter named {name!r}. Known adapters: {known}') from exc

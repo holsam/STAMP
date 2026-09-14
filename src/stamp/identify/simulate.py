@@ -8,6 +8,9 @@ from itertools import product
 from pathlib import Path
 from scipy.ndimage import gaussian_filter, rotate
 
+# Import internal STAMP objects
+from stamp.utils.log import log
+
 # _ELEMENT_WEIGHT: approximate scattering weight per element; unknown non-blank elements fall back to carbon
 _ELEMENT_WEIGHT = { 'H': 1.0, 'C': 6.0, 'N': 7.0, 'O': 8.0, 'F': 9.0, 'P': 15.0, 'S': 16.0, 'CL': 17.0, 'FE': 26.0, 'ZN': 30.0, 'MG': 12.0, 'MN': 25.0, 'CA': 20.0}
 _FWHM_TO_SIGMA = 1.0 / 2.3548200450309493  # 2*sqrt(2*ln2)
@@ -49,6 +52,7 @@ def simulate_density(
     voxel_size_angstrom: float, 
     resolution_angstrom: float
 ) -> np.ndarray:
+    log.debug(f'Simulating density: box={box_voxels}, resolution={resolution_angstrom:.1f}A')
     coordinates, weights, _elements = read_pdb_atoms(structure_path)
     oriented = orient_to_membrane_slab(coordinates, weights)
     voxel_xyz = oriented / voxel_size_angstrom + (box_voxels - 1) / 2.0

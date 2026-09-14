@@ -19,6 +19,7 @@ from stamp.identify.fit import fit_candidate, rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.identify.simulate import simulate_density, to_comparable
 from stamp.utils.io import write_sidecar
+from stamp.utils.log import log
 
 # _CLASS_ID: leading cNN token of a class-average filename
 _CLASS_ID = re.compile(r'^(c\d+)')
@@ -42,7 +43,8 @@ def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
             grouped[match.group(1)].append(np.transpose(np.asarray(mrc.data), (2, 1, 0)))
             voxel_sizes[match.group(1)] = float(mrc.voxel_size.x)
     if not grouped:
-        raise ValueError(f'no cNN-named class averages in {directory}')
+        log.error(f'No cNN-named class averages in {directory}')
+        raise SystemExit(1)
     return {cid: (np.mean(volumes, axis=0), voxel_sizes[cid]) for cid, volumes in grouped.items()}
 
 # _score_panel: fit every candidate to every class average, returns {class_id: {candidate: score}}
@@ -56,6 +58,7 @@ def _score_panel(class_averages, panel, resolution, fitter, backend):
             simulated = simulate_density(candidate.structure_path, box_voxels, voxel_size, resolution)
             simulated = to_comparable(simulated, voxel_size, resolution, already_bandlimited=True)
             scores[candidate.name] = fit_candidate(comparable_average, simulated)
+            log.debug(f'{class_id}/{candidate.name}: score={scores[candidate.name]:.3f}')
         all_scores[class_id] = scores
     return all_scores
 
@@ -70,14 +73,17 @@ def run_identify(
     fitter: str,
     fetch_missing: bool
 ) -> None:
+    log.progress('Identifying classes against candidate panel')
     if resolution is None:
-        raise ValueError('resolution is required: use --resolution or set [stage.identify].resolution')
+        log.error('Resolution is required: use --resolution or set [stage.identify].resolution')
+        raise SystemExit(1)
     panel = load_candidate_panel(candidates, fetch_missing=fetch_missing)
-    print(f'Loaded {len(panel)} candidates.')
+    log.info(f'Loaded {len(panel)} candidates')
     class_averages = load_class_averages(classes)
-    print(f'Loaded {len(class_averages)} class averages.')
+    log.info(f'Loaded {len(class_averages)} class averages')
     inplane_aligned = _classify_was_inplane_aligned(classes)
 
+    log.progress(f'Fitting {len(panel)} candidates against {len(class_averages)} classes')
     real_scores = _score_panel(class_averages, panel, resolution, fitter, backend)
     results = [rank_candidates(class_id, scores, method=f'stamp-{fitter}') for class_id, scores in sorted(real_scores.items())]
 
@@ -86,11 +92,16 @@ def run_identify(
 
     decoy_control = None
     if decoy_classes is not None:
+        log.progress('Fitting candidates against decoy classes for control')
         decoy_scores = _score_panel(load_class_averages(decoy_classes), panel, resolution, fitter, backend)
         real_best = [max(s.values()) for s in real_scores.values()]
         decoy_best = [max(s.values()) for s in decoy_scores.values()]
         decoy_control = evaluate_decoy_control(real_best, decoy_best)
         (output_dir / 'decoy_control.json').write_text(json.dumps(decoy_control.model_dump(), indent=2))
+        if decoy_control.passed:
+            log.info('Decoy control passed')
+        else:
+            log.warning(f'Decoy control failed: {decoy_control.reason}')
 
     _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control, resolution, inplane_aligned)
 
@@ -111,7 +122,7 @@ def run_identify(
         inputs=[('class_averages', classes), ('candidates', candidates)]
         + ([('decoy_classes', decoy_classes)] if decoy_classes else []),
     )
-    print(f'Wrote identification for {len(results)} classes to {output_dir}')
+    log.info(f'Wrote identification for {len(results)} classes to {output_dir}')
 
 # build_identify_commands: create ToolCommand for `stamp identify`
 def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:

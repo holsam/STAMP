@@ -53,7 +53,8 @@ def resolve_stamp_commit() -> str:
         ).stdout.strip()
         return f'{head}-dirty' if dirty else head
     except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
+        from stamp.utils.log import log
+        log.debug('git rev-parse failed, falling back to installed package version')
     try:
         return f'stamp-{version("stamp")}'
     except PackageNotFoundError:
@@ -68,6 +69,8 @@ def _load_cache(cache_dir: Path | None) -> dict:
         try:
             return json.loads(cache_path.read_text())
         except json.JSONDecodeError:
+            from stamp.utils.log import log
+            log.debug(f'{cache_path} is not valid JSON, treating checksum cache as empty')
             return {}
     return {}
 
@@ -77,12 +80,15 @@ def _save_cache(cache_dir: Path | None, cache: dict) -> None:
 
 # checksum_file: SHA-256 of contents, cached on (path, size, mtime) when cache_dir is given
 def checksum_file(path: Path, cache_dir: Path | None = None) -> str:
+    from stamp.utils.log import log
     cache = _load_cache(cache_dir)
     stat = path.stat()
     key = str(path.resolve())
     entry = cache.get(key)
     if entry and entry['size'] == stat.st_size and entry['mtime'] == stat.st_mtime:
+        log.debug(f'{path.name}: checksum cache hit')
         return entry['sha256']
+    log.debug(f'{path.name}: checksum cache miss, hashing')
 
     digest = hashlib.sha256()
     with path.open('rb') as handle:
@@ -127,6 +133,8 @@ def write_sidecar(
     *,
     cache_inputs: bool = True
 ) -> Path:
+    from stamp.utils.log import log
+    log.debug(f'Writing sidecar for stage={stage!r} tool={tool!r} to {output_dir / "params.toml"}')
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = output_dir if cache_inputs else None
     sidecar = ProvenanceSidecar(

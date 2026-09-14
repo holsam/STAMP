@@ -11,6 +11,7 @@ from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
 from stamp.classify.extract import quaternion_to_matrix
 from stamp.schemas.particles import Particle
+from stamp.utils.log import log
 
 # _REFERENCE_AXIS: the model axis STAMP's picker orientation quaternion maps onto the membrane normal
 _REFERENCE_AXIS = np.array([0.0, 0.0, 1.0])
@@ -56,6 +57,7 @@ class RelionRefineAdapter:
                 'rlnTomoParticleName': particle.particle_id,
             })
         path.parent.mkdir(parents=True, exist_ok=True)
+        log.debug(f'Writing {len(rows)} particles to {path}')
         import pandas as pd
         starfile.write({'particles': pd.DataFrame(rows)}, path, overwrite=True)
 
@@ -81,6 +83,7 @@ class RelionRefineAdapter:
             '--pad', '2', '--flatten_solvent', '--zero_mask',
             '--gpu', '',
         ]
+        log.debug(f'{self.name}: {" ".join(argv)}')
         return ToolCommand(
             tool=self.name,
             argv=argv,
@@ -100,6 +103,8 @@ class RelionRefineAdapter:
             model = starfile.read(model_star)
             table = model.get('model_general', model) if isinstance(model, dict) else model
             resolution = float(np.asarray(table['rlnCurrentResolution']).ravel()[0])
+        else:
+            log.warning('run_model.star not found in RELION output; resolution unknown')
         return AdapterOutput(
             output_paths=[p for p in (final_map,) if p is not None],
             parsed={'final_map': str(final_map) if final_map else None, 'resolution_angstrom': resolution},

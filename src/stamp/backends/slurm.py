@@ -9,6 +9,7 @@ from pathlib import Path
 # Import STAMP objects
 from stamp.backends.base import ToolCommand
 from stamp.schemas.cluster_profile import ClusterProfile
+from stamp.utils.log import log
 
 # TERMINAL_STATES: job final states
 TERMINAL_STATES = {
@@ -62,8 +63,11 @@ def submit(script_path: Path, dependency_ids: list[str] | None = None) -> str:
     if dependency_ids:
         argv.append('--dependency=afterok:' + ':'.join(dependency_ids))
     argv.append(str(script_path))
+    log.debug(f'sbatch: {" ".join(argv)}')
     completed = subprocess.run(argv, capture_output=True, text=True, check=True)
-    return completed.stdout.strip().split(';')[0]
+    job_id = completed.stdout.strip().split(';')[0]
+    log.debug(f'sbatch returned job id {job_id}')
+    return job_id
 
 # job_state: the current sacct state of a job
 def job_state(job_id: str) -> str:
@@ -73,9 +77,11 @@ def job_state(job_id: str) -> str:
     )
     rows = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
     if not rows:
+        log.debug(f'{job_id}: pending')
         return 'PENDING'
     return rows[0].split(' ')[0]
 
 # cancel: scancel a job
 def cancel(job_id: str) -> None:
+    log.info(f'Cancelling job {job_id}')
     subprocess.run(['scancel', job_id], capture_output=True, text=True, check=False)
