@@ -6,6 +6,9 @@ STAMP: rotationally invariant features from subvolumes
 import numpy as np
 from scipy.ndimage import map_coordinates
 
+# Import internal STAMP objects
+from stamp.utils.log import log
+
 # cylindrical_bins: precompute per-voxel radial bin index and validity mask
 def cylindrical_bins(box_voxels: int, n_radial_bins: int) -> tuple[np.ndarray, np.ndarray]:
     half = (box_voxels - 1) / 2.0
@@ -105,6 +108,7 @@ def build_feature_matrix(
     n_azimuthal_samples: int = 64,
     min_radius_fraction: float = 0.25,
 ) -> np.ndarray:
+    log.debug(f'Building features for {subvolumes.shape[0]} subvolumes, max_mode={max_azimuthal_mode}')
     if subvolumes.shape[0] == 0:
         return np.empty((0, 0))
     if not 0.0 <= min_radius_fraction < 1.0:

@@ -9,6 +9,7 @@ from scipy.ndimage import rotate, shift
 
 # Import STAMP schema
 from stamp.schemas.particles import IdentificationResult
+from stamp.utils.log import log
 
 # _standardise: zero-mean, unit-variance flatten of the masked voxels
 def _standardise(values: np.ndarray) -> np.ndarray:
@@ -61,6 +62,7 @@ def rank_candidates(class_id: str, scores: dict[str, float], method: str) -> Ide
     ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
     best_name, best_score = ordered[0]
     gap = float(best_score - ordered[1][1]) if len(ordered) > 1 else None
+    log.debug(f'{class_id}: best={best_name} gap={gap}')
     return IdentificationResult(
         cluster_id=class_id,
         candidate_protein=best_name,

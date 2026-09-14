@@ -17,6 +17,7 @@ from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.io import write_sidecar
+from stamp.utils.log import log
 
 # REAL_ADAPTERS: dictionary containing all implemented pickers
 REAL_ADAPTERS: dict[str, ToolAdapter] = {
@@ -26,9 +27,10 @@ REAL_ADAPTERS: dict[str, ToolAdapter] = {
 # _execute: build a command, run it, and parse the resulting RawPicks
 def _execute(adapter: ToolAdapter, inputs: AdapterInputs, runner: Runner) -> list[RawPick]:
     command = adapter.build_command(inputs)
+    log.debug(f'{adapter.name}: dispatching {" ".join(command.argv)}')
     result = runner.run(command)
     if not result.succeeded:
-        print(f'{adapter.name} failed (exit {result.exit_code}): {result.stderr}')
+        log.error(f'{adapter.name} failed (exit {result.exit_code}): {result.stderr}')
         raise SystemExit(1)
     output = adapter.parse_output(result)
     return [RawPick(**raw) for raw in output.parsed.get('picks', [])]
@@ -40,7 +42,7 @@ def _select_adapter(picker_name: str, backend: str) -> ToolAdapter:
 
     adapter = REAL_ADAPTERS.get(picker_name)
     if adapter is None:
-        print(f'unknown picker {picker_name!r}')
+        log.error(f'Unknown picker {picker_name!r}')
         raise SystemExit(1)
     check_backend_supports(adapter, backend)
     return adapter
@@ -55,7 +57,7 @@ def _load_manifests(
     for segmentation_path in sorted(segmentation_dir.glob('*.mrc')):
         raw_path = raw_by_stem.get(segmentation_path.stem)
         if raw_path is None:
-            print(f"  warning: no raw tomogram matching '{segmentation_path.stem}', skipping")
+            log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
             continue
         manifests.append(
             TomogramManifest(
@@ -124,9 +126,9 @@ def run_pick(
     # Load manifests to check for matching files
     manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
     if not manifests:
-        print(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
+        log.error(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
         raise SystemExit(1)
-    print(f'Matched {len(manifests)} tomograms/segmentations.')
+    log.info(f'Matched {len(manifests)} tomograms/segmentations')
 
     runner = select_runner(backend)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -140,23 +142,23 @@ def run_pick(
             **extra_params.get(picker_name, {}),
         }
 
-        print(f'Running {picker_name}...')
+        log.progress(f'Running {picker_name}...')
         picks_by_picker[picker_name] = _run_picker(adapter, manifests, picker_output_dir, parameters, runner, backend)
-        print(f'  {picker_name}: {len(picks_by_picker[picker_name])} raw picks')
+        log.info(f'{picker_name}: {len(picks_by_picker[picker_name])} raw picks')
 
     all_reconciled: list[RawPick] = []
     for manifest in manifests:
-        all_reconciled.extend(
-            reconcile_picks(
-                picks_by_picker=picks_by_picker,
-                consensus_rule=consensus_rule,  # type: ignore[arg-type]
-                distance_threshold=distance_threshold,
-                tomogram_id=manifest.tomogram_id,
-            )
+        reconciled = reconcile_picks(
+            picks_by_picker=picks_by_picker,
+            consensus_rule=consensus_rule,  # type: ignore[arg-type]
+            distance_threshold=distance_threshold,
+            tomogram_id=manifest.tomogram_id,
         )
+        log.debug(f'{manifest.tomogram_id}: {len(reconciled)} reconciled picks')
+        all_reconciled.extend(reconciled)
 
     if not all_reconciled:
-        print('No particles survived reconciliation. If using stamp-native, try lowering n_mad or check density_sign matches your tomograms (-1 for conventional dark-protein contrast).')
+        log.error('No particles survived reconciliation. If using stamp-native, try lowering n_mad or check density_sign matches your tomograms (-1 for conventional dark-protein contrast).')
         raise SystemExit(1)
 
     particle_set = build_particle_set(
@@ -187,7 +189,7 @@ def run_pick(
         + [(f'raw_tomogram:{m.tomogram_id}', m.raw_tomogram_path) for m in manifests],
     )
 
-    print(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
+    log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
 
 # build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
 def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:

@@ -15,6 +15,16 @@ from stamp.schemas.provenance import ProvenanceSidecar
 _CACHE_NAME = '.stamp_checksums.json'
 _CHUNK = 1024 * 1024
 
+# -- _resolve_abspath: returns a Path for the absolute path for a given path
+def _resolve_abspath(path: Path):
+    return path.expanduser().resolve()
+
+# -- _is_writable: returns bool indicating if supplied directory is writable
+def _is_writable(directory: Path):
+    from os import access, W_OK
+    directory = _resolve_abspath(directory)
+    return access(directory, W_OK)
+
 # toml_none_to_empty: map any None instances to an empty string for TOML serialisation
 def toml_none_to_empty(obj):
     if isinstance(obj, dict):
@@ -43,7 +53,8 @@ def resolve_stamp_commit() -> str:
         ).stdout.strip()
         return f'{head}-dirty' if dirty else head
     except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
+        from stamp.utils.log import log
+        log.debug('git rev-parse failed, falling back to installed package version')
     try:
         return f'stamp-{version("stamp")}'
     except PackageNotFoundError:
@@ -58,6 +69,8 @@ def _load_cache(cache_dir: Path | None) -> dict:
         try:
             return json.loads(cache_path.read_text())
         except json.JSONDecodeError:
+            from stamp.utils.log import log
+            log.debug(f'{cache_path} is not valid JSON, treating checksum cache as empty')
             return {}
     return {}
 
@@ -67,12 +80,15 @@ def _save_cache(cache_dir: Path | None, cache: dict) -> None:
 
 # checksum_file: SHA-256 of contents, cached on (path, size, mtime) when cache_dir is given
 def checksum_file(path: Path, cache_dir: Path | None = None) -> str:
+    from stamp.utils.log import log
     cache = _load_cache(cache_dir)
     stat = path.stat()
     key = str(path.resolve())
     entry = cache.get(key)
     if entry and entry['size'] == stat.st_size and entry['mtime'] == stat.st_mtime:
+        log.debug(f'{path.name}: checksum cache hit')
         return entry['sha256']
+    log.debug(f'{path.name}: checksum cache miss, hashing')
 
     digest = hashlib.sha256()
     with path.open('rb') as handle:
@@ -117,6 +133,8 @@ def write_sidecar(
     *,
     cache_inputs: bool = True
 ) -> Path:
+    from stamp.utils.log import log
+    log.debug(f'Writing sidecar for stage={stage!r} tool={tool!r} to {output_dir / "params.toml"}')
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = output_dir if cache_inputs else None
     sidecar = ProvenanceSidecar(

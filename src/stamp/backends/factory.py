@@ -12,15 +12,18 @@ from stamp.backends.cluster import ClusterRunner
 from stamp.backends.local import LocalRunner
 from stamp.backends.mock import MockRunner
 from stamp.schemas.cluster_profile import ClusterProfile, load_cluster_profile
+from stamp.utils.log import log
 
 # check_backend_supports: raise if specified backend cannot run adapter
 def check_backend_supports(adapter: ToolAdapter, backend: str) -> None:
     if backend != 'local':
         return
     if adapter.requires_gpu:
-        raise SystemExit(f'{adapter.name} requires a GPU; --backend local cannot provide one - use --backend cluster')
+        log.error(f'{adapter.name} requires a GPU; --backend local cannot provide one - use --backend cluster')
+        raise SystemExit(1)
     if platform.system() == 'Darwin' and not adapter.mac_compatible:
-        raise SystemExit(f'{adapter.name} cannot run on macOS - use --backend cluster or a macOS-compatible tool')
+        log.error(f'{adapter.name} cannot run on macOS - use --backend cluster or a macOS-compatible tool')
+        raise SystemExit(1)
 
 # select_runner: map --backend string to Runner
 def select_runner(
@@ -30,11 +33,18 @@ def select_runner(
     requires_gpu: bool = False
 ) -> Runner:
     if backend == 'mock':
+        log.debug(f'Selected runner: {backend}')
         return MockRunner()
     if backend == 'local':
+        log.debug(f'Selected runner: {backend}')
         return LocalRunner()
     if backend == 'cluster':
         if shutil.which('sbatch') is None:
-            raise SystemExit('--backend cluster used but sbatch is not on PATH - run STAMP on a cluster login node, or use --backend local/mock')
+            log.error('--backend cluster used but sbatch is not on PATH - run STAMP on a cluster login node, or use --backend local/mock')
+            raise SystemExit(1)
+        log.debug(f'Selected runner: {backend}')
+        if cluster_profile is None:
+            log.debug('No cluster profile given, loading default')
         return ClusterRunner(profile=cluster_profile or load_cluster_profile(), requires_gpu=requires_gpu)
-    raise SystemExit(f'unknown backend {backend!r}')
+    log.error(f'Unknown backend {backend!r}')
+    raise SystemExit(1)

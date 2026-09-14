@@ -18,6 +18,7 @@ from stamp.picking.geometry import (
     score_membrane_faces
 )
 from stamp.schemas.picks import RawPick
+from stamp.utils.log import log
 
 # PICKER_NAME: name for picker tool
 PICKER_NAME = 'stamp-native'
@@ -66,6 +67,7 @@ def pick_tomogram(
         tomogram = np.asarray(mrc.data)
 
     if segmentation.shape != tomogram.shape:
+        log.error(f'Segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id}')
         raise ValueError(f'Segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id}; they must be the same volume at the same binning')
 
     # Blank membrane signal so offset shell only scores densities off membrane surface
@@ -86,11 +88,13 @@ def pick_tomogram(
     
     points, outward_normals, scores = score_membrane_faces(tomogram, vertices, normals, offset_min, offset_max, config.n_samples, config.density_sign)
     above_threshold = scores >= config.n_mad
+    n_candidates = points.shape[0]
     points, outward_normals, scores = (
         points[above_threshold],
         outward_normals[above_threshold],
         scores[above_threshold],
     )
+    log.debug(f'{tomogram_id}: {n_candidates} candidates before filtering, {points.shape[0]} kept')
     if points.shape[0] == 0:
         return []
 

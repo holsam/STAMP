@@ -22,6 +22,7 @@ from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.io import write_sidecar
+from stamp.utils.log import log
 
 # METHODS: decoy generation methods
 METHODS = (METHOD_REJECTED_SURFACE, METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE)
@@ -45,6 +46,7 @@ def run_decoy(
     seed,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data'''
+    log.progress(f'Generating decoy dataset ({method})')
     config_fields = {
         key: value
         for key, value in parameters.items()
@@ -57,7 +59,7 @@ def run_decoy(
     if method == METHOD_SYNTHETIC_NOISE:
         shape = tuple(int(value) for value in synthetic_shape.split(','))
         if len(shape) != 3:
-            print('--synthetic-shape must be three integers')
+            log.error('--synthetic-shape must be three integers')
             raise SystemExit(1)
         decoy_set, decoy_manifests = generate_synthetic_noise_decoys(
             tomogram_shape=shape,
@@ -72,12 +74,12 @@ def run_decoy(
         )
     else:
         if not (real_particle_set and segmentation_dir and raw_tomogram_dir):
-            print(f'--method {method} requires --real-particle-set, --segmentation-dir and --raw-tomogram-dir.')
+            log.error(f'--method {method} requires --real-particle-set, --segmentation-dir and --raw-tomogram-dir')
             raise SystemExit(1)
         real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
         manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
         if not manifests:
-            print('No matched segmentation/tomogram pairs found')
+            log.error('No matched segmentation/tomogram pairs found')
             raise SystemExit(1)
 
         if method == METHOD_REJECTED_SURFACE:
@@ -102,7 +104,7 @@ def run_decoy(
             )
 
     if decoy_set is None or not decoy_set.particles:
-        print('No decoy positions generated. For rejected-surface, check that --min-distance-from-real-angstrom isn\'t excluding the whole surface; for shifted, that the shift range fits inside the volume.')
+        log.error('No decoy positions generated. For rejected-surface, check that --min-distance-from-real-angstrom isn\'t excluding the whole surface; for shifted, check that the shift range fits inside the volume.')
         raise SystemExit(1)
 
     if method != METHOD_SYNTHETIC_NOISE and real_particle_set is not None:
@@ -134,7 +136,7 @@ def run_decoy(
             [('segmentation', segmentation_dir)] if segmentation_dir else []
         ),
     )
-    print(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
+    log.info(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
 
 
 # build_decoy_commands: create ToolCommand for `stamp decoy`
@@ -159,13 +161,16 @@ def _load_manifests(
     segmentation_dir: Path, raw_tomogram_dir: Path, voxel_size_angstrom: float
 ) -> list[TomogramManifest]:
     raw_by_stem = {path.stem: path for path in sorted(raw_tomogram_dir.glob('*.mrc'))}
-    return [
+    segmentation_paths = sorted(segmentation_dir.glob('*.mrc'))
+    manifests = [
         TomogramManifest(
             tomogram_id=segmentation_path.stem,
             segmentation_path=segmentation_path,
             raw_tomogram_path=raw_by_stem[segmentation_path.stem],
             voxel_size_angstrom=voxel_size_angstrom,
         )
-        for segmentation_path in sorted(segmentation_dir.glob('*.mrc'))
+        for segmentation_path in segmentation_paths
         if segmentation_path.stem in raw_by_stem
     ]
+    log.debug(f'{len(manifests)} matched of {len(segmentation_paths)} segmentation files')
+    return manifests

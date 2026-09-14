@@ -24,6 +24,7 @@ from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.utils.io import write_sidecar
+from stamp.utils.log import log
 
 # run_classify: cluster picked particles by structural similarity
 def run_classify(
@@ -47,9 +48,10 @@ def run_classify(
     min_radius_fraction = 0.25,
     n_azimuthal_samples = 64,
 ) -> None:
+    log.progress('Classifying particle set')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
-    print(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles.')
+    log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles')
     tomogram_paths = {
         path.stem: path for path in sorted(raw_tomogram_dir.glob('*.mrc'))
     }
@@ -64,11 +66,11 @@ def run_classify(
         particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels, segmentation_paths=segmentation_paths,
     )
     if skipped:
-        print(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
+        log.warning(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
     if not kept:
-        print('No particles could be extracted. Check --raw-dir and --box-length-a')
+        log.error('No particles could be extracted. Check --raw-dir and --box-length-a')
         raise SystemExit(1)
-    print(f'Extracted {len(kept)} subvolumes at box {box_voxels} {" (membrane subtracted)" if segmentation_paths else ""}')
+    log.info(f'Extracted {len(kept)} subvolumes at box {box_voxels}{" (membrane subtracted)" if segmentation_paths else ""}')
 
     features = build_feature_matrix(
         subvolumes,
@@ -77,16 +79,16 @@ def run_classify(
         n_azimuthal_samples=n_azimuthal_samples,
         min_radius_fraction=min_radius_fraction,
     )
-    print(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
+    log.debug(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
 
     degenerate = ~features.any(axis=1)
     if degenerate.any():
-        print(f'Dropped {int(degenerate.sum())} particles with a constant/empty subvolume (edge fill)')
+        log.warning(f'Dropped {int(degenerate.sum())} particles with a constant/empty subvolume (edge fill)')
         features = features[~degenerate]
         subvolumes = subvolumes[~degenerate]
         kept = [particle for particle, bad in zip(kept, degenerate) if not bad]
     if not kept:
-        print('No particles left after dropping degenerate subvolumes.')
+        log.error('No particles left after dropping degenerate subvolumes')
         raise SystemExit(1)
 
     config = ClusteringConfig(
@@ -105,10 +107,10 @@ def run_classify(
         iterations=inplane_iterations,
     )
     if not inplane_alignment:
-        print('WARNING: --no-inplane-alignment: class averages are a rotational average about the membrane normal (Cinf assumed). Downstream fit scores and half-map FSC will reflect the shared radial profile, not a 3D structure.')
+        log.warning('--no-inplane-alignment: class averages are a rotational average about the membrane normal (Cinf assumed). Downstream fit scores and half-map FSC will reflect the shared radial profile, not a 3D structure.')
 
     if not strict_halfset_independence:
-        print('WARNING: --no-strict-halfset-independence used, half-A and half-B particles are clustered together; FSC built on these classes will be inflated')
+        log.warning('--no-strict-halfset-independence used, half-A and half-B particles are clustered together; FSC built on these classes will be inflated')
     if strict_halfset_independence:
         assignments = _classify_strict(kept, subvolumes, features, config, output_dir, voxel_size_angstrom, align_settings)
     else:
@@ -146,7 +148,7 @@ def run_classify(
         inputs=[('particle_set', particles)]
         + [(f'raw_tomogram:{stem}', path) for stem, path in sorted(tomogram_paths.items())],
     )
-    print(f'Wrote {len(assignments)} class assignments to {assignments_path}')
+    log.info(f'Wrote {len(assignments)} class assignments to {assignments_path}')
 
 # build_classify_commands: create ToolCommand for `stamp classify`
 def build_classify_commands(config, output_dir: Path, track: str = 'real') -> list[ToolCommand]:
@@ -241,15 +243,15 @@ def _classify_strict(
     indices_a = np.array([index_of[p.particle_id] for p in half_a])
     indices_b = np.array([index_of[p.particle_id] for p in half_b])
     if indices_a.size == 0 or indices_b.size == 0:
-        print('Strict mode needs particles in both half-sets')
+        log.error('Strict mode needs particles in both half-sets')
         raise SystemExit(1)
 
     results = reduce_and_cluster_shared(features, {'A': indices_a, 'B': indices_b}, config)
     result_a, result_b = results['A'], results['B']
     matches = match_clusters_across_halves(result_a.centroids, result_b.centroids)
-    print('Cross-half cluster matching (B -> A, shared PCA space):')
+    log.debug('Cross-half cluster matching (B -> A, shared PCA space):')
     for label_b, (label_a, distance) in sorted(matches.items()):
-        print(f'  c{label_b:02d} -> c{label_a:02d}  d={distance:.3f}')
+        log.debug(f'  c{label_b:02d} -> c{label_a:02d}  d={distance:.3f}')
 
     assignments: list[ClassAssignment] = []
     for half_label, half_particles, indices, result, remap in (
@@ -279,7 +281,6 @@ def _report_clusters(cluster_ids: list[str], explained_variance: np.ndarray) -> 
     counts: dict[str, int] = {}
     for cluster_id in cluster_ids:
         counts[cluster_id] = counts.get(cluster_id, 0) + 1
-    print(f'PCA: top 5 components explain {explained_variance[:5].sum():.1%} of variance.')
-    print('Cluster sizes:')
+    log.debug(f'PCA: top 5 components explain {explained_variance[:5].sum():.1%} of variance')
     for cluster_id, count in sorted(counts.items()):
-        print(f'  {cluster_id}: {count}')
+        log.debug(f'cluster {cluster_id}: {count}')

@@ -10,6 +10,7 @@ from pathlib import Path
 from stamp.backends.base import RunResult, ToolCommand
 from stamp.schemas.cluster_profile import ClusterProfile
 from stamp.backends.slurm import TERMINAL_STATES, job_state, render_job_script, submit
+from stamp.utils.log import log
 
 # _MARKER: record submitted job id
 _MARKER = '.stamp_cluster_submitted.json'
@@ -29,8 +30,7 @@ class ClusterRunner:
             record = json.loads(marker_path.read_text())
             state = job_state(record['job_id'])
             if state not in TERMINAL_STATES:
-                print(f"stamp: job {record['job_id']} still running - check with "
-                      f"sacct -j {record['job_id']}")
+                log.info(f"Job {record['job_id']} still running; check with sacct -j {record['job_id']}")
                 return RunResult(
                     tool=command.tool,
                     exit_code=0,
@@ -39,6 +39,10 @@ class ClusterRunner:
                     output_paths=command.output_paths
                 )
             marker_path.unlink()
+            if state == 'COMPLETED':
+                log.info(f"Job {record['job_id']} finished: {state}")
+            else:
+                log.warning(f"Job {record['job_id']} ended in state {state}")
             stdout = self._slurm_stream(workdir, record['job_id'], 'out')
             stderr = self._slurm_stream(workdir, record['job_id'], 'err')
             return RunResult(
@@ -50,10 +54,11 @@ class ClusterRunner:
             )
 
         script_path = workdir / f'stamp-{command.tool}.sbatch'
+        log.debug(f'Rendering SLURM script to {script_path}')
         script_path.write_text(render_job_script(command, self.requires_gpu, self.profile, workdir))
         job_id = submit(script_path)
         marker_path.write_text(json.dumps({'job_id': job_id, 'tool': command.tool}))
-        print(f'stamp: submitted as job {job_id}')
+        log.info(f'Submitted as job {job_id}')
         return RunResult(
             tool=command.tool,
             exit_code=0,

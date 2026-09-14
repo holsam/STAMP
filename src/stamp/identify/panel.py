@@ -7,6 +7,9 @@ import urllib.request, yaml
 from dataclasses import dataclass
 from pathlib import Path
 
+# Import internal STAMP objects
+from stamp.utils.log import log
+
 # AFDB_URL: AlphaFold-DB predicted-model URL, keyed by UniProt accession
 AFDB_URL = 'https://alphafold.ebi.ac.uk/files/AF-{uniprot}-F1-model_v4.pdb'
 
@@ -64,6 +67,7 @@ def load_candidate_panel(
                 oligomer=int(oligomer) if oligomer is not None else None,
             )
         )
+    log.debug(f'Candidates: {[c.name for c in panel]}')
     return panel
 
 # _fetch_afdb_model: download one AlphaFold-DB PDB, cached on disk
@@ -71,11 +75,14 @@ def _fetch_afdb_model(uniprot: str, cache_dir: Path) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     destination = cache_dir / f'AF-{uniprot}-F1-model_v4.pdb'
     if destination.is_file():
+        log.debug(f'{uniprot}: AlphaFold model cache found')
         return destination
     url = AFDB_URL.format(uniprot=uniprot)
+    log.progress(f'Fetching AlphaFold model for {uniprot}')
     try:
         with urllib.request.urlopen(url, timeout=30) as response:
             destination.write_bytes(response.read())
     except Exception as error:
+        log.warning(f'AlphaFold fetch failed for {uniprot}: {error}')
         raise ValueError(f'could not fetch AlphaFold model for {uniprot} from {url}: {error}')
     return destination

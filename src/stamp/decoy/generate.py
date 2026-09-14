@@ -22,6 +22,7 @@ from stamp.picking.native import NativePickerConfig
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
+from stamp.utils.log import log
 
 # Define constants
 METHOD_REJECTED_SURFACE = 'rejected-surface'
@@ -38,6 +39,7 @@ def generate_rejected_surface_decoys(
     min_distance_from_real_angstrom: float,
     seed: int,
 ) -> ParticleSet | None:
+    log.progress(f'Generating rejected-surface decoys ({n_decoys_per_tomogram}/tomogram)')
     rng = np.random.default_rng(seed)
     real_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
     for particle in real_particle_set.particles:
@@ -92,7 +94,9 @@ def generate_rejected_surface_decoys(
                 )
             )
 
-    return _finalise(raw_picks, seed, METHOD_REJECTED_SURFACE)
+    decoys = _finalise(raw_picks, seed, METHOD_REJECTED_SURFACE)
+    log.info(f'Generated {len(raw_picks)} decoy particles')
+    return decoys
 
 # generate_shifted_decoys: displace each real pick by a large random vector away from surface and picks
 def generate_shifted_decoys(
@@ -106,6 +110,7 @@ def generate_shifted_decoys(
     seed: int,
     max_attempts_per_particle: int = 200,
 ) -> ParticleSet | None:
+    log.progress('Generating shifted decoys')
     rng = np.random.default_rng(seed)
     shape_by_tomogram = {}
 
@@ -116,7 +121,8 @@ def generate_shifted_decoys(
         shape_by_tomogram[manifest.tomogram_id] = segmentation.shape
         try:
             vertices, normals = extract_surface(segmentation)
-        except ValueError:
+        except ValueError as exc:
+            log.warning(f'{manifest.tomogram_id}: skipped ({exc})')
             continue
         surface_by_tomogram[manifest.tomogram_id] = (cKDTree(vertices[:, ::-1]), normals[:, ::-1])
 
@@ -166,7 +172,9 @@ def generate_shifted_decoys(
                 )
                 break
 
-    return _finalise(raw_picks, seed, METHOD_SHIFTED)
+    decoys = _finalise(raw_picks, seed, METHOD_SHIFTED)
+    log.info(f'Generated {len(raw_picks)} decoy particles')
+    return decoys
 
 # generate_synthetic_noise_decoys: Gaussian-noise volumes with a membrane-like shell and shell-sampled decoys
 def generate_synthetic_noise_decoys(
@@ -177,6 +185,7 @@ def generate_synthetic_noise_decoys(
     config: NativePickerConfig,
     seed: int,
 ) -> tuple[ParticleSet | None, list[TomogramManifest]]:
+    log.progress(f'Generating synthetic-noise decoys ({n_tomograms} tomograms, {n_decoys_per_tomogram}/tomogram)')
     rng = np.random.default_rng(seed)
     segmentation_dir = output_dir / 'segmentations'
     tomogram_dir = output_dir / 'tomograms'
@@ -235,7 +244,9 @@ def generate_synthetic_noise_decoys(
                 )
             )
 
-    return _finalise(raw_picks, seed, METHOD_SYNTHETIC_NOISE), manifests
+    decoys = _finalise(raw_picks, seed, METHOD_SYNTHETIC_NOISE)
+    log.info(f'Generated {len(raw_picks)} decoy particles')
+    return decoys, manifests
 
 # _score_surface: re-run the native picker's surface scoring for one tomogram
 def _score_surface(
@@ -247,11 +258,13 @@ def _score_surface(
         tomogram = np.asarray(mrc.data)
 
     if segmentation.shape != tomogram.shape:
+        log.error(f'Segmentation and tomogram shapes disagree for {manifest.tomogram_id}')
         raise ValueError(f'Segmentation and tomogram shapes disagree for {manifest.tomogram_id}')
 
     try:
         vertices, normals = extract_surface(segmentation)
-    except ValueError:
+    except ValueError as exc:
+        log.warning(f'{manifest.tomogram_id}: skipped ({exc})')
         empty = np.empty((0, 3))
         return empty, empty, np.empty(0)
 

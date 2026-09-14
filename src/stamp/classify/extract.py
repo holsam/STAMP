@@ -8,6 +8,7 @@ from scipy.ndimage import map_coordinates
 
 # Import STAMP schema
 from stamp.schemas.particles import Particle
+from stamp.utils.log import log
 
 # quaternion_to_matrix: return a rotation matrix from a unit quaternion (w, x, y, z)
 def quaternion_to_matrix(quaternion: tuple[float, float, float, float]) -> np.ndarray:
@@ -87,6 +88,7 @@ def extract_particle_set(
             with mrcfile.open(str(seg_path), permissive=True) as mrc:
                 segmentation = np.asarray(mrc.data)
             if segmentation.shape != tomogram.shape:
+                log.error(f'Segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id!r}')
                 raise ValueError(f'segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id!r}; they must be the same volume at the same binning')
             # replace membrane voxels with the background median so the class average is not dominated by the membrane slab
             tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
@@ -103,6 +105,7 @@ def extract_particle_set(
             )
             kept.append(particle)
 
+    log.debug(f'extract_particle_set: {len(kept)} kept, {len(skipped)} skipped')
     if not subvolumes:
         return np.empty((0, box_voxels, box_voxels, box_voxels)), kept, skipped
     return np.stack(subvolumes), kept, skipped

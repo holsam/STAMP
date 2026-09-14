@@ -7,6 +7,7 @@ from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
 from stamp.picking.native import PICKER_NAME, NativePickerConfig, pick_tomogram
 from stamp.schemas.picks import RawPick
+from stamp.utils.log import log
 
 # _IN_PROCESS_MESSAGE: define a message for if build_command/parse_output are called directly
 _IN_PROCESS_MESSAGE = 'stamp-native runs in-process; call run_in_process() rather than build_command()/parse_output()'
@@ -44,7 +45,10 @@ class NativePickerAdapter:
         }
         config = NativePickerConfig(**config_fields)
 
+        log.progress(f'Running stamp-native over {len(inputs.input_paths)} tomogram(s)')
         picks: list[RawPick] = []
         for segmentation_path, tomogram_path, tomogram_id in zip(inputs.input_paths, inputs.raw_tomogram_paths, inputs.tomogram_ids):
-            picks.extend(pick_tomogram(segmentation_path, tomogram_path, tomogram_id, config))
+            tomogram_picks = pick_tomogram(segmentation_path, tomogram_path, tomogram_id, config)
+            log.debug(f'{tomogram_id}: {len(tomogram_picks)} raw picks')
+            picks.extend(tomogram_picks)
         return picks

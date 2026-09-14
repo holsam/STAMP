@@ -15,6 +15,7 @@ from stamp.commands.identify import build_identify_commands
 from stamp.commands.pick import build_pick_commands
 from stamp.commands.refine import build_refine_commands
 from stamp.schemas.cluster_profile import ClusterProfile
+from stamp.utils.log import log
 
 # ClusterJob: one pipeline step (track + stage) and its SLURM dependencies
 @dataclass
@@ -47,6 +48,7 @@ def plan_pipeline_jobs(config, output_dir: Path, planned_stages: list[str]) -> l
         jobs.append(ClusterJob('real.identify', 'real', 'identify', build_identify_commands(config, output_dir), depends_on=deps))
     if 'refine' in planned_stages:
         jobs.append(ClusterJob('real.refine', 'real', 'refine', build_refine_commands(config, output_dir), depends_on=['real.identify'], requires_gpu=True))
+    log.debug(f'Planned {len(jobs)} cluster job(s): {[j.step_key for j in jobs]}')
     return jobs
 
 # submit_pipeline: render job scripts & submit with --dependency=afterok from known job ids
@@ -61,6 +63,7 @@ def submit_pipeline(config, output_dir: Path, planned_stages: list[str], profile
             for job_id in submitted[key]
         ]
         assert len(job.commands) == 1, f'{job.step_key}: fan-out not supported'
+        log.progress(f'Submitting {job.step_key} (depends on {job.depends_on or "nothing"})')
         submitted[job.step_key] = [_submit_one(job.commands[0], job, dep_ids, profile, output_dir)]
     return submitted
 
@@ -81,4 +84,6 @@ def _submit_one(
     )
     script_path = command.working_directory / f'stamp-{job.step_key}.sbatch'
     script_path.write_text(script)
-    return submit(script_path, dependency_ids=dep_ids)
+    job_id = submit(script_path, dependency_ids=dep_ids)
+    log.info(f'{job.step_key}: submitted as SLURM job {job_id}')
+    return job_id

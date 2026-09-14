@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from sklearn.cluster import HDBSCAN, KMeans
 from sklearn.decomposition import PCA
 
+# Import internal STAMP objects
+from stamp.utils.log import log
+
 # NOISE_CLUSTER_ID: id for noise cluster
 NOISE_CLUSTER_ID = 'noise'
 
@@ -54,7 +57,9 @@ def reduce_and_cluster(features: np.ndarray, config: ClusteringConfig) -> Cluste
 
     pca = PCA(n_components=n_components, random_state=config.random_state)
     embedding = pca.fit_transform(features)
+    log.debug(f'PCA: {n_components} components, {pca.explained_variance_ratio_[:n_components].sum():.1%} variance explained')
     labels, centroids = _cluster_embedding(embedding, config)
+    log.debug(f'{config.method}: {len(set(labels))} cluster(s) found')
     return ClusteringResult(
         labels=labels,
         embedding=embedding,
@@ -103,4 +108,5 @@ def match_clusters_across_halves(
             continue
         matches[label_b] = (label_a, distance)
         available.discard(label_a)
+    log.debug(f'Matched {len(matches)} cluster pair(s) across halves')
     return matches
