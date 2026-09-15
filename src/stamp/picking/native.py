@@ -9,6 +9,7 @@ from typing import Literal
 
 # Import internal STAMP objects
 from stamp.picking.geometry import (
+    beam_angle_deviation_degrees,
     downsample_points,
     exclude_near_boundary,
     extract_surface,
@@ -139,6 +140,7 @@ def pick_tomogram(
                 confidence=float(scores[index]),
                 source_picker=PICKER_NAME,
                 metadata={'used_global_fallback': bool(used_fallback[index])} if config.normalisation == 'local' else {},
+                beam_angle_deviation_degrees=beam_angle_deviation_degrees(normal_xyz),
             )
         )
     return picks

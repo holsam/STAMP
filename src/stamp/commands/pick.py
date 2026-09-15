@@ -19,6 +19,7 @@ from stamp.schemas.picks import RawPick
 from stamp.utils.io import write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
+from stamp.utils.reporting import report_beam_angle_distribution
 
 # REAL_ADAPTERS: dictionary containing all implemented pickers
 REAL_ADAPTERS: dict[str, ToolAdapter] = {
@@ -127,6 +128,7 @@ def run_pick(
     pick_plot_style: str = 'both',
     plot_format: str = 'tiff',
     pick_zstack_movie: bool = True,
+    max_beam_angle_deviation: float | None = None,
 ) -> None:
     # Load manifests to check for matching files
     manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
@@ -172,6 +174,20 @@ def run_pick(
         contributing_pickers=picker_names,
         half_set_seed=half_set_seed,
     )
+
+    if max_beam_angle_deviation is not None:
+        before = len(particle_set.particles)
+        particle_set.particles = [
+            p for p in particle_set.particles
+            if p.beam_angle_deviation_degrees is None or p.beam_angle_deviation_degrees <= max_beam_angle_deviation
+        ]
+        dropped = before - len(particle_set.particles)
+        log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {dropped} of {before} particles')
+        if not particle_set.particles:
+            log.error('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
+            raise SystemExit(1)
+
+    report_beam_angle_distribution(particle_set.particles)
 
     particle_set_path = output_dir / 'particle_set.json'
     particle_set_path.write_text(particle_set.model_dump_json(indent=2))

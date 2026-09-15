@@ -3,7 +3,7 @@ STAMP: raw pick schema
 '''
 
 # Import external dependencies
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 # RawPick: class for a candidate position reported by a picker for a tomogram
 class RawPick(BaseModel):
@@ -13,6 +13,7 @@ class RawPick(BaseModel):
     confidence: float | None = None
     source_picker: str
     metadata: dict = {}
+    beam_angle_deviation_degrees: float | None = Field(default=None, description='Angle in degrees between the outward normal and the beam-orthogonal (xy) plane (0 = beam-orthogonal; 90 = beam-aligned).')
 
     @field_validator('orientation')
     @classmethod

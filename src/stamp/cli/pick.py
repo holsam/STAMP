@@ -75,6 +75,10 @@ def pick(
         bool,
         typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.'),
     ] = True,
+    max_beam_angle_deviation: Annotated[
+        float | None,
+        typer.Option('--max-beam-angle-deviation', help='Normal deviation from beam-orthogonal plane to drop particles.'),
+    ] = None,
 ) -> None:
     '''Run particle picking, reconcile across pickers, and assign half-sets.'''
     # Validate provided pickers
@@ -107,4 +111,5 @@ def pick(
         pick_plot_style=pick_plot_style,
         plot_format=plot_format,
         pick_zstack_movie=pick_zstack_movie,
+        max_beam_angle_deviation=max_beam_angle_deviation,
     )

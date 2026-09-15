@@ -213,3 +213,11 @@ def score_membrane_faces(
         min_local_neighbours=min_local_neighbours,
     )
     return points, np.concatenate(face_normals), scores, used_fallback
+
+# beam_angle_deviation_degrees: angle between an outward normal and the beam-orthogonal plane (0 = beam-orthogonal, 90 = beam-aligned)
+def beam_angle_deviation_degrees(normal_xyz: np.ndarray) -> float:
+    norm = np.linalg.norm(normal_xyz)
+    if norm == 0.0:
+        raise ValueError('normal_xyz must be non-zero.')
+    z_component = abs(normal_xyz[2] / norm)
+    return float(np.degrees(np.arcsin(np.clip(z_component, 0.0, 1.0))))

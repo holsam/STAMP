@@ -21,6 +21,7 @@ class Particle(BaseModel):
     source_picker: str
     confidence: float | None = None
     half_set: HalfSet
+    beam_angle_deviation_degrees: float | None = Field(default=None, description='Angle in degrees between the pick normal and the beam-orthogonal (xy) plane (0 = beam-orthogonal; 90 = beam-aligned).')
 
     @field_validator('orientation')
     @classmethod

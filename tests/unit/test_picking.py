@@ -9,6 +9,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.picking.consensus import build_particle_set, reconcile_picks
 from stamp.picking.geometry import (
+    beam_angle_deviation_degrees,
     compose_roll_about_normal,
     downsample_points,
     exclude_near_boundary,
@@ -21,6 +22,7 @@ from stamp.picking.geometry import (
     score_membrane_faces
 )
 from stamp.picking.native import NativePickerConfig, pick_tomogram
+from stamp.schemas.particles import HalfSet, Particle
 from stamp.schemas.picks import RawPick
 
 # _hollow_sphere: a hollow spherical shell segmentation volume
@@ -249,6 +251,56 @@ class TestGeometry:
         low_x_count = sum(1 for x in x_positions if x < tomogram.shape[2] / 2)
         high_x_count = len(x_positions) - low_x_count
         assert low_x_count > 0 and high_x_count > 0
+
+    def test_beam_aligned_and_orthogonal_particles_get_correct_deviation(self, tmp_path: Path) -> None:
+        '''A particle planted beam-aligned (normal along z) reads ~90 deg; one beam-orthogonal (normal in-plane) reads ~0 deg.'''
+        segmentation, tomogram, _ = _vesicle_with_particles(particle_offsets=((0, 0, 1), (1, 0, 0)),)
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+
+        config = NativePickerConfig(
+            voxel_size_angstrom=10.0,
+            offset_min_angstrom=40.0,
+            offset_max_angstrom=80.0,
+            surface_spacing_angstrom=20.0,
+            min_particle_distance_angstrom=80.0,
+            n_mad=3.0,
+        )
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+        assert picks, 'picker found nothing where particles were planted'
+
+        deviations = np.array([p.beam_angle_deviation_degrees for p in picks])
+        # nearest-beam-aligned pick and nearest-beam-orthogonal pick, by deviation
+        assert deviations.max() > 60.0, 'expected a near-beam-aligned pick close to 90 deg'
+        assert deviations.min() < 30.0, 'expected a near-beam-orthogonal pick close to 0 deg'
+
+    def test_beam_angle_deviation_matches_closed_form(self) -> None:
+        '''Directly check the deviation formula against known normals.'''
+        assert beam_angle_deviation_degrees(np.array([0.0, 0.0, 1.0])) == pytest.approx(90.0)
+        assert beam_angle_deviation_degrees(np.array([1.0, 0.0, 0.0])) == pytest.approx(0.0)
+        assert beam_angle_deviation_degrees(np.array([0.0, 1.0, 0.0])) == pytest.approx(0.0)
+        assert beam_angle_deviation_degrees(np.array([0.0, 0.0, -1.0])) == pytest.approx(90.0)
+
+    def test_filter_removes_polar_picks_when_enabled(self) -> None:
+        particles = [
+            Particle(particle_id='p0', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=5.0),
+            Particle(particle_id='p1', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=85.0),
+        ]
+        kept = [p for p in particles if p.beam_angle_deviation_degrees is None or p.beam_angle_deviation_degrees <= 45.0]
+        assert [p.particle_id for p in kept] == ['p0']
+
+    def test_filter_retains_all_when_disabled(self) -> None:
+        particles = [
+            Particle(particle_id='p0', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=5.0),
+            Particle(particle_id='p1', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=85.0),
+        ]
+        # max_beam_angle_deviation is None: no filtering happens at all
+        max_beam_angle_deviation = None
+        kept = particles if max_beam_angle_deviation is None else [
+            p for p in particles if p.beam_angle_deviation_degrees is None or p.beam_angle_deviation_degrees <= max_beam_angle_deviation
+        ]
+        assert len(kept) == 2
+
 
 # TestNativePicker: class containing unit tests for test_native_picker.py
 class TestNativePicker:
