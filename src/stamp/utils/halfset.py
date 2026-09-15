@@ -7,12 +7,15 @@ import random
 
 # Import STAMP schema
 from stamp.schemas.particles import HalfSet, Particle
+from stamp.utils.log import log
 
 # assign_half_sets: deterministic A/B split; particles sharing a group key stay in the same half
 def assign_half_sets(particle_ids: list[str], seed: int, *, group_of: dict[str, str] | None = None) -> dict[str, HalfSet]:
     if not particle_ids:
+        log.error('Cannot assign half-sets to an empty list of particle IDs')
         raise ValueError('Cannot assign half-sets to an empty list of particle IDs')
     if len(set(particle_ids)) != len(particle_ids):
+        log.error('particle_ids contains duplicates; half-set assignment requires unique IDs')
         raise ValueError('particle_ids contains duplicates; half-set assignment requires unique IDs')
     group_of = group_of or {particle_id: particle_id for particle_id in particle_ids}
     groups: dict[str, list[str]] = {}
@@ -30,9 +33,11 @@ def assign_half_sets(particle_ids: list[str], seed: int, *, group_of: dict[str, 
 # validate_single_half_set: confirms each particle in given list belongs to the same half-set (to avoid mixes) 
 def validate_single_half_set(particles: list[Particle]) -> HalfSet:
     if not particles:
+        log.error('Cannot validate half-set membership of an empty particle list')
         raise ValueError('Cannot validate half-set membership of an empty particle list')
     half_sets = {particle.half_set for particle in particles}
     if len(half_sets) > 1:
+        log.error(f'Particle list mixes half-sets {sorted(h.value for h in half_sets)}')
         raise ValueError(f'Particle list mixes half-sets {sorted(h.value for h in half_sets)}')
     return half_sets.pop()
 

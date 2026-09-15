@@ -10,7 +10,8 @@ from pathlib import Path
 from stamp.tools.diagram.utils.config import DiagramConfig, NativePickerConfig
 from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
 from stamp.tools.diagram.utils.native import run_native_picker
-from stamp.tools.diagram.utils.plotting import BLUE, GREEN, GREY, ORANGE, RED, bare, draw_vesicles, finish, frame, show_segmentation
+from stamp.tools.diagram.utils.plotting import draw_vesicles
+from stamp.utils.plotting.core import BLUE, GREEN, GREY, ORANGE, RED, bare, finish, frame, show_segmentation
 
 # NativeRun: run the native picker on the mock scene and score its picks against the ground truth
 class NativeRun(DiagramRun):

@@ -3,7 +3,7 @@ STAMP: identification against predicted structures
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np, re, tomllib
+import json, matplotlib.pyplot as plt, mrcfile, numpy as np, re, tomllib
 from collections import defaultdict
 from pathlib import Path
 
@@ -19,6 +19,9 @@ from stamp.identify.fit import fit_candidate, rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.identify.simulate import simulate_density, to_comparable
 from stamp.utils.io import write_sidecar
+from stamp.utils.log import log
+from stamp.utils.plotting.core import PlotFormat, finish, plot_path
+from stamp.utils.plotting.identify import decoy_hist, score_heatmap
 
 # _CLASS_ID: leading cNN token of a class-average filename
 _CLASS_ID = re.compile(r'^(c\d+)')
@@ -42,7 +45,8 @@ def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
             grouped[match.group(1)].append(np.transpose(np.asarray(mrc.data), (2, 1, 0)))
             voxel_sizes[match.group(1)] = float(mrc.voxel_size.x)
     if not grouped:
-        raise ValueError(f'no cNN-named class averages in {directory}')
+        log.error(f'No cNN-named class averages in {directory}')
+        raise SystemExit(1)
     return {cid: (np.mean(volumes, axis=0), voxel_sizes[cid]) for cid, volumes in grouped.items()}
 
 # _score_panel: fit every candidate to every class average, returns {class_id: {candidate: score}}
@@ -56,6 +60,7 @@ def _score_panel(class_averages, panel, resolution, fitter, backend):
             simulated = simulate_density(candidate.structure_path, box_voxels, voxel_size, resolution)
             simulated = to_comparable(simulated, voxel_size, resolution, already_bandlimited=True)
             scores[candidate.name] = fit_candidate(comparable_average, simulated)
+            log.debug(f'{class_id}/{candidate.name}: score={scores[candidate.name]:.3f}')
         all_scores[class_id] = scores
     return all_scores
 
@@ -68,16 +73,21 @@ def run_identify(
     resolution: float | None,
     backend: str,
     fitter: str,
-    fetch_missing: bool
+    fetch_missing: bool,
+    make_plots: bool = True,
+    plot_format: str = 'tiff',
 ) -> None:
+    log.progress('Identifying classes against candidate panel')
     if resolution is None:
-        raise ValueError('resolution is required: use --resolution or set [stage.identify].resolution')
+        log.error('Resolution is required: use --resolution or set [stage.identify].resolution')
+        raise SystemExit(1)
     panel = load_candidate_panel(candidates, fetch_missing=fetch_missing)
-    print(f'Loaded {len(panel)} candidates.')
+    log.info(f'Loaded {len(panel)} candidates')
     class_averages = load_class_averages(classes)
-    print(f'Loaded {len(class_averages)} class averages.')
+    log.info(f'Loaded {len(class_averages)} class averages')
     inplane_aligned = _classify_was_inplane_aligned(classes)
 
+    log.progress(f'Fitting {len(panel)} candidates against {len(class_averages)} classes')
     real_scores = _score_panel(class_averages, panel, resolution, fitter, backend)
     results = [rank_candidates(class_id, scores, method=f'stamp-{fitter}') for class_id, scores in sorted(real_scores.items())]
 
@@ -85,12 +95,18 @@ def run_identify(
     (output_dir / 'identification.json').write_text(json.dumps([r.model_dump() for r in results], indent=2))
 
     decoy_control = None
+    real_best, decoy_best = None, None
     if decoy_classes is not None:
+        log.progress('Fitting candidates against decoy classes for control')
         decoy_scores = _score_panel(load_class_averages(decoy_classes), panel, resolution, fitter, backend)
         real_best = [max(s.values()) for s in real_scores.values()]
         decoy_best = [max(s.values()) for s in decoy_scores.values()]
         decoy_control = evaluate_decoy_control(real_best, decoy_best)
         (output_dir / 'decoy_control.json').write_text(json.dumps(decoy_control.model_dump(), indent=2))
+        if decoy_control.passed:
+            log.info('Decoy control passed')
+        else:
+            log.warning(f'Decoy control failed: {decoy_control.reason}')
 
     _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control, resolution, inplane_aligned)
 
@@ -111,7 +127,23 @@ def run_identify(
         inputs=[('class_averages', classes), ('candidates', candidates)]
         + ([('decoy_classes', decoy_classes)] if decoy_classes else []),
     )
-    print(f'Wrote identification for {len(results)} classes to {output_dir}')
+    log.info(f'Wrote identification for {len(results)} classes to {output_dir}')
+
+    if make_plots:
+        _plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir, plot_format)
+
+# _plot_identify: CC heatmap (+ decoy histogram, if a decoy control ran)
+def _plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir: Path, fmt: PlotFormat) -> None:
+    cluster_ids = [r.cluster_id for r in results]
+    names = sorted({name for scores in real_scores.values() for name in scores})
+    row_labels = [f'{r.cluster_id} = {r.candidate_protein} (score={r.fit_score:.2f})' for r in results]
+    fig, ax = plt.subplots(figsize=(6.5, 0.6 * len(cluster_ids) + 2))
+    score_heatmap(ax, cluster_ids, names, real_scores, row_labels=row_labels, title='identify: fit score per candidate')
+    finish(fig, plot_path(output_dir, 'identify_scores', fmt))
+    if decoy_control is not None:
+        fig, ax = plt.subplots(figsize=(5, 4))
+        decoy_hist(ax, real_best, decoy_best, decoy_control.passed)
+        finish(fig, plot_path(output_dir, 'decoy_control', fmt))
 
 # build_identify_commands: create ToolCommand for `stamp identify`
 def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
@@ -132,6 +164,8 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
         argv += ['--resolution', str(config.stage.identify.resolution)]
     if config.stage.identify.fetch_missing:
         argv.append('--fetch-missing')
+    argv.append('--plots' if config.plots.enabled else '--no-plots')
+    argv += ['--plot-format', config.plots.format]
     return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present

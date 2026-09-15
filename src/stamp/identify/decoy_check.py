@@ -8,6 +8,9 @@ from math import comb
 from statistics import mean, stdev
 from scipy.stats import mannwhitneyu
 
+# Import internal STAMP objects
+from stamp.utils.log import log
+
 # DecoyControlResult: outcome of comparing real and decoy fit-score distributions
 @dataclass
 class DecoyControlResult:
@@ -33,6 +36,7 @@ def evaluate_decoy_control(
     decoy_best = max(decoy_scores)
     decoy_spread = stdev(decoy_scores) if len(decoy_scores) > 1 else 0.0
     separation = (real_best - mean(decoy_scores)) / decoy_spread if decoy_spread > 0 else float('inf')
+    log.debug(f'Decoy control: real_best mean={sum(real_scores)/len(real_scores):.3f}, decoy_best mean={sum(decoy_scores)/len(decoy_scores):.3f}')
 
     if separation < min_separation_sigma:
         return DecoyControlResult(

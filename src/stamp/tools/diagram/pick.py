@@ -9,7 +9,8 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
-from stamp.tools.diagram.utils.plotting import BLUE, GREEN, GREY, ORANGE, RED, draw_vesicles, finish, frame, show_segmentation
+from stamp.tools.diagram.utils.plotting import draw_vesicles
+from stamp.utils.plotting.core import BLUE, GREEN, GREY, ORANGE, RED, finish, frame, show_segmentation
 
 # PickRun: only the scene is needed for the pick walkthrough (DiagramRun default)
 class PickRun(DiagramRun):

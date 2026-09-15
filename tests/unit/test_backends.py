@@ -140,5 +140,8 @@ class TestClusterBackend:
 
     def test_missing_sbatch_raises(self, monkeypatch):
         monkeypatch.setattr('shutil.which', lambda _name: None)
-        with pytest.raises(SystemExit, match='sbatch'):
-            select_runner('cluster')
+        messages: list[str] = []
+        monkeypatch.setattr('stamp.backends.factory.log.error', messages.append)
+        with pytest.raises(SystemExit):
+             select_runner('cluster')
+        assert any('sbatch' in message for message in messages)

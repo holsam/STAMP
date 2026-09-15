@@ -10,7 +10,10 @@ from scipy.ndimage import rotate
 # Import internal STAMP objects
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
-from stamp.tools.diagram.utils.plotting import GREEN, GREY, bare, class_average_grid, decoy_hist, finish, score_heatmap, structure_projection_scatter, subgrid_axes
+from stamp.tools.diagram.utils.plotting import structure_projection_scatter
+from stamp.utils.plotting.core import GREEN, GREY, bare, finish, subgrid_axes
+from stamp.utils.plotting.classify import class_average_grid
+from stamp.utils.plotting.identify import decoy_hist, score_heatmap
 
 # ORIENTATIONS: in-plane angles (degrees) shown for each simulated density map
 ORIENTATIONS = (0, 45, 90, 135)

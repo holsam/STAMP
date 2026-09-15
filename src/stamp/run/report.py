@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Import STAMP objects
 from stamp.run.orchestrate import RunOutcome
+from stamp.utils.log import log
 
 # _decoy_banner: the PASS/FAIL/NOT RUN line the report leads with
 def _decoy_banner(outcome: RunOutcome) -> str:
@@ -20,6 +21,7 @@ def _decoy_banner(outcome: RunOutcome) -> str:
 
 # write_report: write report.md and report.json
 def write_report(outcome: RunOutcome, output_dir: Path) -> tuple[Path, Path]:
+    log.debug(f'Writing report for output_dir={output_dir}')
     payload = {
         'decoy_control': outcome.decoy_control,
         'decoy_enabled': outcome.decoy_enabled,
@@ -34,6 +36,7 @@ def write_report(outcome: RunOutcome, output_dir: Path) -> tuple[Path, Path]:
     lines = [f'# STAMP run report', '', f'**{_decoy_banner(outcome)}**', '']
     failed = outcome.decoy_control is not None and not outcome.decoy_control['passed']
     if failed:
+        log.warning('Decoy control failed - downstream results should not be treated as trustworthy')
         lines += ['> The decoy control failed: a decoy class fits a predicted structure as',
                   '> well as the real data. Numbers below should not be treated as trustworthy.',
                   '']
@@ -66,4 +69,5 @@ def write_report(outcome: RunOutcome, output_dir: Path) -> tuple[Path, Path]:
 
     md_path = output_dir / 'report.md'
     md_path.write_text('\n'.join(lines) + '\n')
+    log.debug(f'Wrote {json_path} and {md_path}')
     return md_path, json_path

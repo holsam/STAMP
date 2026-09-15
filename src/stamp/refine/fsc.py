@@ -7,6 +7,9 @@ import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 
+# Import internal STAMP objects
+from stamp.utils.log import log
+
 # FSCResult: both curves plus the resolution read at the threshold
 @dataclass
 class FSCResult:
@@ -84,6 +87,7 @@ def compute_fsc(
     seed: int = 0,
 ) -> FSCResult:
     if half_map_a.shape != half_map_b.shape:
+        log.error('Half maps must have the same shape')
         raise ValueError('half maps must have the same shape')
     if mask is None:
         mask = soft_sphere_mask(half_map_a.shape)
@@ -105,11 +109,13 @@ def compute_fsc(
 
     box_voxels = half_map_a.shape[-1]
     frequencies = np.arange(n_shells) / (box_voxels * voxel_size_angstrom)
+    resolution = _resolution_at(corrected, frequencies, threshold)
+    log.debug(f'FSC computed: {resolution:.1f} A at threshold {threshold}')
     return FSCResult(
         frequencies_per_angstrom=frequencies,
         fsc_unmasked=unmasked,
         fsc_masked=corrected,
-        resolution_angstrom=_resolution_at(corrected, frequencies, threshold),
+        resolution_angstrom=resolution,
     )
 
 # write_fsc_files: fsc.txt (columns) and a minimal fsc.svg line plot

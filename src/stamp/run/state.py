@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Import STAMP objects
 from stamp.schemas.config import RunConfig
+from stamp.utils.log import log
 
 # STAGE_ORDER: pipeline stages in order
 STAGE_ORDER = ['pick', 'classify', 'identify', 'refine']
@@ -24,6 +25,7 @@ def _read_state(output_dir: Path) -> dict:
         try:
             return json.loads(path.read_text())
         except json.JSONDecodeError:
+            log.warning(f'{path} is not valid JSON, treating run state as empty')
             return {}
     return {}
 
@@ -38,6 +40,7 @@ def stage_dir(output_dir: Path, track: str, stage: str) -> Path:
 
 # mark_complete: record a stage as finished
 def mark_complete(output_dir: Path, track: str, stage: str) -> None:
+    log.debug(f'Marking {track}/{stage} complete')
     state = _read_state(output_dir)
     state.setdefault(track, {})[stage] = True
     _write_state(output_dir, state)
@@ -59,9 +62,12 @@ def stages_to_run(
     stop_after = config.run.stop_after or STAGE_ORDER[-1]
     planned = STAGE_ORDER[: STAGE_ORDER.index(stop_after) + 1]
     if force:
+        log.debug(f'stages_to_run: force={force}, from_stage={from_stage!r} -> {planned}')
         return planned
     if from_stage:
-        return planned[planned.index(from_stage):]
+        result = planned[planned.index(from_stage):]
+        log.debug(f'stages_to_run: force={force}, from_stage={from_stage!r} -> {result}')
+        return result
 
     decoy_stages = {'pick', 'classify'}
 
@@ -75,4 +81,6 @@ def stages_to_run(
         # identify consumes the decoy class averages
         return stage == 'identify' and not is_complete(output_dir, 'decoy', 'classify')
 
-    return [stage for stage in planned if incomplete(stage)]
+    result = [stage for stage in planned if incomplete(stage)]
+    log.debug(f'stages_to_run: force={force}, from_stage={from_stage!r} -> {result}')
+    return result

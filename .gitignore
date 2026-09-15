@@ -12,6 +12,9 @@ dist/
 wheels/
 *.egg-info
 
+# STAMP logs
+stamp.log
+
 # Tool input/output files
 *.pdb
 *.png

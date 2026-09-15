@@ -11,6 +11,7 @@ from typing import Literal
 from stamp.utils.halfset import assign_half_sets
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
+from stamp.utils.log import log
 
 # _components: complete-linkage groups of pick indices, each with diameter <= distance_threshold
 def _components(positions: np.ndarray, distance_threshold: float) -> dict[int, list[int]]:
@@ -34,6 +35,7 @@ def reconcile_picks(
     distance_threshold: float,
     tomogram_id: str,
 ) -> list[RawPick]:
+    log.debug(f'{tomogram_id}: reconciling {sum(len(v) for v in picks_by_picker.values())} raw picks across {len(picks_by_picker)} picker(s)')
     all_picks: list[RawPick] = []
     picker_of: list[str] = []
     for picker_name, picks in picks_by_picker.items():
@@ -89,7 +91,7 @@ def build_particle_set(
     particle_ids = [f'p{index:06d}' for index in range(len(reconciled_picks))]
     group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, reconciled_picks)}
     if len(set(group_of.values())) < 2:
-        print('WARNING: one tomogram only; half-sets are not independent (all particles in half A).')
+        log.warning('One tomogram only; half-sets are not independent (all particles in half A)')
     half_set_by_id = assign_half_sets(particle_ids, seed=half_set_seed, group_of=group_of)
     particles = [
         Particle(

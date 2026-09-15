@@ -59,6 +59,22 @@ def pick(
         Literal['local', 'mock'],
         typer.Option('--backend', help='Backend to use for processing.'),
     ] = 'local',
+    make_plots: Annotated[
+        bool,
+        typer.Option('--plots/--no-plots', help='Write consensus-pick position plots.'),
+    ] = True,
+    pick_plot_style: Annotated[
+        Literal['scatter', 'segmented', 'both'],
+        typer.Option('--pick-plot-style', help='Plot style to use.'),
+    ] = 'both',
+    plot_format: Annotated[
+        Literal['png', 'jpg', 'tiff', 'svg'],
+        typer.Option('--plot-format', help='Image format for static plots.'),
+    ] = 'tiff',
+    pick_zstack_movie: Annotated[
+        bool,
+        typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.'),
+    ] = True,
 ) -> None:
     '''Run particle picking, reconcile across pickers, and assign half-sets.'''
     # Validate provided pickers
@@ -87,4 +103,8 @@ def pick(
         distance_threshold=distance_threshold,
         half_set_seed=half_set_seed,
         backend=backend,
+        make_plots=make_plots,
+        pick_plot_style=pick_plot_style,
+        plot_format=plot_format,
+        pick_zstack_movie=pick_zstack_movie,
     )

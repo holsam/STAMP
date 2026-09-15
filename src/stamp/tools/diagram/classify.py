@@ -11,7 +11,8 @@ from sklearn.cluster import HDBSCAN
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
 from stamp.tools.diagram.utils.classify import radial_profile
-from stamp.tools.diagram.utils.plotting import CLUSTER_COLOURS, GREY, bare, class_average_grid, cluster_colour, finish, scatter_groups, scatter_labels, style_axis, subgrid_axes, tile_particles
+from stamp.utils.plotting.core import CLUSTER_COLOURS, GREY, bare, cluster_colour, finish, scatter_groups, style_axis, subgrid_axes, tile_particles
+from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
 # ClassifyRun: run classify through KMeans, then repeat the clustering with HDBSCAN
 class ClassifyRun(DiagramRun):
