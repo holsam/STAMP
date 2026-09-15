@@ -3,7 +3,7 @@ STAMP: refinement with enforced half-set independence
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np
+import json, matplotlib.pyplot as plt, mrcfile, numpy as np
 from pathlib import Path
 
 # Import STAMP objects
@@ -22,6 +22,8 @@ from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, ParticleSet
 from stamp.utils.io import write_sidecar
 from stamp.utils.log import log
+from stamp.utils.plotting.core import finish, plot_path
+from stamp.utils.plotting.refine import fsc_curve
 
 # _ADAPTERS: real refine adapters by --tool name
 _ADAPTERS = {'relion': RelionRefineAdapter, 'm': MRefineAdapter}
@@ -81,7 +83,9 @@ def run_refine(
     iterations: int,
     backend: str,
     voxel_size_angstrom: float,
-    combined_halfset: bool
+    combined_halfset: bool,
+    make_plots: bool = True,
+    plot_format: str = 'tiff',
 ) -> None:
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     assignments = [ClassAssignment.model_validate(row) for row in json.loads(class_assignments.read_text())]
@@ -127,6 +131,11 @@ def run_refine(
         write_fsc_files(fsc, tree['combined'])
         log.info(f'{target}: resolution {fsc.resolution_angstrom:.1f} A @ FSC=0.143')
 
+        if make_plots:
+            fig, ax = plt.subplots(figsize=(5, 4))
+            fsc_curve(ax, fsc.frequencies_per_angstrom, fsc.fsc_masked, fsc.resolution_angstrom)
+            finish(fig, plot_path(tree['combined'], f'fsc_{target}', plot_format))
+
         write_sidecar(
             tree['combined'],
             stage='refine',
@@ -170,4 +179,6 @@ def build_refine_commands(config, output_dir: Path) -> list[ToolCommand]:
     ]
     if config.stage.refine.mask is not None:
         argv += ['--mask', str(config.stage.refine.mask)]
+    argv.append('--plots' if config.plots.enabled else '--no-plots')
+    argv += ['--plot-format', config.plots.format]
     return [ToolCommand(tool='refine', argv=argv, working_directory=target, output_paths=[target])]

@@ -58,9 +58,17 @@ def refine(
         typer.Option('--backend', help='Backend to use for processing.'),
     ] = 'local',
     combined_halfset: Annotated[
-        bool, 
+        bool,
         typer.Option('--combined-halfset', help='Use a single combined refinement with an internal split.'),
     ] = False,
+    make_plots: Annotated[
+        bool,
+        typer.Option('--plots/--no-plots', help='Write FSC curve plots.'),
+    ] = True,
+    plot_format: Annotated[
+        Literal['png', 'jpg', 'tiff', 'svg'],
+        typer.Option('--plot-format', help='Image format for static plots.'),
+    ] = 'tiff',
 ) -> None:
     '''Refine identified classes with independent half-sets.'''
     refinefuncs.run_refine(
@@ -76,4 +84,6 @@ def refine(
         backend=backend,
         voxel_size_angstrom=voxel_size_angstrom,
         combined_halfset=combined_halfset,
+        make_plots=make_plots,
+        plot_format=plot_format,
     )
