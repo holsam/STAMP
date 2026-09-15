@@ -13,6 +13,7 @@ from stamp.picking.geometry import (
     downsample_points,
     exclude_near_boundary,
     extract_surface,
+    local_normalise,
     non_maximum_suppression,
     quaternion_from_reference_to,
     robust_normalise,
@@ -35,9 +36,7 @@ def _write_mrc(path: Path, volume: np.ndarray) -> None:
         mrc.set_data(volume.astype(np.float32))
 
 # _vesicle_with_particles: a hollow-sphere segmentation plus a tomogram with dark blobs outside the shell
-def _vesicle_with_particles(
-    shape=(60, 60, 60), radius=18.0, thickness=2.0, particle_offsets=((0, 0, 1),)
-):
+def _vesicle_with_particles(shape=(60, 60, 60), radius=18.0, thickness=2.0, particle_offsets=((0, 0, 1),)):
     '''A hollow sphere segmentation plus a matching tomogram with dark blobs planted just outside the shell along the given directions'''
     centre = np.array(shape) / 2.0
     grid = np.stack(np.meshgrid(*[np.arange(s) for s in shape], indexing='ij'), axis=-1)
@@ -72,6 +71,26 @@ def _pick(tomogram_id: str, position, picker: str, confidence=0.8, orientation=N
         confidence=confidence,
         source_picker=picker,
     )
+
+# _linear_gradient_vesicle: hollow-sphere segmentation on a tomogram whose background ramps linearly along x, with identical particle blobs planted at both ends
+def _linear_gradient_vesicle(shape=(80, 80, 120), radius=20.0, thickness=2.0) -> tuple[np.ndarray, np.ndarray]:
+    centre = np.array(shape) / 2.0
+    grid = np.stack(np.meshgrid(*[np.arange(s) for s in shape], indexing='ij'), axis=-1)
+    distance = np.linalg.norm(grid - centre, axis=-1)
+    segmentation = ((distance > radius - thickness) & (distance < radius + thickness)).astype(np.float32)
+    # Background ramps from 0 at x=0 to -4 at x=max to mimic thickness/defocus gradient
+    x_ramp = -4.0 * (np.arange(shape[2]) / (shape[2] - 1))
+    tomogram = np.broadcast_to(x_ramp[None, None, :], shape).astype(np.float32).copy()
+    # Small noise floor: real tomograms are never noiseless, and MAD needs ambient
+    # variance to behave as a stable scale estimator rather than tracking blob contamination directly
+    tomogram = tomogram + np.random.default_rng(0).normal(scale=0.3, size=shape).astype(np.float32)
+    tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
+    # Identical dark particle blobs just outside the shell, at low-x and high-x poles
+    for x_index in (shape[2] // 2 - int(radius) - 5, shape[2] // 2 + int(radius) + 5):
+        centre_particle = np.array([shape[0] / 2, shape[1] / 2, x_index])
+        particle_distance = np.linalg.norm(grid - centre_particle, axis=-1)
+        tomogram[particle_distance < 3.0] -= 3.0
+    return segmentation, tomogram
 
 # TestGeometry: class containing unit tests for test_geometry.py
 class TestGeometry:
@@ -125,14 +144,13 @@ class TestGeometry:
 
     def test_robust_normalise_handles_flat_input(self) -> None:
         '''A flat input normalises to zeros'''
-        np.testing.assert_array_equal(
-            robust_normalise(np.ones(10)), np.zeros(10)
-        )
+        normalised, _used_fallback = robust_normalise(np.ones(10))
+        np.testing.assert_array_equal(normalised, np.zeros(10))
 
     def test_robust_normalise_scales_outlier(self) -> None:
         '''A lone outlier normalises well above threshold'''
         values = np.concatenate([np.zeros(99), [100.0]])
-        normalised = robust_normalise(values)
+        normalised, _used_fallback = robust_normalise(values)
         assert normalised[-1] > 3.0
 
     def test_non_maximum_suppression_keeps_highest(self) -> None:
@@ -178,7 +196,7 @@ class TestGeometry:
         normals = np.tile([1.0, 0.0, 0.0], (vertices.shape[0], 1))
         n_points = vertices.shape[0]
         contaminated = int(np.where(ys == 20.0)[0][0])
-        _points, _n, scores = score_membrane_faces(tomo, vertices, normals, 3.0, 6.0, 3, -1)
+        _points, _n, scores, _used_fallback = score_membrane_faces(tomo, vertices, normals, 3.0, 6.0, 3, -1)
         assert scores.shape == (2 * n_points,)
         pos_face, neg_face = scores[:n_points], scores[n_points:]
         clean = [i for i in range(n_points) if i != contaminated]
@@ -204,6 +222,33 @@ class TestGeometry:
         rolled = compose_roll_about_normal(base, 73.0)
         moved = quaternion_to_matrix(rolled) @ np.array([0.0, 0.0, 1.0])
         assert np.allclose(moved, target, atol=1e-6)
+
+    def test_global_normalisation_biases_picks_toward_low_background_end(self, tmp_path: Path) -> None:
+        segmentation, tomogram = _linear_gradient_vesicle()
+        seg_path, tomo_path = tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc'
+        _write_mrc(seg_path, segmentation)
+        _write_mrc(tomo_path, tomogram)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=1.5, normalisation='global')
+        picks = pick_tomogram(seg_path, tomo_path, 'gradient', config)
+        # Both particles are equally strong so global threshold should favour low-background (high-x, deep-ramp) end
+        x_positions = [pick.position[0] for pick in picks]
+        assert len(x_positions) > 0
+        low_x_count = sum(1 for x in x_positions if x < tomogram.shape[2] / 2)
+        high_x_count = len(x_positions) - low_x_count
+        assert high_x_count > low_x_count
+
+    def test_local_normalisation_does_not_bias_picks(self, tmp_path: Path) -> None:
+        segmentation, tomogram = _linear_gradient_vesicle()
+        seg_path, tomo_path = tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc'
+        _write_mrc(seg_path, segmentation)
+        _write_mrc(tomo_path, tomogram)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=1.5, normalisation='local', local_radius_angstrom=250.0, min_local_neighbours=5)
+        picks = pick_tomogram(seg_path, tomo_path, 'gradient', config)
+        x_positions = [pick.position[0] for pick in picks]
+        assert len(x_positions) > 0
+        low_x_count = sum(1 for x in x_positions if x < tomogram.shape[2] / 2)
+        high_x_count = len(x_positions) - low_x_count
+        assert low_x_count > 0 and high_x_count > 0
 
 # TestNativePicker: class containing unit tests for test_native_picker.py
 class TestNativePicker:
@@ -273,6 +318,26 @@ class TestNativePicker:
         '''A density_sign other than +1 or -1 raises'''
         with pytest.raises(ValueError, match='density_sign'):
             NativePickerConfig(voxel_size_angstrom=10.0, density_sign=0)
+
+    def test_sparse_neighbourhood_falls_back_to_global(self) -> None:
+        rng = np.random.default_rng(0)
+        # A dense cluster near the origin, plus one isolated point far away with no neighbours within radius: the isolated point should fall back to global stats
+        dense_points = rng.normal(size=(50, 3)) * 5.0
+        isolated_point = np.array([[500.0, 500.0, 500.0]])
+        points = np.vstack([dense_points, isolated_point])
+        values = rng.normal(size=51)
+        normalised, used_fallback = local_normalise(values, points, radius_voxels=20.0, min_neighbours=10)
+        assert not used_fallback[:50].any()
+        assert used_fallback[50]
+        global_median = np.median(values)
+        global_mad = np.median(np.abs(values - global_median))
+        global_scale = 1.4826 * global_mad if global_mad > 0.0 else values.std()
+        expected_isolated = (values[50] - global_median) / global_scale
+        assert normalised[50] == pytest.approx(expected_isolated)
+
+    def test_robust_normalise_local_mode_requires_points(self) -> None:
+        with pytest.raises(ValueError):
+            robust_normalise(np.ones(10), mode='local')
 
 # TestConsensusRules: class containing tests for consensus rules (intersection/union)
 class TestConsensusRules:

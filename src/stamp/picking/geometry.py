@@ -7,6 +7,7 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 from scipy.spatial import cKDTree
 from skimage import measure
+from typing import Literal
 
 # Import internal STAMP objects
 from stamp.utils.log import log
@@ -70,16 +71,59 @@ def sample_along_normals(
     return densities.reshape(n_samples, points.shape[0]).mean(axis=0)
 
 # robust_normalise: median/MAD normalisation so score thresholds are comparable across tomograms
-def robust_normalise(values: np.ndarray) -> np.ndarray:
+def robust_normalise(
+    values: np.ndarray,
+    *,
+    mode: Literal['global', 'local'] = 'global',
+    points: np.ndarray | None = None,
+    local_radius_voxels: float | None = None,
+    min_local_neighbours: int = 20,
+) -> tuple[np.ndarray, np.ndarray]:
+    if mode == 'local':
+        if points is None or local_radius_voxels is None:
+            raise ValueError('local mode requires points and local_radius_voxels')
+        return local_normalise(values, points, local_radius_voxels, min_local_neighbours)
+
     median = np.median(values)
     mad = np.median(np.abs(values - median))
     if mad > 0.0:
         # 1.4826 makes MAD a consistent estimator of sigma for normal data
-        return (values - median) / (1.4826 * mad)
-    std = values.std()
-    if std == 0.0:
-        return np.zeros_like(values)
-    return (values - median) / std
+        scaled = (values - median) / (1.4826 * mad)
+    else:
+        std = values.std()
+        scaled = np.zeros_like(values) if std == 0.0 else (values - median) / std
+    return scaled, np.zeros_like(values, dtype=bool)
+
+# local_normalise: per-point median/MAD normalisation over a k-d tree neighbourhood
+def local_normalise(
+    values: np.ndarray,
+    points: np.ndarray,
+    radius_voxels: float,
+    min_neighbours: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    n_points = points.shape[0]
+    normalised = np.empty(n_points, dtype=np.float64)
+    used_fallback = np.zeros(n_points, dtype=bool)
+
+    global_median = np.median(values)
+    global_mad = np.median(np.abs(values - global_median))
+    global_scale = 1.4826 * global_mad if global_mad > 0.0 else (values.std() or 1.0)
+
+    tree = cKDTree(points)
+    neighbour_lists = tree.query_ball_point(points, r=radius_voxels)
+
+    for index, neighbours in enumerate(neighbour_lists):
+        if len(neighbours) < min_neighbours:
+            used_fallback[index] = True
+            normalised[index] = (values[index] - global_median) / global_scale
+            continue
+        local_values = values[neighbours]
+        local_median = np.median(local_values)
+        local_mad = np.median(np.abs(local_values - local_median))
+        local_scale = 1.4826 * local_mad if local_mad > 0.0 else global_scale
+        normalised[index] = (values[index] - local_median) / local_scale
+
+    return normalised, used_fallback
 
 # non_maximum_suppression: greedy non-maximum suppression, highest score first, returning indices of kept points
 def non_maximum_suppression(
@@ -149,14 +193,23 @@ def score_membrane_faces(
     offset_max_voxels: float,
     n_samples: int,
     density_sign: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    n_points = vertices.shape[0]
+    *,
+    mode: Literal['global', 'local'] = 'global',
+    local_radius_voxels: float | None = None,
+    min_local_neighbours: int = 20,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     raw = []
     face_normals = []
     for direction in (1, -1):
         densities = sample_along_normals(tomogram, vertices, normals, offset_min_voxels, offset_max_voxels, n_samples, direction)
         raw.append(density_sign * densities)
         face_normals.append(direction * normals)
-    scores = robust_normalise(np.concatenate(raw))
     points = np.concatenate([vertices, vertices])
-    return points, np.concatenate(face_normals), scores
+    scores, used_fallback = robust_normalise(
+        np.concatenate(raw),
+        mode=mode,
+        points=points,
+        local_radius_voxels=local_radius_voxels,
+        min_local_neighbours=min_local_neighbours,
+    )
+    return points, np.concatenate(face_normals), scores, used_fallback

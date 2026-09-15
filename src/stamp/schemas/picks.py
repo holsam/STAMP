@@ -12,6 +12,7 @@ class RawPick(BaseModel):
     orientation: tuple[float, float, float, float] | None = None
     confidence: float | None = None
     source_picker: str
+    metadata: dict = {}
 
     @field_validator('orientation')
     @classmethod

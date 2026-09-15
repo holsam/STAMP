@@ -5,6 +5,7 @@ STAMP: native membrane-guided, template-free picker
 # Import external dependencies
 import mrcfile, numpy as np
 from dataclasses import dataclass
+from typing import Literal
 
 # Import internal STAMP objects
 from stamp.picking.geometry import (
@@ -42,6 +43,12 @@ class NativePickerConfig:
     density_sign: int = -1
     # boundary for dropping surface points
     boundary_margin_angstrom: float | None = None
+    # score normalisation to use
+    normalisation: Literal['global', 'local'] = 'global'
+    # neighbourhood radius for local normalisation
+    local_radius_angstrom: float = 150.0
+    # minimum neighbours within local_radius_angstrom before falling back to global
+    min_local_neighbours: int = 20
 
     def __post_init__(self) -> None:
         if self.voxel_size_angstrom <= 0:
@@ -50,6 +57,10 @@ class NativePickerConfig:
             raise ValueError('density_sign must be +1 or -1.')
         if self.offset_max_angstrom < self.offset_min_angstrom:
             raise ValueError('offset_max_angstrom must be >= offset_min_angstrom.')
+        if self.local_radius_angstrom <= 0:
+            raise ValueError('local_radius_angstrom must be positive.')
+        if self.min_local_neighbours < 1:
+            raise ValueError('min_local_neighbours must be at least 1.')
 
     def to_voxels(self, angstrom: float) -> float:
         return angstrom / self.voxel_size_angstrom
@@ -86,17 +97,27 @@ def pick_tomogram(
     offset_min = config.to_voxels(config.offset_min_angstrom)
     offset_max = config.to_voxels(config.offset_max_angstrom)
     
-    points, outward_normals, scores = score_membrane_faces(tomogram, vertices, normals, offset_min, offset_max, config.n_samples, config.density_sign)
+    points, outward_normals, scores, used_fallback = score_membrane_faces(
+        tomogram, vertices, normals,
+        offset_min, offset_max,
+        config.n_samples, config.density_sign,
+        mode=config.normalisation,
+        local_radius_voxels=config.to_voxels(config.local_radius_angstrom),
+        min_local_neighbours=config.min_local_neighbours,
+    )
     above_threshold = scores >= config.n_mad
     n_candidates = points.shape[0]
-    points, outward_normals, scores = (
+    points, outward_normals, scores, used_fallback = (
         points[above_threshold],
         outward_normals[above_threshold],
         scores[above_threshold],
+        used_fallback[above_threshold],
     )
     log.debug(f'{tomogram_id}: {n_candidates} candidates before filtering, {points.shape[0]} kept')
     if points.shape[0] == 0:
         return []
+    if config.normalisation == 'local' and used_fallback.any():
+        log.debug(f'{tomogram_id}: {int(used_fallback.sum())}/{points.shape[0]} kept points used global fallback (too few neighbours within local_radius_angstrom)')
 
     kept = non_maximum_suppression(points, scores, config.to_voxels(config.min_particle_distance_angstrom))
 
@@ -117,6 +138,7 @@ def pick_tomogram(
                 orientation=quaternion_from_reference_to(normal_xyz),
                 confidence=float(scores[index]),
                 source_picker=PICKER_NAME,
+                metadata={'used_global_fallback': bool(used_fallback[index])} if config.normalisation == 'local' else {},
             )
         )
     return picks
