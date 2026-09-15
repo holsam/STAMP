@@ -285,7 +285,10 @@ def _score_surface(
     offset_min = config.to_voxels(config.offset_min_angstrom)
     offset_max = config.to_voxels(config.offset_max_angstrom)
 
-    return score_membrane_faces(tomogram, vertices, normals, offset_min, offset_max, config.n_samples, config.density_sign)
+    points, normals_out, scores, _used_fallback = score_membrane_faces(
+        tomogram, vertices, normals, offset_min, offset_max, config.n_samples, config.density_sign
+    )
+    return points, normals_out, scores
 
 
 # _finalise: assign decoy particle IDs and half-sets, returning a decoy ParticleSet or None if no decoys were generated
