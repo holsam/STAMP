@@ -18,6 +18,7 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.io import write_sidecar
 from stamp.utils.log import log
+from stamp.utils.plotting.picks import plot_positions
 
 # REAL_ADAPTERS: dictionary containing all implemented pickers
 REAL_ADAPTERS: dict[str, ToolAdapter] = {
@@ -122,6 +123,10 @@ def run_pick(
     distance_threshold,
     half_set_seed,
     backend,
+    make_plots: bool = True,
+    pick_plot_style: str = 'both',
+    plot_format: str = 'tiff',
+    pick_zstack_movie: bool = True,
 ) -> None:
     # Load manifests to check for matching files
     manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
@@ -190,6 +195,9 @@ def run_pick(
     )
 
     log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
+    if make_plots:
+        segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests}
+        plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie)
 
 # build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
 def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
@@ -205,4 +213,8 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--half-set-seed', str(config.stage.pick.half_set_seed),
         '--backend', 'local',
     ]
+    argv.append('--plots' if config.plots.enabled else '--no-plots')
+    argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
+    if config.plots.pick_zstack_movie:
+        argv.append('--pick-zstack-movie')
     return [ToolCommand(tool='pick', argv=argv, working_directory=target, output_paths=[target / 'particle_set.json'])]
