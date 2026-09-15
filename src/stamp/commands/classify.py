@@ -3,7 +3,7 @@ STAMP: unsupervised classification logic
 '''
 
 # Import external dependencies
-import json, numpy as np
+import json, matplotlib.pyplot as plt, numpy as np
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -11,6 +11,7 @@ from stamp.classify.align import align_inplane, roll_about_normal
 from stamp.classify.average import compute_class_averages, write_class_averages
 from stamp.classify.cluster import (
     ClusteringConfig,
+    ClusteringResult,
     label_to_cluster_id,
     match_clusters_across_halves,
     reduce_and_cluster,
@@ -25,6 +26,8 @@ from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.utils.io import write_sidecar
 from stamp.utils.log import log
+from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
+from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
 # run_classify: cluster picked particles by structural similarity
 def run_classify(
@@ -47,6 +50,8 @@ def run_classify(
     azimuthal_modes = 4,
     min_radius_fraction = 0.25,
     n_azimuthal_samples = 64,
+    make_plots: bool = True,
+    plot_format: str = 'tiff',
 ) -> None:
     log.progress('Classifying particle set')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
@@ -112,9 +117,9 @@ def run_classify(
     if not strict_halfset_independence:
         log.warning('--no-strict-halfset-independence used, half-A and half-B particles are clustered together; FSC built on these classes will be inflated')
     if strict_halfset_independence:
-        assignments = _classify_strict(kept, subvolumes, features, config, output_dir, voxel_size_angstrom, align_settings)
+        assignments, result_by_half, averages_by_half = _classify_strict(kept, subvolumes, features, config, output_dir, voxel_size_angstrom, align_settings)
     else:
-        assignments = _classify_combined(kept, subvolumes, features, config, output_dir, voxel_size_angstrom, align_settings)
+        assignments, result_by_half, averages_by_half = _classify_combined(kept, subvolumes, features, config, output_dir, voxel_size_angstrom, align_settings)
 
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
@@ -149,6 +154,25 @@ def run_classify(
         + [(f'raw_tomogram:{stem}', path) for stem, path in sorted(tomogram_paths.items())],
     )
     log.info(f'Wrote {len(assignments)} class assignments to {assignments_path}')
+    if make_plots:
+        _plot_classify(result_by_half, averages_by_half, output_dir, plot_format)
+
+# _plot_classify: create plots (PCA embedding scatter + class-average thumbnail grid)
+def _plot_classify(result_by_half: dict[str, ClusteringResult], averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]], output_dir: Path, fmt: PlotFormat) -> None:
+    halves = sorted(result_by_half)
+    fig, axes = plt.subplots(1, len(halves), figsize=(5.5 * len(halves), 4), squeeze=False)
+    for ax, half in zip(axes[0], halves):
+        result = result_by_half[half]
+        scatter_labels(ax, result.embedding[:, :2], result.labels, f'half {half}: PCA -> {result.labels.max() + 1} cluster(s)')
+    finish(fig, plot_path(output_dir, 'embedding', fmt))
+
+    for half, averages in averages_by_half.items():
+        ids = sorted(averages)
+        if not ids:
+            continue
+        fig, axes = plt.subplots(1, max(2, len(ids)), figsize=(2.6 * max(2, len(ids)), 3), squeeze=False)
+        class_average_grid(axes[0], ids, {cid: central_slice(volume) for cid, (volume, _count) in averages.items()}, lambda c: c)
+        finish(fig, plot_path(output_dir, f'class_averages_half{half}', fmt))
 
 # build_classify_commands: create ToolCommand for `stamp classify`
 def build_classify_commands(config, output_dir: Path, track: str = 'real') -> list[ToolCommand]:
@@ -177,6 +201,8 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
         argv.append('--no-strict-halfset-independence')
     if not settings.inplane_alignment:
         argv.append('--no-inplane-alignment')
+    argv.append('--plots' if config.plots.enabled else '--no-plots')
+    argv += ['--plot-format', config.plots.format]
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
 # _resolve_and_apply_inplane: estimate per-row azimuth, return rolled subvolumes and {row: angle}
@@ -203,7 +229,7 @@ def _classify_combined(
     output_dir: Path,
     voxel_size_angstrom: float,
     align_settings: dict,
-) -> list[ClassAssignment]:
+) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
     result = reduce_and_cluster(features, config)
     cluster_ids = [label_to_cluster_id(int(label)) for label in result.labels]
 
@@ -211,14 +237,16 @@ def _classify_combined(
 
     aligned, angles = _resolve_and_apply_inplane(subvolumes, cluster_ids, align_settings)
 
+    averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
     for half_set in (HalfSet.A, HalfSet.B):
         mask = np.array([p.half_set == half_set for p in particles])
         if not mask.any():
             continue
         averages = compute_class_averages(aligned[mask], [cid for cid, keep in zip(cluster_ids, mask) if keep])
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_set.value)
+        averages_by_half[half_set.value] = averages
 
-    return [
+    assignments = [
         ClassAssignment(
             particle_id=particle.particle_id,
             cluster_id=cluster_id,
@@ -227,6 +255,7 @@ def _classify_combined(
         )
         for index, (particle, cluster_id) in enumerate(zip(particles, cluster_ids))
     ]
+    return assignments, {'combined': result}, averages_by_half
 
 # _classify_strict: cluster each half independently, then match clusters by centroid
 def _classify_strict(
@@ -237,7 +266,7 @@ def _classify_strict(
     output_dir: Path,
     voxel_size_angstrom: float,
     align_settings: dict,
-) -> list[ClassAssignment]:
+) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
     half_a, half_b = split_by_half_set(list(particles))
     index_of = {particle.particle_id: i for i, particle in enumerate(particles)}
     indices_a = np.array([index_of[p.particle_id] for p in half_a])
@@ -254,6 +283,8 @@ def _classify_strict(
         log.debug(f'  c{label_b:02d} -> c{label_a:02d}  d={distance:.3f}')
 
     assignments: list[ClassAssignment] = []
+    result_by_half: dict[str, ClusteringResult] = {}
+    averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
     for half_label, half_particles, indices, result, remap in (
         ('A', half_a, indices_a, result_a, None),
         ('B', half_b, indices_b, result_b, matches),
@@ -262,6 +293,8 @@ def _classify_strict(
         aligned, local_angles = _resolve_and_apply_inplane(subvolumes[indices], cluster_ids, align_settings)
         averages = compute_class_averages(aligned, cluster_ids)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_label)
+        result_by_half[half_label] = result
+        averages_by_half[half_label] = averages
         for local_row, (particle, label) in enumerate(zip(half_particles, result.labels)):
             cluster_id = label_to_cluster_id(int(label))
             if remap is not None and int(label) in remap:
@@ -274,7 +307,7 @@ def _classify_strict(
                     inplane_angle_degrees=local_angles.get(local_row),
                 )
             )
-    return assignments
+    return assignments, result_by_half, averages_by_half
 
 # _report_clusters: echo PCA variance and per-cluster sizes
 def _report_clusters(cluster_ids: list[str], explained_variance: np.ndarray) -> None:

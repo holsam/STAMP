@@ -23,6 +23,7 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.io import write_sidecar
 from stamp.utils.log import log
+from stamp.utils.plotting.picks import plot_positions
 
 # METHODS: decoy generation methods
 METHODS = (METHOD_REJECTED_SURFACE, METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE)
@@ -44,6 +45,10 @@ def run_decoy(
     n_synthetic_tomograms,
     synthetic_shape,
     seed,
+    make_plots: bool = True,
+    pick_plot_style: str = 'both',
+    plot_format: str = 'tiff',
+    pick_zstack_movie: bool = True,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data'''
     log.progress(f'Generating decoy dataset ({method})')
@@ -137,6 +142,10 @@ def run_decoy(
         ),
     )
     log.info(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
+    if make_plots:
+        segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests} if method != METHOD_SYNTHETIC_NOISE else {}
+        style = pick_plot_style if segmentation_paths else 'scatter'
+        plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths))
 
 
 # build_decoy_commands: create ToolCommand for `stamp decoy`
@@ -153,6 +162,10 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--raw-dir', str(config.run.raw_tomogram_dir),
         '--seed', str(config.stage.pick.half_set_seed),
     ]
+    argv.append('--plots' if config.plots.enabled else '--no-plots')
+    argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
+    if config.plots.pick_zstack_movie:
+        argv.append('--pick-zstack-movie')
     return [ToolCommand(tool='decoy', argv=argv, working_directory=target, output_paths=[target / 'decoy_particle_set.json'])]
 
 

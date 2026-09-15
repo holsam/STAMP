@@ -46,6 +46,14 @@ def identify(
     ] = 'native',
     fetch_missing: Annotated[bool, typer.Option('--fetch-missing',
         help='Fetch an AlphaFold model when a candidate has no local structure_path.')] = False,
+    make_plots: Annotated[
+        bool,
+        typer.Option('--plots/--no-plots', help='Write fit-score heatmap and decoy-control histogram plots.'),
+    ] = True,
+    plot_format: Annotated[
+        Literal['png', 'jpg', 'tiff', 'svg'],
+        typer.Option('--plot-format', help='Image format for static plots.'),
+    ] = 'tiff',
 ) -> None:
     '''Fit predicted structures to class averages and score candidates.'''
     identifyfuncs.run_identify(
@@ -57,4 +65,6 @@ def identify(
         backend=backend,
         fitter=fitter,
         fetch_missing=fetch_missing,
+        make_plots=make_plots,
+        plot_format=plot_format,
     )

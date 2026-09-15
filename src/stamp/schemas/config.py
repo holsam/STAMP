@@ -21,6 +21,13 @@ class RunSettings(_Strict):
     backend: Literal['local', 'mock', 'cluster'] = 'local'
     stop_after: Literal['pick', 'classify', 'identify', 'refine'] | None = None
 
+# PlotSettings: the [plots] table
+class PlotSettings(_Strict):
+    enabled: bool = True
+    format: Literal['png', 'jpg', 'tiff', 'svg'] = 'tiff'
+    pick_style: Literal['scatter', 'segmented', 'both'] = 'both'
+    pick_zstack_movie: bool = False
+
 # DecoySettings: the [decoy] table
 class DecoySettings(_Strict):
     enabled: bool = True
@@ -79,6 +86,7 @@ class StageConfigs(_Strict):
 class RunConfig(_Strict):
     run: RunSettings
     decoy: DecoySettings = DecoySettings()
+    plots: PlotSettings = PlotSettings()
     stage: StageConfigs
 
     @model_validator(mode='after')

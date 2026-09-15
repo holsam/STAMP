@@ -3,7 +3,7 @@ STAMP: identification against predicted structures
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np, re, tomllib
+import json, matplotlib.pyplot as plt, mrcfile, numpy as np, re, tomllib
 from collections import defaultdict
 from pathlib import Path
 
@@ -20,6 +20,8 @@ from stamp.identify.panel import load_candidate_panel
 from stamp.identify.simulate import simulate_density, to_comparable
 from stamp.utils.io import write_sidecar
 from stamp.utils.log import log
+from stamp.utils.plotting.core import PlotFormat, finish, plot_path
+from stamp.utils.plotting.identify import decoy_hist, score_heatmap
 
 # _CLASS_ID: leading cNN token of a class-average filename
 _CLASS_ID = re.compile(r'^(c\d+)')
@@ -71,7 +73,9 @@ def run_identify(
     resolution: float | None,
     backend: str,
     fitter: str,
-    fetch_missing: bool
+    fetch_missing: bool,
+    make_plots: bool = True,
+    plot_format: str = 'tiff',
 ) -> None:
     log.progress('Identifying classes against candidate panel')
     if resolution is None:
@@ -91,6 +95,7 @@ def run_identify(
     (output_dir / 'identification.json').write_text(json.dumps([r.model_dump() for r in results], indent=2))
 
     decoy_control = None
+    real_best, decoy_best = None, None
     if decoy_classes is not None:
         log.progress('Fitting candidates against decoy classes for control')
         decoy_scores = _score_panel(load_class_averages(decoy_classes), panel, resolution, fitter, backend)
@@ -124,6 +129,22 @@ def run_identify(
     )
     log.info(f'Wrote identification for {len(results)} classes to {output_dir}')
 
+    if make_plots:
+        _plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir, plot_format)
+
+# _plot_identify: CC heatmap (+ decoy histogram, if a decoy control ran)
+def _plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir: Path, fmt: PlotFormat) -> None:
+    cluster_ids = [r.cluster_id for r in results]
+    names = sorted({name for scores in real_scores.values() for name in scores})
+    row_labels = [f'{r.cluster_id} = {r.candidate_protein} (score={r.fit_score:.2f})' for r in results]
+    fig, ax = plt.subplots(figsize=(6.5, 0.6 * len(cluster_ids) + 2))
+    score_heatmap(ax, cluster_ids, names, real_scores, row_labels=row_labels, title='identify: fit score per candidate')
+    finish(fig, plot_path(output_dir, 'identify_scores', fmt))
+    if decoy_control is not None:
+        fig, ax = plt.subplots(figsize=(5, 4))
+        decoy_hist(ax, real_best, decoy_best, decoy_control.passed)
+        finish(fig, plot_path(output_dir, 'decoy_control', fmt))
+
 # build_identify_commands: create ToolCommand for `stamp identify`
 def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
     target = stage_dir(output_dir, 'real', 'identify')
@@ -143,6 +164,8 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
         argv += ['--resolution', str(config.stage.identify.resolution)]
     if config.stage.identify.fetch_missing:
         argv.append('--fetch-missing')
+    argv.append('--plots' if config.plots.enabled else '--no-plots')
+    argv += ['--plot-format', config.plots.format]
     return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present

@@ -87,5 +87,5 @@ class TestPickCommand:
                 'stamp-native',
             ],
         )
-        assert "no raw tomogram matching 'orphan'" in result.output
+        assert 'No raw tomogram matching orphan, skipping' in result.output
         assert result.exit_code == 0, result.output

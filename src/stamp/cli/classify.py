@@ -93,6 +93,14 @@ def classify(
         int,
         typer.Option(help='Azimuthal sampling points (must be at least 2*(modes+1)).'),
     ] = 64,
+    make_plots: Annotated[
+        bool,
+        typer.Option('--plots/--no-plots', help='Write embedding and class-average plots.'),
+    ] = True,
+    plot_format: Annotated[
+        Literal['png', 'jpg', 'tiff', 'svg'],
+        typer.Option('--plot-format', help='Image format for static plots.'),
+    ] = 'tiff',
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
     classifyfuncs.run_classify(
@@ -115,4 +123,6 @@ def classify(
         azimuthal_modes=azimuthal_modes,
         min_radius_fraction=min_radius_fraction,
         n_azimuthal_samples=n_azimuthal_samples,
+        make_plots=make_plots,
+        plot_format=plot_format,
     )
