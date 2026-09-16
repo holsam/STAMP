@@ -58,6 +58,10 @@ class NativePickerConfig:
     local_radius_angstrom: float = 150.0
     # minimum neighbours within local_radius_angstrom before falling back to global
     min_local_neighbours: int = 20
+    # scoring mode to use for particle radial density
+    scoring_mode: Literal['mean', 'profile'] = 'mean'
+    # width (Angstrom) of the expected profile bump
+    profile_width_angstrom: float | None = None
 
     def __post_init__(self) -> None:
         if self.voxel_size_angstrom <= 0:
@@ -73,6 +77,10 @@ class NativePickerConfig:
             raise ValueError('local_radius_angstrom must be positive.')
         if self.min_local_neighbours < 1:
             raise ValueError('min_local_neighbours must be at least 1.')
+        if self.scoring_mode not in ('mean', 'profile'):
+            raise ValueError('scoring_mode must be "mean" or "profile".')
+        if self.profile_width_angstrom is not None and self.profile_width_angstrom <= 0:
+            raise ValueError('profile_width_angstrom must be positive.')
 
     def to_voxels(self, angstrom: float) -> float:
         return angstrom / self.voxel_size_angstrom
@@ -118,22 +126,27 @@ def pick_tomogram(
 
     offset_windows_voxels = [(config.to_voxels(offset_min), config.to_voxels(offset_max)) for offset_min, offset_max in config.offset_windows_angstrom]
 
-    points, outward_normals, scores, winning_window, used_fallback = score_membrane_faces(
+    profile_width_voxels = (config.to_voxels(config.profile_width_angstrom) if config.profile_width_angstrom is not None else None)
+    points, outward_normals, scores, winning_window, used_fallback, mean_scores, profile_scores = score_membrane_faces(
         tomogram, vertices, normals,
         offset_windows_voxels,
         config.n_samples, config.density_sign,
+        scoring_mode=config.scoring_mode,
+        profile_width_voxels=profile_width_voxels,
         mode=config.normalisation,
         local_radius_voxels=config.to_voxels(config.local_radius_angstrom),
         min_local_neighbours=config.min_local_neighbours,
     )
     above_threshold = scores >= config.effective_n_mad
     n_candidates = points.shape[0]
-    points, outward_normals, scores, winning_window, used_fallback = (
+    points, outward_normals, scores, winning_window, used_fallback, mean_scores, profile_scores = (
         points[above_threshold],
         outward_normals[above_threshold],
         scores[above_threshold],
         winning_window[above_threshold],
         used_fallback[above_threshold],
+        mean_scores[above_threshold],
+        profile_scores[above_threshold],
     )
     log.debug(f'{tomogram_id}: {n_candidates} candidates before filtering, {points.shape[0]} kept')
     if points.shape[0] == 0:
@@ -163,6 +176,8 @@ def pick_tomogram(
                 metadata={'used_global_fallback': bool(used_fallback[index])} if config.normalisation == 'local' else {},
                 beam_angle_deviation_degrees=beam_angle_deviation_degrees(normal_xyz),
                 offset_window_angstrom=config.offset_windows_angstrom[int(winning_window[index])],
+                mean_score=float(mean_scores[index]),
+                profile_score=float(profile_scores[index]),
             )
         )
     return picks

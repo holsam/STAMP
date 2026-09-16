@@ -145,7 +145,9 @@ def _count_above_threshold_uncorrected(tmp_path: Path, config: NativePickerConfi
     inside = exclude_near_boundary(vertices, segmentation.shape, config.to_voxels(config.max_offset_angstrom))
     vertices, normals = vertices[inside], normals[inside]
     windows = [(config.to_voxels(lo), config.to_voxels(hi)) for lo, hi in config.offset_windows_angstrom]
-    _points, _n, scores, _w, _used_fallback = score_membrane_faces(tomogram, vertices, normals, windows, config.n_samples, config.density_sign)
+    _points, _n, scores, _w, _used_fallback, _mean, _profile = score_membrane_faces(
+        tomogram, vertices, normals, windows, config.n_samples, config.density_sign, scoring_mode=config.scoring_mode,
+    )
     return int(np.sum(scores >= n_mad))
 
 # TestGeometry: class containing unit tests for test_geometry.py
@@ -252,7 +254,7 @@ class TestGeometry:
         normals = np.tile([1.0, 0.0, 0.0], (vertices.shape[0], 1))
         n_points = vertices.shape[0]
         contaminated = int(np.where(ys == 20.0)[0][0])
-        _points, _n, scores, _w, _used_fallback = score_membrane_faces(tomo, vertices, normals, [(3.0, 6.0)], 3, -1)
+        _points, _n, scores, _w, _used_fallback, _mean, _profile = score_membrane_faces(tomo, vertices, normals, [(3.0, 6.0)], 3, -1)
         assert scores.shape == (2 * n_points,)
         pos_face, neg_face = scores[:n_points], scores[n_points:]
         clean = [i for i in range(n_points) if i != contaminated]
@@ -270,7 +272,7 @@ class TestGeometry:
         vertices = np.array([[20.0, 20.0, 20.0]])
         normals = np.array([[0.0, 0.0, 1.0]])
         windows = [(2.0, 10.0), (30.0, 40.0)]
-        _points, _n, scores, winning_window, _used_fallback = score_membrane_faces(tomo, vertices, normals, windows, 5, -1)
+        _points, _n, scores, winning_window, _used_fallback, _mean, _profile = score_membrane_faces(tomo, vertices, normals, windows, 5, -1)
         # two faces per point; the +x face (index 0) sees the density, the -x face (index 1) sees nothing
         assert winning_window[0] == 1
         assert scores[0] > scores[1]
@@ -310,7 +312,7 @@ class TestGeometry:
         seg_path, tomo_path = tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc'
         _write_mrc(seg_path, segmentation)
         _write_mrc(tomo_path, tomogram)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=1.5, normalisation='global')
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=1.5, normalisation='global', scoring_mode='mean')
         picks = pick_tomogram(seg_path, tomo_path, 'gradient', config)
         # Both particles are equally strong so global threshold should favour low-background (high-x, deep-ramp) end
         x_positions = [pick.position[0] for pick in picks]
@@ -324,7 +326,7 @@ class TestGeometry:
         seg_path, tomo_path = tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc'
         _write_mrc(seg_path, segmentation)
         _write_mrc(tomo_path, tomogram)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=1.5, normalisation='local', local_radius_angstrom=250.0, min_local_neighbours=5)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=1.5, normalisation='local', local_radius_angstrom=250.0, min_local_neighbours=5, scoring_mode='mean')
         picks = pick_tomogram(seg_path, tomo_path, 'gradient', config)
         x_positions = [pick.position[0] for pick in picks]
         assert len(x_positions) > 0
@@ -501,8 +503,8 @@ class TestNativePicker:
         _write_mrc(tmp_path / 'tomo.mrc', tomogram)
 
         n_mad = 2.5
-        single = NativePickerConfig(voxel_size_angstrom=10.0, offset_windows_angstrom=((40.0, 80.0),), n_mad=n_mad)
-        multi = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=n_mad)  # default 4 windows
+        single = NativePickerConfig(voxel_size_angstrom=10.0, offset_windows_angstrom=((40.0, 80.0),), n_mad=n_mad, scoring_mode='mean')
+        multi = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=n_mad, scoring_mode='mean')  # default 4 windows
 
         single_picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', single)
         multi_picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', multi)

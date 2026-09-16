@@ -55,7 +55,9 @@ def sample_along_normals(
     offset_max_voxels: float,
     n_samples: int,
     direction: int,
-) -> np.ndarray:
+    *,
+    return_samples: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     if direction not in (1, -1):
         raise ValueError('direction must be +1 or -1.')
     if n_samples < 1:
@@ -69,7 +71,38 @@ def sample_along_normals(
     densities = map_coordinates(
         tomogram.astype(np.float32), flat, order=1, mode='nearest'
     )
-    return densities.reshape(n_samples, points.shape[0]).mean(axis=0)
+    reshaped = densities.reshape(n_samples, points.shape[0])  # (n_samples, N)
+    mean = reshaped.mean(axis=0)
+    if return_samples:
+        return mean, reshaped.T  # profile: (N, n_samples), sample order matches offsets
+    return mean
+
+# profile_correlation_scores: Pearson correlation of each point's sign-corrected radial profile against a Gaussian bump centred at peak_offset_voxels with the given width
+def profile_correlation_scores(
+    profiles: np.ndarray,
+    offsets_voxels: np.ndarray,
+    peak_offset_voxels: float,
+    width_voxels: float,
+    density_sign: int,
+) -> np.ndarray:
+    if width_voxels <= 0:
+        raise ValueError('width_voxels must be positive.')
+    if profiles.shape[1] < 3:
+        raise ValueError('Profile scoring needs at least 3 samples per point to be meaningful.')
+    expected = np.exp(-0.5 * ((offsets_voxels - peak_offset_voxels) / width_voxels) ** 2)
+    expected_centred = expected - expected.mean()
+    expected_norm = np.sqrt(np.sum(expected_centred**2))
+    if expected_norm == 0.0:
+        raise ValueError('Expected profile has zero variance; widen width_voxels or move the peak inside the offset window.')
+    signed = density_sign * profiles
+    signed_centred = signed - signed.mean(axis=1, keepdims=True)
+    numerator = signed_centred @ expected_centred
+    signed_norm = np.sqrt(np.sum(signed_centred**2, axis=1))
+    # points with a flat profile (zero variance) correlate with nothing; score them 0 rather than NaN
+    return np.divide(
+        numerator, signed_norm * expected_norm,
+        out=np.zeros_like(numerator), where=signed_norm > 0,
+    )
 
 # robust_normalise: median/MAD normalisation so score thresholds are comparable across tomograms
 def robust_normalise(
@@ -185,7 +218,7 @@ def exclude_near_boundary(points: np.ndarray, shape: tuple[int, ...], margin_vox
     upper = np.all(points <= (np.array(shape) - 1 - margin_voxels), axis=1)
     return lower & upper
 
-# score_membrane_faces: sample both faces of every surface point across multiple offset windows
+# score_membrane_faces: sample both faces of every surface point across multiple offset windows, scoring each window by mean density and by radial-profile shape
 def score_membrane_faces(
     tomogram: np.ndarray,
     vertices: np.ndarray,
@@ -194,10 +227,12 @@ def score_membrane_faces(
     n_samples: int,
     density_sign: int,
     *,
+    scoring_mode: Literal['mean', 'profile'] = 'mean',
+    profile_width_voxels: float | None = None,
     mode: Literal['global', 'local'] = 'global',
     local_radius_voxels: float | None = None,
     min_local_neighbours: int = 20,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if len(offset_windows_voxels) == 0:
         raise ValueError('offset_windows_voxels must contain at least one window.')
 
@@ -206,22 +241,33 @@ def score_membrane_faces(
 
     n_windows = len(offset_windows_voxels)
     window_scores = np.empty((n_windows, points.shape[0]))
+    window_mean_scores = np.empty((n_windows, points.shape[0]))
+    window_profile_scores = np.empty((n_windows, points.shape[0]))
     window_fallback = np.empty((n_windows, points.shape[0]), dtype=bool)
     for window_index, (offset_min_voxels, offset_max_voxels) in enumerate(offset_windows_voxels):
-        raw = [density_sign * sample_along_normals(tomogram, vertices, normals, offset_min_voxels, offset_max_voxels, n_samples, direction) for direction in (1, -1)]
-        window_scores[window_index], window_fallback[window_index] = robust_normalise(
-            np.concatenate(raw),
-            mode=mode,
-            points=points,
-            local_radius_voxels=local_radius_voxels,
-            min_local_neighbours=min_local_neighbours,
-        )
+        means, profiles = zip(*[sample_along_normals(tomogram, vertices, normals, offset_min_voxels, offset_max_voxels, n_samples, direction, return_samples=True) for direction in (1, -1)])
+        raw_means = density_sign * np.concatenate(means)
+        pooled_profiles = np.concatenate(profiles, axis=0)
+
+        offsets_voxels = np.linspace(offset_min_voxels, offset_max_voxels, n_samples)
+        peak_voxels = (offset_min_voxels + offset_max_voxels) / 2.0  # window's own midpoint
+        width_voxels = profile_width_voxels if profile_width_voxels is not None else (offset_max_voxels - offset_min_voxels) / 4.0
+        raw_profile = profile_correlation_scores(pooled_profiles, offsets_voxels, peak_voxels, width_voxels, density_sign)
+
+        window_mean_scores[window_index], mean_fallback = robust_normalise(raw_means, mode=mode, points=points, local_radius_voxels=local_radius_voxels, min_local_neighbours=min_local_neighbours)
+        window_profile_scores[window_index], profile_fallback = robust_normalise(raw_profile, mode=mode, points=points, local_radius_voxels=local_radius_voxels, min_local_neighbours=min_local_neighbours)
+        if scoring_mode == 'profile':
+            window_scores[window_index], window_fallback[window_index] = window_profile_scores[window_index], profile_fallback
+        else:
+            window_scores[window_index], window_fallback[window_index] = window_mean_scores[window_index], mean_fallback
 
     winning_window = np.argmax(window_scores, axis=0)
     point_index = np.arange(points.shape[0])
     scores = window_scores[winning_window, point_index]
+    mean_scores = window_mean_scores[winning_window, point_index]
+    profile_scores = window_profile_scores[winning_window, point_index]
     used_fallback = window_fallback[winning_window, point_index]
-    return points, face_normals, scores, winning_window, used_fallback
+    return points, face_normals, scores, winning_window, used_fallback, mean_scores, profile_scores
 
 # max_order_statistic_offset: approximate upward bias, in normalised score units, of the maximum of n_windows independent standard-normal scores
 def max_order_statistic_offset(n_windows: int) -> float:
