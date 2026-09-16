@@ -252,6 +252,7 @@ def _classify_combined(
             cluster_id=cluster_id,
             classifier='stamp-native-classifier',
             inplane_angle_degrees=angles.get(index),
+            vesicle_id=particle.vesicle_id,
         )
         for index, (particle, cluster_id) in enumerate(zip(particles, cluster_ids))
     ]
@@ -305,6 +306,7 @@ def _classify_strict(
                     cluster_id=cluster_id,
                     classifier='stamp-native-classifier-strict',
                     inplane_angle_degrees=local_angles.get(local_row),
+                    vesicle_id=particle.vesicle_id,
                 )
             )
     return assignments, result_by_half, averages_by_half
