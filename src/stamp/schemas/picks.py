@@ -19,6 +19,7 @@ class RawPick(BaseModel):
     mean_score: float | None = None
     # score under profile-shape scoring
     profile_score: float | None = None
+    vesicle_id: str | None = None
 
     @field_validator('orientation')
     @classmethod
