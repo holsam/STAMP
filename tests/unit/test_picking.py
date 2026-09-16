@@ -23,6 +23,11 @@ from stamp.picking.geometry import (
     score_membrane_faces
 )
 from stamp.picking.native import NativePickerConfig, pick_tomogram
+from stamp.picking.vesicles import (
+    load_vesicle_labels,
+    vesicle_ids_at,
+    vesicle_surface_area_angstrom2,
+)
 from stamp.schemas.particles import HalfSet, Particle
 from stamp.schemas.picks import RawPick
 
@@ -607,3 +612,42 @@ class TestConsensus:
         assert len(particle_set.particles) == 2
         assert len({particle.particle_id for particle in particle_set.particles}) == 2
         assert all(particle.half_set is not None for particle in particle_set.particles)
+
+# TestVesicle: class containing unit tests for picking/vesicle.py
+class TestVesicle:
+    def test_load_vesicle_labels_rejects_shape_mismatch(self, tmp_path: Path) -> None:
+        '''Mismatched shapes raise ValueError rather than silently misattributing'''
+        _write_mrc(tmp_path / 'labels.mrc', np.zeros((10, 10, 10)))
+        with pytest.raises(ValueError):
+            load_vesicle_labels(tmp_path / 'labels.mrc', (20, 20, 20))
+
+    def test_load_vesicle_labels_reads_integer_labels(self, tmp_path: Path) -> None:
+        '''Labels round-trip through the MRC unchanged'''
+        data = np.zeros((10, 10, 10))
+        data[2, 2, 2] = 1
+        data[7, 7, 7] = 2
+        _write_mrc(tmp_path / 'labels.mrc', data)
+        labels = load_vesicle_labels(tmp_path / 'labels.mrc', (10, 10, 10))
+        assert labels[2, 2, 2] == 1
+        assert labels[7, 7, 7] == 2
+
+    def test_vesicle_ids_at_matches_label(self) -> None:
+        '''vesicle_ids_at resolves a point to EValuator's own label, unchanged, and '' for background'''
+        labels = np.zeros((10, 10, 10), dtype=np.int64)
+        labels[2, 2, 2] = 1
+        labels[7, 7, 7] = 2
+        ids = vesicle_ids_at(labels, np.array([[2.0, 2.0, 2.0], [7.0, 7.0, 7.0], [0.0, 0.0, 0.0]]), 'tomo01')
+        assert ids[0] == 'tomo01:v0001'
+        assert ids[1] == 'tomo01:v0002'
+        assert ids[2] == ''
+
+    def test_vesicle_surface_area_assigns_faces_to_nearest_label(self) -> None:
+        '''Mesh face area lands on the vesicle nearest its centroid'''
+        vertices = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [9.0, 9.0, 9.0]])
+        faces = np.array([[0, 1, 2]])  # a single triangle near label 1, nothing near vertex 3
+        labels = np.zeros((10, 10, 10), dtype=np.int64)
+        labels[0, 0, 0] = 1
+        areas = vesicle_surface_area_angstrom2(vertices, faces, labels, voxel_size_angstrom=2.0, tomogram_id='t01')
+        assert set(areas) == {'t01:v0001'}
+        assert areas['t01:v0001'] > 0.0
+
