@@ -651,3 +651,83 @@ class TestVesicle:
         assert set(areas) == {'t01:v0001'}
         assert areas['t01:v0001'] > 0.0
 
+    def test_picker_wires_vesicle_id_onto_picks(self, tmp_path: Path) -> None:
+        '''Picks from a labelled vesicle carry that vesicle_id; unlabelled points fall back to None'''
+        segmentation, tomogram, _ = _vesicle_with_particles()
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+        labels_path = tmp_path / 'labels.mrc'
+        _write_mrc(labels_path, np.where(segmentation > 0, 1.0, 0.0))
+
+        config = NativePickerConfig(
+            voxel_size_angstrom=10.0,
+            offset_windows_angstrom=((40.0, 80.0),),
+            surface_spacing_angstrom=20.0,
+            min_particle_distance_angstrom=80.0,
+            n_mad=3.0,
+            density_sign=-1,
+            vesicle_labels_mrc=labels_path,
+        )
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+        assert picks, 'picker found nothing where a particle was planted'
+        assert all(pick.vesicle_id in (None, 'tomo000:v0001') for pick in picks)
+
+    def test_picker_without_labels_mrc_leaves_vesicle_id_none(self, tmp_path: Path) -> None:
+        '''Default behaviour (no --vesicle-labels-mrc) is unchanged: vesicle_id stays None'''
+        segmentation, tomogram, _ = _vesicle_with_particles()
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+
+        config = NativePickerConfig(
+            voxel_size_angstrom=10.0,
+            offset_windows_angstrom=((40.0, 80.0),),
+            surface_spacing_angstrom=20.0,
+            min_particle_distance_angstrom=80.0,
+            n_mad=3.0,
+            density_sign=-1,
+        )
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+        assert picks
+        assert all(pick.vesicle_id is None for pick in picks)
+
+    def test_picker_normalise_per_vesicle_runs_end_to_end(self, tmp_path: Path) -> None:
+        '''normalise_per_vesicle=True with a labels MRC scores and picks without error'''
+        segmentation, tomogram, _ = _vesicle_with_particles()
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+        labels_path = tmp_path / 'labels.mrc'
+        _write_mrc(labels_path, np.where(segmentation > 0, 1.0, 0.0))
+
+        config = NativePickerConfig(
+            voxel_size_angstrom=10.0,
+            offset_windows_angstrom=((40.0, 80.0),),
+            surface_spacing_angstrom=20.0,
+            min_particle_distance_angstrom=80.0,
+            n_mad=3.0,
+            density_sign=-1,
+            vesicle_labels_mrc=labels_path,
+            normalise_per_vesicle=True,
+        )
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+        assert picks, 'picker found nothing under per-vesicle normalisation'
+
+    def test_reconciled_pick_keeps_vesicle_id(self) -> None:
+        '''Consensus reconciliation preserves the representative pick's vesicle_id'''
+        picks_by_picker = {
+            'stamp-native': [_pick('tomo000', (0.0, 0.0, 0.0), 'stamp-native')],
+        }
+        picks_by_picker['stamp-native'][0].vesicle_id = 'tomo000:v0001'
+        reconciled = reconcile_picks(picks_by_picker, 'union', distance_threshold=15.0, tomogram_id='tomo000')
+        assert reconciled[0].vesicle_id == 'tomo000:v0001'
+
+    def test_particle_carries_vesicle_id_from_reconciled_pick(self) -> None:
+        '''build_particle_set copies vesicle_id straight across onto the Particle'''
+        reconciled_picks = [_pick('tomo000', (0.0, 0.0, 0.0), 'stamp-native')]
+        reconciled_picks[0].vesicle_id = 'tomo000:v0002'
+        particle_set = build_particle_set(
+            reconciled_picks=reconciled_picks,
+            consensus_rule='union',
+            contributing_pickers=['stamp-native'],
+            half_set_seed=0,
+        )
+        assert particle_set.particles[0].vesicle_id == 'tomo000:v0002'
