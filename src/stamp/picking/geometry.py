@@ -4,9 +4,11 @@ STAMP: geometric utilities
 
 # Import external dependencies
 import numpy as np
+from collections.abc import Sequence
 from scipy.ndimage import map_coordinates
 from scipy.spatial import cKDTree
 from skimage import measure
+from typing import Literal
 
 # Import internal STAMP objects
 from stamp.utils.log import log
@@ -53,7 +55,9 @@ def sample_along_normals(
     offset_max_voxels: float,
     n_samples: int,
     direction: int,
-) -> np.ndarray:
+    *,
+    return_samples: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     if direction not in (1, -1):
         raise ValueError('direction must be +1 or -1.')
     if n_samples < 1:
@@ -67,19 +71,111 @@ def sample_along_normals(
     densities = map_coordinates(
         tomogram.astype(np.float32), flat, order=1, mode='nearest'
     )
-    return densities.reshape(n_samples, points.shape[0]).mean(axis=0)
+    reshaped = densities.reshape(n_samples, points.shape[0])  # (n_samples, N)
+    mean = reshaped.mean(axis=0)
+    if return_samples:
+        return mean, reshaped.T  # profile: (N, n_samples), sample order matches offsets
+    return mean
+
+# profile_correlation_scores: Pearson correlation of each point's sign-corrected radial profile against a Gaussian bump centred at peak_offset_voxels with the given width
+def profile_correlation_scores(
+    profiles: np.ndarray,
+    offsets_voxels: np.ndarray,
+    peak_offset_voxels: float,
+    width_voxels: float,
+    density_sign: int,
+) -> np.ndarray:
+    if width_voxels <= 0:
+        raise ValueError('width_voxels must be positive.')
+    if profiles.shape[1] < 3:
+        raise ValueError('Profile scoring needs at least 3 samples per point to be meaningful.')
+    expected = np.exp(-0.5 * ((offsets_voxels - peak_offset_voxels) / width_voxels) ** 2)
+    expected_centred = expected - expected.mean()
+    expected_norm = np.sqrt(np.sum(expected_centred**2))
+    if expected_norm == 0.0:
+        raise ValueError('Expected profile has zero variance; widen width_voxels or move the peak inside the offset window.')
+    signed = density_sign * profiles
+    signed_centred = signed - signed.mean(axis=1, keepdims=True)
+    numerator = signed_centred @ expected_centred
+    signed_norm = np.sqrt(np.sum(signed_centred**2, axis=1))
+    # points with a flat profile (zero variance) correlate with nothing; score them 0 rather than NaN
+    return np.divide(
+        numerator, signed_norm * expected_norm,
+        out=np.zeros_like(numerator), where=signed_norm > 0,
+    )
 
 # robust_normalise: median/MAD normalisation so score thresholds are comparable across tomograms
-def robust_normalise(values: np.ndarray) -> np.ndarray:
+def robust_normalise(
+    values: np.ndarray,
+    *,
+    mode: Literal['global', 'local', 'vesicle'] = 'global',
+    points: np.ndarray | None = None,
+    local_radius_voxels: float | None = None,
+    min_local_neighbours: int = 20,
+    vesicle_ids: list[str] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if mode == 'local':
+        if points is None or local_radius_voxels is None:
+            raise ValueError('local mode requires points and local_radius_voxels')
+        return local_normalise(values, points, local_radius_voxels, min_local_neighbours)
+    if mode == 'vesicle':
+        if vesicle_ids is None:
+            raise ValueError('vesicle mode requires vesicle_ids')
+        return vesicle_normalise(values, vesicle_ids)
+
     median = np.median(values)
     mad = np.median(np.abs(values - median))
     if mad > 0.0:
         # 1.4826 makes MAD a consistent estimator of sigma for normal data
-        return (values - median) / (1.4826 * mad)
-    std = values.std()
-    if std == 0.0:
-        return np.zeros_like(values)
-    return (values - median) / std
+        scaled = (values - median) / (1.4826 * mad)
+    else:
+        std = values.std()
+        scaled = np.zeros_like(values) if std == 0.0 else (values - median) / std
+    return scaled, np.zeros_like(values, dtype=bool)
+
+# local_normalise: per-point median/MAD normalisation over a k-d tree neighbourhood
+def local_normalise(
+    values: np.ndarray,
+    points: np.ndarray,
+    radius_voxels: float,
+    min_neighbours: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    n_points = points.shape[0]
+    normalised = np.empty(n_points, dtype=np.float64)
+    used_fallback = np.zeros(n_points, dtype=bool)
+
+    global_median = np.median(values)
+    global_mad = np.median(np.abs(values - global_median))
+    global_scale = 1.4826 * global_mad if global_mad > 0.0 else (values.std() or 1.0)
+
+    tree = cKDTree(points)
+    neighbour_lists = tree.query_ball_point(points, r=radius_voxels)
+
+    for index, neighbours in enumerate(neighbour_lists):
+        if len(neighbours) < min_neighbours:
+            used_fallback[index] = True
+            normalised[index] = (values[index] - global_median) / global_scale
+            continue
+        local_values = values[neighbours]
+        local_median = np.median(local_values)
+        local_mad = np.median(np.abs(local_values - local_median))
+        local_scale = 1.4826 * local_mad if local_mad > 0.0 else global_scale
+        normalised[index] = (values[index] - local_median) / local_scale
+
+    return normalised, used_fallback
+
+# vesicle_normalise: per-vesicle median/MAD normalisation; points with no vesicle_id ('') fall back to the pooled/global estimate
+def vesicle_normalise(values: np.ndarray, vesicle_ids: list[str]) -> tuple[np.ndarray, np.ndarray]:
+    groups = np.asarray(vesicle_ids)
+    normalised, _fallback = robust_normalise(values)
+    used_fallback = np.zeros(values.shape[0], dtype=bool)
+    for group in set(groups):
+        if not group:
+            continue
+        mask = groups == group
+        normalised[mask], _ = robust_normalise(values[mask])
+    used_fallback[groups == ''] = True
+    return normalised, used_fallback
 
 # non_maximum_suppression: greedy non-maximum suppression, highest score first, returning indices of kept points
 def non_maximum_suppression(
@@ -140,23 +236,70 @@ def exclude_near_boundary(points: np.ndarray, shape: tuple[int, ...], margin_vox
     upper = np.all(points <= (np.array(shape) - 1 - margin_voxels), axis=1)
     return lower & upper
 
-# score_membrane_faces: sample both faces of every surface point, normalise on the pooled distribution
+# score_membrane_faces: sample both faces of every surface point across multiple offset windows, scoring each window by mean density and by radial-profile shape
 def score_membrane_faces(
     tomogram: np.ndarray,
     vertices: np.ndarray,
     normals: np.ndarray,
-    offset_min_voxels: float,
-    offset_max_voxels: float,
+    offset_windows_voxels: Sequence[tuple[float, float]],
     n_samples: int,
     density_sign: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    n_points = vertices.shape[0]
-    raw = []
-    face_normals = []
-    for direction in (1, -1):
-        densities = sample_along_normals(tomogram, vertices, normals, offset_min_voxels, offset_max_voxels, n_samples, direction)
-        raw.append(density_sign * densities)
-        face_normals.append(direction * normals)
-    scores = robust_normalise(np.concatenate(raw))
+    *,
+    scoring_mode: Literal['mean', 'profile'] = 'mean',
+    profile_width_voxels: float | None = None,
+    mode: Literal['global', 'local', 'vesicle'] = 'global',
+    local_radius_voxels: float | None = None,
+    min_local_neighbours: int = 20,
+    vesicle_ids: list[str] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if len(offset_windows_voxels) == 0:
+        raise ValueError('offset_windows_voxels must contain at least one window.')
+
     points = np.concatenate([vertices, vertices])
-    return points, np.concatenate(face_normals), scores
+    face_normals = np.concatenate([normals, -normals])
+
+    n_windows = len(offset_windows_voxels)
+    window_scores = np.empty((n_windows, points.shape[0]))
+    window_mean_scores = np.empty((n_windows, points.shape[0]))
+    window_profile_scores = np.empty((n_windows, points.shape[0]))
+    window_fallback = np.empty((n_windows, points.shape[0]), dtype=bool)
+    for window_index, (offset_min_voxels, offset_max_voxels) in enumerate(offset_windows_voxels):
+        means, profiles = zip(*[sample_along_normals(tomogram, vertices, normals, offset_min_voxels, offset_max_voxels, n_samples, direction, return_samples=True) for direction in (1, -1)])
+        raw_means = density_sign * np.concatenate(means)
+        pooled_profiles = np.concatenate(profiles, axis=0)
+
+        offsets_voxels = np.linspace(offset_min_voxels, offset_max_voxels, n_samples)
+        peak_voxels = (offset_min_voxels + offset_max_voxels) / 2.0  # window's own midpoint
+        width_voxels = profile_width_voxels if profile_width_voxels is not None else (offset_max_voxels - offset_min_voxels) / 4.0
+        raw_profile = profile_correlation_scores(pooled_profiles, offsets_voxels, peak_voxels, width_voxels, density_sign)
+
+        window_mean_scores[window_index], mean_fallback = robust_normalise(raw_means, mode=mode, points=points, local_radius_voxels=local_radius_voxels, min_local_neighbours=min_local_neighbours, vesicle_ids=vesicle_ids)
+        window_profile_scores[window_index], profile_fallback = robust_normalise(raw_profile, mode=mode, points=points, local_radius_voxels=local_radius_voxels, min_local_neighbours=min_local_neighbours, vesicle_ids=vesicle_ids)
+        if scoring_mode == 'profile':
+            window_scores[window_index], window_fallback[window_index] = window_profile_scores[window_index], profile_fallback
+        else:
+            window_scores[window_index], window_fallback[window_index] = window_mean_scores[window_index], mean_fallback
+
+    winning_window = np.argmax(window_scores, axis=0)
+    point_index = np.arange(points.shape[0])
+    scores = window_scores[winning_window, point_index]
+    mean_scores = window_mean_scores[winning_window, point_index]
+    profile_scores = window_profile_scores[winning_window, point_index]
+    used_fallback = window_fallback[winning_window, point_index]
+    return points, face_normals, scores, winning_window, used_fallback, mean_scores, profile_scores
+
+# max_order_statistic_offset: approximate upward bias, in normalised score units, of the maximum of n_windows independent standard-normal scores
+def max_order_statistic_offset(n_windows: int) -> float:
+    if n_windows < 1:
+        raise ValueError('n_windows must be at least 1.')
+    if n_windows == 1:
+        return 0.0
+    return float(np.sqrt(2.0 * np.log(n_windows)))
+
+# beam_angle_deviation_degrees: angle between an outward normal and the beam-orthogonal plane (0 = beam-orthogonal, 90 = beam-aligned)
+def beam_angle_deviation_degrees(normal_xyz: np.ndarray) -> float:
+    norm = np.linalg.norm(normal_xyz)
+    if norm == 0.0:
+        raise ValueError('normal_xyz must be non-zero.')
+    z_component = abs(normal_xyz[2] / norm)
+    return float(np.degrees(np.arcsin(np.clip(z_component, 0.0, 1.0))))

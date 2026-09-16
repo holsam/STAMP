@@ -75,7 +75,7 @@ class TestDecoy:
     def test_rejected_surface_decoys_avoid_real_picks(self, tmp_path: Path) -> None:
         '''Every decoy is kept clear of real picks'''
         manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
         real_set = _real_set_from_picker(manifest, config)
         assert real_set.particles, 'fixture produced no real picks'
 
@@ -98,7 +98,7 @@ class TestDecoy:
     def test_rejected_surface_decoys_score_below_threshold(self, tmp_path: Path) -> None:
         '''Decoys must come from points the picker rejected'''
         manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
         real_set = _real_set_from_picker(manifest, config)
 
         decoy_set = generate_rejected_surface_decoys(
@@ -112,7 +112,7 @@ class TestDecoy:
     def test_rejected_surface_decoys_are_deterministic(self, tmp_path: Path) -> None:
         '''Same seed and parameters reproduce the same decoys'''
         manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
         real_set = _real_set_from_picker(manifest, config)
 
         kwargs = dict(
@@ -126,7 +126,7 @@ class TestDecoy:
     def test_shifted_decoys_stay_away_from_surface(self, tmp_path: Path) -> None:
         '''Shifted decoys stay inside the volume and off the surface'''
         manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
         real_set = _real_set_from_picker(manifest, config)
 
         decoy_set = generate_shifted_decoys(
@@ -142,7 +142,7 @@ class TestDecoy:
     def test_shifted_decoys_are_oriented(self, tmp_path: Path) -> None:
         '''Shifted decoys have defined orientation.'''
         manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
         real_set = _real_set_from_picker(manifest, config)
         decoy_set = generate_shifted_decoys(
             real_particle_set=real_set, manifests=[manifest], config=config,
@@ -154,7 +154,7 @@ class TestDecoy:
 
     def test_synthetic_noise_writes_matched_pairs(self, tmp_path: Path) -> None:
         '''Synthetic-noise writes matched segmentation/tomogram pairs'''
-        config = NativePickerConfig(voxel_size_angstrom=10.0)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, offset_windows_angstrom=((20.0, 80.0),))
         decoy_set, manifests = generate_synthetic_noise_decoys(
             tomogram_shape=(40, 40, 40), n_tomograms=2, n_decoys_per_tomogram=5,
             output_dir=tmp_path / 'noise', config=config, seed=3,
@@ -170,7 +170,7 @@ class TestDecoy:
 
     def test_synthetic_decoys_are_oriented(self, tmp_path: Path) -> None:
         '''Synthetic decoys have defined orientation.'''
-        config = NativePickerConfig(voxel_size_angstrom=10.0)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, offset_windows_angstrom=((20.0, 80.0),))
         decoy_set, manifests = generate_synthetic_noise_decoys(
             tomogram_shape=(40, 40, 40), n_tomograms=2, n_decoys_per_tomogram=5,
             output_dir=tmp_path / 'noise', config=config, seed=3,

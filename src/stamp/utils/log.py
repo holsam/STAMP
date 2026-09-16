@@ -138,6 +138,9 @@ def configure_logging(
     # Return log file path
     return log_path, level_name
 
+# Register custom levels at import time
+register_custom_levels()
+
 # Create logger as instance of _StampLogger
 log = _StampLogger()
 
