@@ -49,14 +49,14 @@ def generate_rejected_surface_decoys(
     raw_picks: list[RawPick] = []
 
     for manifest in manifests:
-        points_zyx, normals_zyx, scores = _score_surface(manifest, config)
+        points_zyx, normals_zyx, scores, winning_window = _score_surface(manifest, config)
         if points_zyx.shape[0] == 0:
             continue
 
         # only use points the picker rejected
-        rejected = scores < config.n_mad
-        points_zyx, normals_zyx, scores = (
-            points_zyx[rejected], normals_zyx[rejected], scores[rejected]
+        rejected = scores < config.effective_n_mad
+        points_zyx, normals_zyx, scores, winning_window = (
+            points_zyx[rejected], normals_zyx[rejected], scores[rejected], winning_window[rejected],
         )
         if points_zyx.shape[0] == 0:
             continue
@@ -69,9 +69,9 @@ def generate_rejected_surface_decoys(
             far_enough = (
                 tree.query(points_xyz, k=1)[0] >= min_distance_voxels
             )
-            points_xyz, points_zyx, normals_zyx, scores = (
+            points_xyz, points_zyx, normals_zyx, scores, winning_window = (
                 points_xyz[far_enough], points_zyx[far_enough],
-                normals_zyx[far_enough], scores[far_enough],
+                normals_zyx[far_enough], scores[far_enough], winning_window[far_enough],
             )
         if points_xyz.shape[0] == 0:
             continue
@@ -91,6 +91,7 @@ def generate_rejected_surface_decoys(
                     orientation=quaternion_from_reference_to(np.asarray(normal_xyz)),
                     confidence=float(scores[index]),
                     source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_REJECTED_SURFACE}',
+                    offset_window_angstrom=config.offset_windows_angstrom[int(winning_window[index])],
                 )
             )
 
@@ -251,7 +252,7 @@ def generate_synthetic_noise_decoys(
 # _score_surface: re-run the native picker's surface scoring for one tomogram
 def _score_surface(
     manifest: TomogramManifest, config: NativePickerConfig
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     with mrcfile.open(str(manifest.segmentation_path), permissive=True) as mrc:
         segmentation = np.asarray(mrc.data)
     with mrcfile.open(str(manifest.raw_tomogram_path), permissive=True) as mrc:
@@ -266,7 +267,7 @@ def _score_surface(
     except ValueError as exc:
         log.warning(f'{manifest.tomogram_id}: skipped ({exc})')
         empty = np.empty((0, 3))
-        return empty, empty, np.empty(0)
+        return empty, empty, np.empty(0), np.empty(0, dtype=np.int64)
 
     vertices, normals = downsample_points(
         vertices, normals, config.to_voxels(config.surface_spacing_angstrom)
@@ -274,22 +275,21 @@ def _score_surface(
     margin = (
         config.boundary_margin_angstrom
         if config.boundary_margin_angstrom is not None
-        else config.offset_max_angstrom
+        else config.max_offset_angstrom
     )
     inside = exclude_near_boundary(vertices, segmentation.shape, config.to_voxels(margin))
     vertices, normals = vertices[inside], normals[inside]
     if vertices.shape[0] == 0:
         empty = np.empty((0, 3))
-        return empty, empty, np.empty(0)
+        return empty, empty, np.empty(0), np.empty(0, dtype=np.int64)
 
-    offset_min = config.to_voxels(config.offset_min_angstrom)
-    offset_max = config.to_voxels(config.offset_max_angstrom)
 
-    points, normals_out, scores, _used_fallback = score_membrane_faces(
-        tomogram, vertices, normals, offset_min, offset_max, config.n_samples, config.density_sign
+    offset_windows_voxels = [(config.to_voxels(offset_min), config.to_voxels(offset_max)) for offset_min, offset_max in config.offset_windows_angstrom]
+
+    points, normals_out, scores, winning_window, _used_fallback = score_membrane_faces(
+        tomogram, vertices, normals, offset_windows_voxels, config.n_samples, config.density_sign
     )
-    return points, normals_out, scores
-
+    return points, normals_out, scores, winning_window
 
 # _finalise: assign decoy particle IDs and half-sets, returning a decoy ParticleSet or None if no decoys were generated
 def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet | None:

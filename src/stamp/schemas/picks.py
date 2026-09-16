@@ -14,6 +14,7 @@ class RawPick(BaseModel):
     source_picker: str
     metadata: dict = {}
     beam_angle_deviation_degrees: float | None = Field(default=None, description='Angle in degrees between the outward normal and the beam-orthogonal (xy) plane (0 = beam-orthogonal; 90 = beam-aligned).')
+    offset_window_angstrom: tuple[float, float] | None = None
 
     @field_validator('orientation')
     @classmethod

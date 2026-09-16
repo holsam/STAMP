@@ -13,6 +13,7 @@ from stamp.picking.geometry import (
     downsample_points,
     exclude_near_boundary,
     extract_surface,
+    max_order_statistic_offset,
     non_maximum_suppression,
     quaternion_from_reference_to,
     robust_normalise,
@@ -25,24 +26,31 @@ from stamp.utils.log import log
 # PICKER_NAME: name for picker tool
 PICKER_NAME = 'stamp-native'
 
+# DEFAULT_OFFSET_WINDOWS_ANGSTROM: (min, max) radial windows
+DEFAULT_OFFSET_WINDOWS_ANGSTROM: tuple[tuple[float, float], ...] = (
+    (20.0, 50.0),
+    (40.0, 80.0),
+    (70.0, 110.0),
+    (100.0, 160.0),
+)
+
 # NativePickerConfig: parameters for one stamp-native run (all distances in Angstrom)
 @dataclass(frozen=True)
 class NativePickerConfig:
     voxel_size_angstrom: float
-    # radial window from membrane surface to search
-    offset_min_angstrom: float = 20.0
-    offset_max_angstrom: float = 80.0
-    # sample per surface point within radial window
+    # radial windows from membrane surface to search
+    offset_windows_angstrom: tuple[tuple[float, float], ...] = DEFAULT_OFFSET_WINDOWS_ANGSTROM
+    # sample per surface point within each radial window
     n_samples: int = 5
     # sampling point spacing
     surface_spacing_angstrom: float = 20.0
     # minimum particle separation
     min_particle_distance_angstrom: float = 60.0
-    # score threshold
+    # score threshold before multi-window order-statistic correction
     n_mad: float = 3.0
     # protein/background density
     density_sign: int = -1
-    # boundary for dropping surface points
+    # boundary for dropping surface points; defaults to the largest window's outer edge
     boundary_margin_angstrom: float | None = None
     # score normalisation to use
     normalisation: Literal['global', 'local'] = 'global'
@@ -56,8 +64,11 @@ class NativePickerConfig:
             raise ValueError('voxel_size_angstrom must be positive.')
         if self.density_sign not in (1, -1):
             raise ValueError('density_sign must be +1 or -1.')
-        if self.offset_max_angstrom < self.offset_min_angstrom:
-            raise ValueError('offset_max_angstrom must be >= offset_min_angstrom.')
+        if len(self.offset_windows_angstrom) == 0:
+            raise ValueError('offset_windows_angstrom must contain at least one window.')
+        for offset_min, offset_max in self.offset_windows_angstrom:
+            if offset_max < offset_min:
+                raise ValueError('each offset window must have offset_max >= offset_min.')
         if self.local_radius_angstrom <= 0:
             raise ValueError('local_radius_angstrom must be positive.')
         if self.min_local_neighbours < 1:
@@ -65,6 +76,16 @@ class NativePickerConfig:
 
     def to_voxels(self, angstrom: float) -> float:
         return angstrom / self.voxel_size_angstrom
+
+    # effective_n_mad: n_mad corrected for taking the best of len(offset_windows_angstrom) scores
+    @property
+    def effective_n_mad(self) -> float:
+        return self.n_mad + max_order_statistic_offset(len(self.offset_windows_angstrom))
+
+    # max_offset_angstrom: outer edge of the widest window, used as the default boundary margin
+    @property
+    def max_offset_angstrom(self) -> float:
+        return max(offset_max for _offset_min, offset_max in self.offset_windows_angstrom)
 
 # pick_tomogram: run the native picker over one tomogram, returning RawPicks
 def pick_tomogram(
@@ -89,29 +110,29 @@ def pick_tomogram(
     vertices, normals = extract_surface(segmentation)
     vertices, normals = downsample_points(vertices, normals, config.to_voxels(config.surface_spacing_angstrom))
 
-    margin_angstrom = config.boundary_margin_angstrom if config.boundary_margin_angstrom is not None else config.offset_max_angstrom
+    margin_angstrom = config.boundary_margin_angstrom if config.boundary_margin_angstrom is not None else config.max_offset_angstrom
     inside = exclude_near_boundary(vertices, segmentation.shape, config.to_voxels(margin_angstrom))
     vertices, normals = vertices[inside], normals[inside]
     if vertices.shape[0] == 0:
         return []
 
-    offset_min = config.to_voxels(config.offset_min_angstrom)
-    offset_max = config.to_voxels(config.offset_max_angstrom)
-    
-    points, outward_normals, scores, used_fallback = score_membrane_faces(
+    offset_windows_voxels = [(config.to_voxels(offset_min), config.to_voxels(offset_max)) for offset_min, offset_max in config.offset_windows_angstrom]
+
+    points, outward_normals, scores, winning_window, used_fallback = score_membrane_faces(
         tomogram, vertices, normals,
-        offset_min, offset_max,
+        offset_windows_voxels,
         config.n_samples, config.density_sign,
         mode=config.normalisation,
         local_radius_voxels=config.to_voxels(config.local_radius_angstrom),
         min_local_neighbours=config.min_local_neighbours,
     )
-    above_threshold = scores >= config.n_mad
+    above_threshold = scores >= config.effective_n_mad
     n_candidates = points.shape[0]
-    points, outward_normals, scores, used_fallback = (
+    points, outward_normals, scores, winning_window, used_fallback = (
         points[above_threshold],
         outward_normals[above_threshold],
         scores[above_threshold],
+        winning_window[above_threshold],
         used_fallback[above_threshold],
     )
     log.debug(f'{tomogram_id}: {n_candidates} candidates before filtering, {points.shape[0]} kept')
@@ -141,6 +162,7 @@ def pick_tomogram(
                 source_picker=PICKER_NAME,
                 metadata={'used_global_fallback': bool(used_fallback[index])} if config.normalisation == 'local' else {},
                 beam_angle_deviation_degrees=beam_angle_deviation_degrees(normal_xyz),
+                offset_window_angstrom=config.offset_windows_angstrom[int(winning_window[index])],
             )
         )
     return picks

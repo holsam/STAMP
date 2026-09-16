@@ -4,6 +4,7 @@ STAMP: geometric utilities
 
 # Import external dependencies
 import numpy as np
+from collections.abc import Sequence
 from scipy.ndimage import map_coordinates
 from scipy.spatial import cKDTree
 from skimage import measure
@@ -184,35 +185,51 @@ def exclude_near_boundary(points: np.ndarray, shape: tuple[int, ...], margin_vox
     upper = np.all(points <= (np.array(shape) - 1 - margin_voxels), axis=1)
     return lower & upper
 
-# score_membrane_faces: sample both faces of every surface point, normalise on the pooled distribution
+# score_membrane_faces: sample both faces of every surface point across multiple offset windows
 def score_membrane_faces(
     tomogram: np.ndarray,
     vertices: np.ndarray,
     normals: np.ndarray,
-    offset_min_voxels: float,
-    offset_max_voxels: float,
+    offset_windows_voxels: Sequence[tuple[float, float]],
     n_samples: int,
     density_sign: int,
     *,
     mode: Literal['global', 'local'] = 'global',
     local_radius_voxels: float | None = None,
     min_local_neighbours: int = 20,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    raw = []
-    face_normals = []
-    for direction in (1, -1):
-        densities = sample_along_normals(tomogram, vertices, normals, offset_min_voxels, offset_max_voxels, n_samples, direction)
-        raw.append(density_sign * densities)
-        face_normals.append(direction * normals)
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if len(offset_windows_voxels) == 0:
+        raise ValueError('offset_windows_voxels must contain at least one window.')
+
     points = np.concatenate([vertices, vertices])
-    scores, used_fallback = robust_normalise(
-        np.concatenate(raw),
-        mode=mode,
-        points=points,
-        local_radius_voxels=local_radius_voxels,
-        min_local_neighbours=min_local_neighbours,
-    )
-    return points, np.concatenate(face_normals), scores, used_fallback
+    face_normals = np.concatenate([normals, -normals])
+
+    n_windows = len(offset_windows_voxels)
+    window_scores = np.empty((n_windows, points.shape[0]))
+    window_fallback = np.empty((n_windows, points.shape[0]), dtype=bool)
+    for window_index, (offset_min_voxels, offset_max_voxels) in enumerate(offset_windows_voxels):
+        raw = [density_sign * sample_along_normals(tomogram, vertices, normals, offset_min_voxels, offset_max_voxels, n_samples, direction) for direction in (1, -1)]
+        window_scores[window_index], window_fallback[window_index] = robust_normalise(
+            np.concatenate(raw),
+            mode=mode,
+            points=points,
+            local_radius_voxels=local_radius_voxels,
+            min_local_neighbours=min_local_neighbours,
+        )
+
+    winning_window = np.argmax(window_scores, axis=0)
+    point_index = np.arange(points.shape[0])
+    scores = window_scores[winning_window, point_index]
+    used_fallback = window_fallback[winning_window, point_index]
+    return points, face_normals, scores, winning_window, used_fallback
+
+# max_order_statistic_offset: approximate upward bias, in normalised score units, of the maximum of n_windows independent standard-normal scores
+def max_order_statistic_offset(n_windows: int) -> float:
+    if n_windows < 1:
+        raise ValueError('n_windows must be at least 1.')
+    if n_windows == 1:
+        return 0.0
+    return float(np.sqrt(2.0 * np.log(n_windows)))
 
 # beam_angle_deviation_degrees: angle between an outward normal and the beam-orthogonal plane (0 = beam-orthogonal, 90 = beam-aligned)
 def beam_angle_deviation_degrees(normal_xyz: np.ndarray) -> float:

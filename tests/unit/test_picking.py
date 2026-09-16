@@ -15,6 +15,7 @@ from stamp.picking.geometry import (
     exclude_near_boundary,
     extract_surface,
     local_normalise,
+    max_order_statistic_offset,
     non_maximum_suppression,
     quaternion_from_reference_to,
     robust_normalise,
@@ -93,6 +94,59 @@ def _linear_gradient_vesicle(shape=(80, 80, 120), radius=20.0, thickness=2.0) ->
         particle_distance = np.linalg.norm(grid - centre_particle, axis=-1)
         tomogram[particle_distance < 3.0] -= 3.0
     return segmentation, tomogram
+
+# _particle_free_vesicle: a spherical shell segmentation with a tomogram of pure background noise, no planted density, for measuring false-positive rate
+def _particle_free_vesicle(seed: int) -> tuple[np.ndarray, np.ndarray]:
+    shape = (60, 60, 60)
+    centre = np.array(shape) / 2.0
+    zz, yy, xx = np.mgrid[0:shape[0], 0:shape[1], 0:shape[2]]
+    radius = np.sqrt((zz - centre[0]) ** 2 + (yy - centre[1]) ** 2 + (xx - centre[2]) ** 2)
+    segmentation = ((radius > 18.0) & (radius < 20.0)).astype(np.float32)
+    rng = np.random.default_rng(seed)
+    tomogram = rng.normal(0.0, 1.0, size=shape).astype(np.float32)
+    return segmentation, tomogram
+
+# _vesicle_with_two_protrusion_heights: a hollow-sphere segmentation with two planted particles at distinct offsets from the membrane, on opposite sides so NMS keeps them apart
+def _vesicle_with_two_protrusion_heights(
+    shape=(120, 120, 120), radius=20.0, thickness=2.0,
+    small_offset_angstrom=35.0, large_offset_angstrom=130.0, voxel_size_angstrom=10.0,
+):
+    centre = np.array(shape) / 2.0
+    grid = np.stack(np.meshgrid(*[np.arange(s) for s in shape], indexing='ij'), axis=-1)
+    distance = np.linalg.norm(grid - centre, axis=-1)
+    segmentation = ((distance > radius - thickness) & (distance < radius + thickness)).astype(np.float32)
+    tomogram = np.zeros(shape, dtype=np.float32)
+    tomogram[segmentation > 0] = -1.0
+
+    expected_positions_zyx = []
+    for direction, offset_angstrom in (((0, 0, 1), small_offset_angstrom), ((0, 0, -1), large_offset_angstrom)):
+        unit = np.array(direction, dtype=float)
+        unit /= np.linalg.norm(unit)
+        offset_voxels = offset_angstrom / voxel_size_angstrom
+        position = centre + unit * (radius + offset_voxels)
+        expected_positions_zyx.append(position)
+        index = np.round(position).astype(int)
+        tomogram[
+            index[0] - 2 : index[0] + 3,
+            index[1] - 2 : index[1] + 3,
+            index[2] - 2 : index[2] + 3,
+        ] = -8.0
+    return segmentation, tomogram, expected_positions_zyx
+
+# _count_above_threshold_uncorrected: repeat the pre-NMS scoring step at plain n_mad (no order-statistic correction), for comparison against the corrected threshold
+def _count_above_threshold_uncorrected(tmp_path: Path, config: NativePickerConfig, n_mad: float) -> int:
+    with mrcfile.open(str(tmp_path / 'seg.mrc'), permissive=True) as mrc:
+        segmentation = np.asarray(mrc.data)
+    with mrcfile.open(str(tmp_path / 'tomo.mrc'), permissive=True) as mrc:
+        tomogram = np.asarray(mrc.data).astype(np.float32).copy()
+    tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
+    vertices, normals = extract_surface(segmentation)
+    vertices, normals = downsample_points(vertices, normals, config.to_voxels(config.surface_spacing_angstrom))
+    inside = exclude_near_boundary(vertices, segmentation.shape, config.to_voxels(config.max_offset_angstrom))
+    vertices, normals = vertices[inside], normals[inside]
+    windows = [(config.to_voxels(lo), config.to_voxels(hi)) for lo, hi in config.offset_windows_angstrom]
+    _points, _n, scores, _w, _used_fallback = score_membrane_faces(tomogram, vertices, normals, windows, config.n_samples, config.density_sign)
+    return int(np.sum(scores >= n_mad))
 
 # TestGeometry: class containing unit tests for test_geometry.py
 class TestGeometry:
@@ -198,7 +252,7 @@ class TestGeometry:
         normals = np.tile([1.0, 0.0, 0.0], (vertices.shape[0], 1))
         n_points = vertices.shape[0]
         contaminated = int(np.where(ys == 20.0)[0][0])
-        _points, _n, scores, _used_fallback = score_membrane_faces(tomo, vertices, normals, 3.0, 6.0, 3, -1)
+        _points, _n, scores, _w, _used_fallback = score_membrane_faces(tomo, vertices, normals, [(3.0, 6.0)], 3, -1)
         assert scores.shape == (2 * n_points,)
         pos_face, neg_face = scores[:n_points], scores[n_points:]
         clean = [i for i in range(n_points) if i != contaminated]
@@ -208,6 +262,32 @@ class TestGeometry:
         for i in clean:
             assert abs(pos_face[i]) < 1e-6
             assert abs(neg_face[i]) < 1e-6
+
+    def test_score_membrane_faces_reports_winning_window(self) -> None:
+        '''A point with density only in the second window is won by that window, not the first.'''
+        tomo = np.zeros((60, 60, 60), dtype=np.float32)
+        tomo[20, 20, 55] = -5.0  # offset 35 voxels along +x from the point below
+        vertices = np.array([[20.0, 20.0, 20.0]])
+        normals = np.array([[0.0, 0.0, 1.0]])
+        windows = [(2.0, 10.0), (30.0, 40.0)]
+        _points, _n, scores, winning_window, _used_fallback = score_membrane_faces(tomo, vertices, normals, windows, 5, -1)
+        # two faces per point; the +x face (index 0) sees the density, the -x face (index 1) sees nothing
+        assert winning_window[0] == 1
+        assert scores[0] > scores[1]
+
+    def test_max_order_statistic_offset_zero_for_single_window(self) -> None:
+        assert max_order_statistic_offset(1) == 0.0
+
+    def test_max_order_statistic_offset_increases_with_window_count(self) -> None:
+        assert 0.0 < max_order_statistic_offset(2) < max_order_statistic_offset(4) < max_order_statistic_offset(8)
+
+    def test_max_order_statistic_offset_rejects_zero_windows(self) -> None:
+        with pytest.raises(ValueError, match='n_windows'):
+            max_order_statistic_offset(0)
+
+    def test_score_membrane_faces_rejects_no_windows(self) -> None:
+        with pytest.raises(ValueError, match='offset_windows_voxels'):
+            score_membrane_faces(np.zeros((10, 10, 10)), np.zeros((1, 3)), np.array([[0.0, 0.0, 1.0]]), [], 5, -1)
 
     # test_compose_roll_is_identity_at_zero: zero angle leaves the normal quaternion unchanged
     def test_compose_roll_is_identity_at_zero(self):
@@ -260,8 +340,7 @@ class TestGeometry:
 
         config = NativePickerConfig(
             voxel_size_angstrom=10.0,
-            offset_min_angstrom=40.0,
-            offset_max_angstrom=80.0,
+            offset_windows_angstrom=((40.0, 80.0),),
             surface_spacing_angstrom=20.0,
             min_particle_distance_angstrom=80.0,
             n_mad=3.0,
@@ -312,8 +391,7 @@ class TestNativePicker:
 
         config = NativePickerConfig(
             voxel_size_angstrom=10.0,
-            offset_min_angstrom=40.0,
-            offset_max_angstrom=80.0,
+            offset_windows_angstrom=((40.0, 80.0),),
             surface_spacing_angstrom=20.0,
             min_particle_distance_angstrom=80.0,
             n_mad=3.0,
@@ -390,6 +468,50 @@ class TestNativePicker:
     def test_robust_normalise_local_mode_requires_points(self) -> None:
         with pytest.raises(ValueError):
             robust_normalise(np.ones(10), mode='local')
+
+    def test_multiscale_offsets_separate_two_protrusion_heights(self, tmp_path: Path) -> None:
+        '''Two particles at distinct protrusion heights are each best scored by the window whose range covers that height, and the recorded winning window separates them.'''
+        segmentation, tomogram, _ = _vesicle_with_two_protrusion_heights(small_offset_angstrom=35.0, large_offset_angstrom=130.0)
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.0)
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+
+        small_picks = [p for p in picks if p.offset_window_angstrom is not None and p.offset_window_angstrom[1] <= 80.0]
+        large_picks = [p for p in picks if p.offset_window_angstrom is not None and p.offset_window_angstrom[0] >= 70.0]
+        assert small_picks, 'the 35A protrusion should be won by a small offset window'
+        assert large_picks, 'the 130A protrusion should be won by a large offset window'
+        assert {p.offset_window_angstrom for p in small_picks}.isdisjoint(
+            {p.offset_window_angstrom for p in large_picks}
+        )
+
+    def test_single_window_config_matches_pre_6g_threshold(self) -> None:
+        '''A single-element offset_windows_angstrom has no order-statistic correction to apply.'''
+        config = NativePickerConfig(voxel_size_angstrom=10.0, offset_windows_angstrom=((40.0, 80.0),), n_mad=3.0)
+        assert config.effective_n_mad == pytest.approx(3.0)
+
+    def test_multiscale_threshold_correction_holds_false_positive_rate(self, tmp_path: Path) -> None:
+        '''
+        On a particle-free tomogram, scoring four windows and thresholding at effective_n_mad doesn't pass more points than scoring one window at n_mad.
+        An uncorrected max over the same four windows, thresholded at plain n_mad, does pass more points that scoring a single window.
+        '''
+        segmentation, tomogram = _particle_free_vesicle(seed=0)
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+
+        n_mad = 2.5
+        single = NativePickerConfig(voxel_size_angstrom=10.0, offset_windows_angstrom=((40.0, 80.0),), n_mad=n_mad)
+        multi = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=n_mad)  # default 4 windows
+
+        single_picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', single)
+        multi_picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', multi)
+
+        # uncorrected: same tomogram & windows, thresholded at plain n_mad instead of effective_n_mad
+        uncorrected_above = _count_above_threshold_uncorrected(tmp_path, multi, n_mad)
+
+        assert len(multi_picks) <= len(single_picks) + 1, f'corrected multi-window picking should not produce more false positives than single-window picking on a particle-free tomogram (single: {len(single_picks)}; multi: {len(multi_picks)})'
+        assert uncorrected_above > len(multi_picks), f'uncorrected thresholding passes more candidates than the corrected version (single: {len(single_picks)}; uncorrected: {uncorrected_above}; corrected: {len(multi_picks)})'
 
 # TestConsensusRules: class containing tests for consensus rules (intersection/union)
 class TestConsensusRules:
