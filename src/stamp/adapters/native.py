@@ -2,6 +2,10 @@
 STAMP: in-process adapter for the stamp-native picker
 '''
 
+# Import external dependencies
+from dataclasses import replace
+from pathlib import Path
+
 # Import internal STAMP objects
 from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
@@ -44,11 +48,18 @@ class NativePickerAdapter:
             if key in NativePickerConfig.__dataclass_fields__
         }
         config = NativePickerConfig(**config_fields)
+        vesicle_labels_mrc_by_tomogram = inputs.parameters.get('vesicle_labels_mrc_by_tomogram', {})
 
         log.progress(f'Running stamp-native over {len(inputs.input_paths)} tomogram(s)')
         picks: list[RawPick] = []
         for segmentation_path, tomogram_path, tomogram_id in zip(inputs.input_paths, inputs.raw_tomogram_paths, inputs.tomogram_ids):
-            tomogram_picks = pick_tomogram(segmentation_path, tomogram_path, tomogram_id, config)
+            tomogram_config = config
+            labels_path = vesicle_labels_mrc_by_tomogram.get(tomogram_id)
+            if labels_path is not None:
+                tomogram_config = replace(config, vesicle_labels_mrc=Path(labels_path))
+            elif config.normalise_per_vesicle:
+                tomogram_config = replace(config, normalise_per_vesicle=False, vesicle_labels_mrc=None)
+            tomogram_picks = pick_tomogram(segmentation_path, tomogram_path, tomogram_id, tomogram_config)
             log.debug(f'{tomogram_id}: {len(tomogram_picks)} raw picks')
             picks.extend(tomogram_picks)
         return picks

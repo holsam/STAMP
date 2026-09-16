@@ -108,15 +108,20 @@ def profile_correlation_scores(
 def robust_normalise(
     values: np.ndarray,
     *,
-    mode: Literal['global', 'local'] = 'global',
+    mode: Literal['global', 'local', 'vesicle'] = 'global',
     points: np.ndarray | None = None,
     local_radius_voxels: float | None = None,
     min_local_neighbours: int = 20,
+    vesicle_ids: list[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     if mode == 'local':
         if points is None or local_radius_voxels is None:
             raise ValueError('local mode requires points and local_radius_voxels')
         return local_normalise(values, points, local_radius_voxels, min_local_neighbours)
+    if mode == 'vesicle':
+        if vesicle_ids is None:
+            raise ValueError('vesicle mode requires vesicle_ids')
+        return vesicle_normalise(values, vesicle_ids)
 
     median = np.median(values)
     mad = np.median(np.abs(values - median))
@@ -157,6 +162,19 @@ def local_normalise(
         local_scale = 1.4826 * local_mad if local_mad > 0.0 else global_scale
         normalised[index] = (values[index] - local_median) / local_scale
 
+    return normalised, used_fallback
+
+# vesicle_normalise: per-vesicle median/MAD normalisation; points with no vesicle_id ('') fall back to the pooled/global estimate
+def vesicle_normalise(values: np.ndarray, vesicle_ids: list[str]) -> tuple[np.ndarray, np.ndarray]:
+    groups = np.asarray(vesicle_ids)
+    normalised, _fallback = robust_normalise(values)
+    used_fallback = np.zeros(values.shape[0], dtype=bool)
+    for group in set(groups):
+        if not group:
+            continue
+        mask = groups == group
+        normalised[mask], _ = robust_normalise(values[mask])
+    used_fallback[groups == ''] = True
     return normalised, used_fallback
 
 # non_maximum_suppression: greedy non-maximum suppression, highest score first, returning indices of kept points
@@ -229,9 +247,10 @@ def score_membrane_faces(
     *,
     scoring_mode: Literal['mean', 'profile'] = 'mean',
     profile_width_voxels: float | None = None,
-    mode: Literal['global', 'local'] = 'global',
+    mode: Literal['global', 'local', 'vesicle'] = 'global',
     local_radius_voxels: float | None = None,
     min_local_neighbours: int = 20,
+    vesicle_ids: list[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if len(offset_windows_voxels) == 0:
         raise ValueError('offset_windows_voxels must contain at least one window.')
@@ -254,8 +273,8 @@ def score_membrane_faces(
         width_voxels = profile_width_voxels if profile_width_voxels is not None else (offset_max_voxels - offset_min_voxels) / 4.0
         raw_profile = profile_correlation_scores(pooled_profiles, offsets_voxels, peak_voxels, width_voxels, density_sign)
 
-        window_mean_scores[window_index], mean_fallback = robust_normalise(raw_means, mode=mode, points=points, local_radius_voxels=local_radius_voxels, min_local_neighbours=min_local_neighbours)
-        window_profile_scores[window_index], profile_fallback = robust_normalise(raw_profile, mode=mode, points=points, local_radius_voxels=local_radius_voxels, min_local_neighbours=min_local_neighbours)
+        window_mean_scores[window_index], mean_fallback = robust_normalise(raw_means, mode=mode, points=points, local_radius_voxels=local_radius_voxels, min_local_neighbours=min_local_neighbours, vesicle_ids=vesicle_ids)
+        window_profile_scores[window_index], profile_fallback = robust_normalise(raw_profile, mode=mode, points=points, local_radius_voxels=local_radius_voxels, min_local_neighbours=min_local_neighbours, vesicle_ids=vesicle_ids)
         if scoring_mode == 'profile':
             window_scores[window_index], window_fallback[window_index] = window_profile_scores[window_index], profile_fallback
         else:

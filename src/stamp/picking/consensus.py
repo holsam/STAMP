@@ -77,6 +77,7 @@ def reconcile_picks(
                 confidence=(sum(confidences) / len(confidences) if confidences else None),
                 source_picker='+'.join(sorted(contributing_pickers)),
                 beam_angle_deviation_degrees=all_picks[nearest].beam_angle_deviation_degrees,
+                vesicle_id=all_picks[nearest].vesicle_id,
             )
         )
     return reconciled
@@ -104,6 +105,7 @@ def build_particle_set(
             confidence=pick.confidence,
             half_set=half_set_by_id[particle_id],
             beam_angle_deviation_degrees=pick.beam_angle_deviation_degrees,
+            vesicle_id=pick.vesicle_id,
         ) for particle_id, pick in zip(particle_ids, reconciled_picks)
     ]
     return ParticleSet(

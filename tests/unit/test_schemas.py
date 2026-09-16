@@ -31,7 +31,6 @@ class TestManifestSchema:
         )
         assert manifest.is_decoy is False
 
-
 # TestParticleSchema: class containing unit tests for schemas/particle.py
 class TestParticleSchema:
     def _valid_particle(self, **overrides) -> Particle:
@@ -85,10 +84,30 @@ class TestParticleSchema:
                 contributing_pickers=['pyseg'],
             )
 
+    def test_particle_vesicle_id_defaults_to_none(self):
+        '''Existing call sites without vesicle_id still validate'''
+        particle = self._valid_particle()
+        assert particle.vesicle_id is None
+
+    def test_particle_accepts_vesicle_id(self):
+        '''Particle stores an explicit vesicle_id unchanged'''
+        particle = self._valid_particle(vesicle_id='tomo001:v0001')
+        assert particle.vesicle_id == 'tomo001:v0001'
+
     def test_class_assignment_construction(self):
         '''ClassAssignment should accept a valid input'''
         assignment = ClassAssignment(particle_id='p001', cluster_id='c01', classifier='example-classifier')
         assert assignment.cluster_id == 'c01'
+
+    def test_class_assignment_vesicle_id_defaults_to_none(self):
+        '''Existing call sites without vesicle_id still validate'''
+        assignment = ClassAssignment(particle_id='p001', cluster_id='c01', classifier='example-classifier')
+        assert assignment.vesicle_id is None
+
+    def test_class_assignment_accepts_vesicle_id(self):
+        '''ClassAssignment stores an explicit vesicle_id unchanged'''
+        assignment = ClassAssignment(particle_id='p001', cluster_id='c01', classifier='example-classifier', vesicle_id='tomo001:v0001')
+        assert assignment.vesicle_id == 'tomo001:v0001'
 
     def test_identification_result_construction(self):
         '''IdentifierResult should accept a valid input'''
@@ -100,7 +119,6 @@ class TestParticleSchema:
             score_gap_to_runner_up=0.31,
         )
         assert result.candidate_protein == 'Prot001'
-
 
 # TestProvenanceSchema: class containing unit tests for schemas/provenance.py
 class TestProvenanceSchema:
