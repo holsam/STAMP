@@ -4,6 +4,7 @@ STAMP: import per-vesicle labels from an EValuator label MRC and attribute surfa
 
 # Import external dependencies
 import mrcfile, numpy as np
+from dataclasses import dataclass
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -55,3 +56,29 @@ def vesicle_surface_area_angstrom2(
             continue
         totals[vesicle_id] = totals.get(vesicle_id, 0.0) + float(area_voxel2) * voxel_size_angstrom ** 2
     return totals
+
+# VesicleSummary: per-vesicle QC row for one tomogram
+@dataclass(frozen=True)
+class VesicleSummary:
+    vesicle_id: str
+    tomogram_id: str
+    n_picks: int
+    surface_area_angstrom2: float
+    picks_per_1000_angstrom2: float
+
+# summarise_vesicles: build a per-vesicle QC table from picks and their surface areas
+def summarise_vesicles(
+    picks: list, areas_by_vesicle: dict[str, float], tomogram_id: str,
+) -> list[VesicleSummary]:
+    counts: dict[str, int] = {}
+    for pick in picks:
+        if pick.vesicle_id:
+            counts[pick.vesicle_id] = counts.get(pick.vesicle_id, 0) + 1
+    all_ids = set(counts) | set(areas_by_vesicle)
+    summaries = []
+    for vesicle_id in sorted(all_ids):
+        area = areas_by_vesicle.get(vesicle_id, 0.0)
+        n_picks = counts.get(vesicle_id, 0)
+        density = (n_picks / area * 1000.0) if area > 0 else 0.0
+        summaries.append(VesicleSummary(vesicle_id, tomogram_id, n_picks, area, density))
+    return summaries

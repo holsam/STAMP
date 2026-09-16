@@ -25,6 +25,7 @@ from stamp.picking.geometry import (
 from stamp.picking.native import NativePickerConfig, pick_tomogram
 from stamp.picking.vesicles import (
     load_vesicle_labels,
+    summarise_vesicles,
     vesicle_ids_at,
     vesicle_surface_area_angstrom2,
 )
@@ -650,6 +651,30 @@ class TestVesicle:
         areas = vesicle_surface_area_angstrom2(vertices, faces, labels, voxel_size_angstrom=2.0, tomogram_id='t01')
         assert set(areas) == {'t01:v0001'}
         assert areas['t01:v0001'] > 0.0
+
+    def test_summarise_vesicles_reports_density(self) -> None:
+        '''Two vesicles with different pick counts but equal area get distinct densities'''
+        from types import SimpleNamespace
+        picks = [
+            SimpleNamespace(vesicle_id='t01:v0001'), SimpleNamespace(vesicle_id='t01:v0001'),
+            SimpleNamespace(vesicle_id='t01:v0002'),
+        ]
+        areas = {'t01:v0001': 2000.0, 't01:v0002': 2000.0}
+        summaries = {s.vesicle_id: s for s in summarise_vesicles(picks, areas, 't01')}
+        assert summaries['t01:v0001'].n_picks == 2
+        assert summaries['t01:v0002'].n_picks == 1
+        assert summaries['t01:v0001'].picks_per_1000_angstrom2 > summaries['t01:v0002'].picks_per_1000_angstrom2
+
+    def test_summarise_vesicles_includes_zero_pick_vesicles(self) -> None:
+        '''A vesicle with area but no picks still gets a zero-count, zero-density row'''
+        summaries = {s.vesicle_id: s for s in summarise_vesicles([], {'t01:v0001': 500.0}, 't01')}
+        assert summaries['t01:v0001'].n_picks == 0
+        assert summaries['t01:v0001'].picks_per_1000_angstrom2 == 0.0
+
+    def test_normalise_per_vesicle_without_labels_mrc_raises(self) -> None:
+        '''normalise_per_vesicle needs a labels MRC to normalise against'''
+        with pytest.raises(ValueError):
+            NativePickerConfig(voxel_size_angstrom=10.0, normalise_per_vesicle=True)
 
     def test_picker_wires_vesicle_id_onto_picks(self, tmp_path: Path) -> None:
         '''Picks from a labelled vesicle carry that vesicle_id; unlabelled points fall back to None'''
