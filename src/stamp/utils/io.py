@@ -3,7 +3,7 @@ STAMP: input/output utilities
 '''
 
 # Import external dependencies
-import hashlib, json, subprocess, tomli_w
+import hashlib, json, mrcfile, subprocess, tomli_w
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -170,3 +170,32 @@ def match_by_stem(
         else:
             matched[segmentation_path] = raw_path
     return matched, unmatched
+
+# read_voxel_size_angstrom: voxel size from an MRC header, Angstrom, or None if absent/zero/non-cubic
+def read_voxel_size_angstrom(path: Path) -> float | None:
+    from stamp.utils.log import log
+    with mrcfile.open(str(path), header_only=True, permissive=True) as mrc:
+        voxel_size = mrc.voxel_size
+    x, y, z = float(voxel_size.x), float(voxel_size.y), float(voxel_size.z)
+    if x <= 0 or y <= 0 or z <= 0:
+        log.debug(f'{path.name}: voxel size absent or zero in header')
+        return None
+    if not (abs(x - y) < 1e-3 and abs(y - z) < 1e-3):
+        log.warning(f'{path.name}: non-cubic voxel size in header ({x}, {y}, {z}), using x={x}')
+    return x
+
+# resolve_directory_voxel_size_angstrom: most common voxel size across a directory's MRC headers, warning if they disagree
+def resolve_directory_voxel_size_angstrom(paths: list[Path]) -> float | None:
+    from collections import Counter
+    from stamp.utils.log import log
+    sizes = [size for size in (read_voxel_size_angstrom(path) for path in paths) if size is not None]
+    if not sizes:
+        return None
+    # round to 1e-3 A so floating-point header noise doesn't split one true value into several counts
+    rounded = [round(size, 3) for size in sizes]
+    counts = Counter(rounded)
+    most_common_value, _count = counts.most_common(1)[0]
+    if len(counts) > 1:
+        breakdown = ', '.join(f'{value}Å x{count}' for value, count in counts.most_common())
+        log.warning(f'Multiple voxel sizes were found in MRC headers ({breakdown}) - using the most common {most_common_value}')
+    return most_common_value
