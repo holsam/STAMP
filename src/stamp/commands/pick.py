@@ -20,7 +20,7 @@ from stamp.picking.vesicles import load_vesicle_labels, summarise_vesicles, vesi
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
-from stamp.utils.io import write_sidecar
+from stamp.utils.io import match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 from stamp.utils.reporting import report_beam_angle_distribution
@@ -55,22 +55,29 @@ def _select_adapter(picker_name: str, backend: str) -> ToolAdapter:
 
 # _load_manifests: match segmentations to raw tomograms by filename stem
 def _load_manifests(
-    segmentation_dir: Path, raw_tomogram_dir: Path, voxel_size_angstrom: float
+    segmentation_dir: Path,
+    raw_tomogram_dir: Path,
+    voxel_size_angstrom: float | None,
 ) -> list[TomogramManifest]:
-    '''Unmatched segmentations are skipped with a warning rather than failing the run'''
-    raw_by_stem = {path.stem: path for path in sorted(raw_tomogram_dir.glob('*.mrc'))}
+    '''Unmatched segmentations are skipped with a warning rather than failing the run. Voxel size is read from each raw tomogram's MRC header when not given explicitly.'''
+    segmentation_paths = sorted(segmentation_dir.glob('*.mrc'))
+    raw_paths = sorted(raw_tomogram_dir.glob('*.mrc'))
+    matched, unmatched = match_by_stem(segmentation_paths, raw_paths)
+    for segmentation_path in unmatched:
+        log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
     manifests: list[TomogramManifest] = []
-    for segmentation_path in sorted(segmentation_dir.glob('*.mrc')):
-        raw_path = raw_by_stem.get(segmentation_path.stem)
-        if raw_path is None:
-            log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
-            continue
+    if voxel_size_angstrom is None:
+        resolved_voxel_size = resolve_directory_voxel_size_angstrom(list(matched.values()))
+        if resolved_voxel_size is None:
+            log.error(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
+            raise SystemExit(1)
+    for segmentation_path, raw_path in matched.items():
         manifests.append(
             TomogramManifest(
                 tomogram_id=segmentation_path.stem,
                 segmentation_path=segmentation_path,
                 raw_tomogram_path=raw_path,
-                voxel_size_angstrom=voxel_size_angstrom,
+                voxel_size_angstrom=voxel_size_angstrom or resolved_voxel_size,
             )
         )
     return manifests
