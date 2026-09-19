@@ -149,3 +149,24 @@ def write_sidecar(
     path = output_dir / 'params.toml'
     path.write_text(tomli_w.dumps(toml_none_to_empty(sidecar.model_dump(mode='json'))))
     return path
+
+# match_by_stem: pair segmentation files to raw tomogram files by longest common stem prefix
+def match_by_stem(
+    segmentation_paths: list[Path],
+    raw_paths: list[Path]
+) -> tuple[dict[Path, Path], list[Path]]:
+    raw_by_stem = {path.stem: path for path in raw_paths}
+    matched: dict[Path, Path] = {}
+    unmatched: list[Path] = []
+    for segmentation_path in segmentation_paths:
+        stem = segmentation_path.stem
+        raw_path = raw_by_stem.get(stem)
+        if raw_path is None:
+            candidates = [raw_stem for raw_stem in raw_by_stem if stem.startswith(raw_stem)]
+            if candidates:
+                raw_path = raw_by_stem[max(candidates, key=len)]
+        if raw_path is None:
+            unmatched.append(segmentation_path)
+        else:
+            matched[segmentation_path] = raw_path
+    return matched, unmatched
