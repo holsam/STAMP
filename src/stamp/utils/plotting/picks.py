@@ -97,11 +97,15 @@ def plot_zstack_movie(
             return image, protein, scatter
 
         animation = FuncAnimation(fig, _update, frames=volume.shape[0], blit=False)
+        path = output_dir / f'{tomogram_id}_zstack.mp4'
         if have_ffmpeg:
-            path = output_dir / f'{tomogram_id}_zstack.mp4'
-            animation.save(path, writer=FFMpegWriter(fps=fps))
-        else:
-            path = output_dir / f'{tomogram_id}_zstack.gif'
+            try:
+                animation.save(path, writer=FFMpegWriter(fps=fps))
+            except Exception as exc:
+                log.warning(f'ffmpeg failed writing {path.name} ({exc}), falling back to .gif')
+                have_ffmpeg = False
+        if not have_ffmpeg:
+            path = path.with_suffix('.gif')
             animation.save(path, writer=PillowWriter(fps=fps))
         plt.close(fig)
         log.info(f'Wrote Z-stack movie: {path}')
