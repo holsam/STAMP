@@ -233,7 +233,7 @@ class TestIoResolveDirectoryVoxelSizeAngstrom:
                 mrc.voxel_size = size
             paths.append(path)
         assert io_utils.resolve_directory_voxel_size_angstrom(paths) == pytest.approx(10.0, abs=1e-2)
-        assert 'Multiple voxel sizes detected' in caplog.text
+        assert 'Multiple voxel sizes were found' in caplog.text
 
     def test_no_headers_returns_none(self, tmp_path: Path) -> None:
         path = tmp_path / 'a.mrc'

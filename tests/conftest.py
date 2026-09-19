@@ -3,13 +3,26 @@ STAMP: test suite shared fixtures
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np, pytest
+import json, logging, mrcfile, numpy as np, pytest
+from loguru import logger
 from pathlib import Path
 from typer.testing import CliRunner
 from stamp.cli.cli import stamp
 
 # Initialise CLI runner
 _runner = CliRunner()
+
+# _PropagateHandler: forwards loguru records into stdlib logging
+class _PropagateHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        logging.getLogger(record.name).handle(record)
+
+# _propagate_loguru_to_caplog: autouses _PropagateHandler so caplog works with loguru without needing to be called each time
+@pytest.fixture(autouse=True)
+def _propagate_loguru_to_caplog():
+    handler_id = logger.add(_PropagateHandler(), format='{message}')
+    yield
+    logger.remove(handler_id)
 
 # _make_dataset: 3 segmentation/tomogram pairs with a membrane slab + planted blobs, plus candidates.yaml
 def _make_dataset(root: Path) -> Path:
