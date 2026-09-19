@@ -20,7 +20,7 @@ from stamp.picking.vesicles import load_vesicle_labels, summarise_vesicles, vesi
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
-from stamp.utils.io import write_sidecar
+from stamp.utils.io import match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 from stamp.utils.reporting import report_beam_angle_distribution
@@ -55,22 +55,29 @@ def _select_adapter(picker_name: str, backend: str) -> ToolAdapter:
 
 # _load_manifests: match segmentations to raw tomograms by filename stem
 def _load_manifests(
-    segmentation_dir: Path, raw_tomogram_dir: Path, voxel_size_angstrom: float
+    segmentation_dir: Path,
+    raw_tomogram_dir: Path,
+    voxel_size_angstrom: float | None,
 ) -> list[TomogramManifest]:
-    '''Unmatched segmentations are skipped with a warning rather than failing the run'''
-    raw_by_stem = {path.stem: path for path in sorted(raw_tomogram_dir.glob('*.mrc'))}
+    '''Unmatched segmentations are skipped with a warning rather than failing the run. Voxel size is read from each raw tomogram's MRC header when not given explicitly.'''
+    segmentation_paths = sorted(segmentation_dir.glob('*.mrc'))
+    raw_paths = sorted(raw_tomogram_dir.glob('*.mrc'))
+    matched, unmatched = match_by_stem(segmentation_paths, raw_paths)
+    for segmentation_path in unmatched:
+        log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
     manifests: list[TomogramManifest] = []
-    for segmentation_path in sorted(segmentation_dir.glob('*.mrc')):
-        raw_path = raw_by_stem.get(segmentation_path.stem)
-        if raw_path is None:
-            log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
-            continue
+    if voxel_size_angstrom is None:
+        resolved_voxel_size = resolve_directory_voxel_size_angstrom(list(matched.values()))
+        if resolved_voxel_size is None:
+            log.error(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
+            raise SystemExit(1)
+    for segmentation_path, raw_path in matched.items():
         manifests.append(
             TomogramManifest(
                 tomogram_id=segmentation_path.stem,
                 segmentation_path=segmentation_path,
                 raw_tomogram_path=raw_path,
-                voxel_size_angstrom=voxel_size_angstrom,
+                voxel_size_angstrom=voxel_size_angstrom or resolved_voxel_size,
             )
         )
     return manifests
@@ -195,6 +202,7 @@ def run_pick(
         log.error(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
         raise SystemExit(1)
     log.info(f'Matched {len(manifests)} tomograms/segmentations')
+    resolved_voxel_size_angstrom = manifests[0].voxel_size_angstrom
 
     runner = select_runner(backend)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -209,7 +217,7 @@ def run_pick(
         adapter = _select_adapter(picker_name, backend)
         picker_output_dir = output_dir / 'raw' / picker_name
         parameters = {
-            'voxel_size_angstrom': voxel_size_angstrom,
+            'voxel_size_angstrom': resolved_voxel_size_angstrom,
             **extra_params.get(picker_name, {}),
         }
         if picker_name == NATIVE_PICKER_NAME and vesicle_labels_mrc_by_tomogram:
@@ -270,7 +278,7 @@ def run_pick(
             'consensus_rule': consensus_rule,
             'distance_threshold': distance_threshold,
             'half_set_seed': half_set_seed,
-            'voxel_size_angstrom': voxel_size_angstrom,
+            'voxel_size_angstrom': resolved_voxel_size_angstrom,
             'backend': backend,
             'picker_params': extra_params,
             'vesicle_labels_mrc': {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()},
@@ -281,7 +289,8 @@ def run_pick(
     log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
     if make_plots:
         segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests}
-        plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie)
+        raw_tomogram_paths = {m.tomogram_id: m.raw_tomogram_path for m in manifests}
+        plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie)
 
 # build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
 def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
