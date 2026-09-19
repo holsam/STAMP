@@ -9,10 +9,11 @@ from typing import Annotated, Literal
 
 # Import internal commands
 from stamp.cli import classify, decoy, identify, pick, refine, run, tools
+from stamp.utils.errors import StampError
 from stamp.utils.log import configure_logging, log
 
 # Initialise Typer app 
-stamp = typer.Typer(
+stamp_app = typer.Typer(
     name = 'stamp',
     help = 'Sub-Tomogram Averaging Membrane Protein pipeline',
     no_args_is_help = True,
@@ -21,13 +22,13 @@ stamp = typer.Typer(
 )
 
 # Add command Typer classes
-stamp.add_typer(pick.pickCli)
-stamp.add_typer(decoy.decoyCli)
-stamp.add_typer(classify.classifyCli)
-stamp.add_typer(identify.identifyCli)
-stamp.add_typer(refine.refineCli)
-stamp.add_typer(run.runCli)
-stamp.add_typer(
+stamp_app.add_typer(pick.pickCli)
+stamp_app.add_typer(decoy.decoyCli)
+stamp_app.add_typer(classify.classifyCli)
+stamp_app.add_typer(identify.identifyCli)
+stamp_app.add_typer(refine.refineCli)
+stamp_app.add_typer(run.runCli)
+stamp_app.add_typer(
     tools.toolsCli,
     name='tools',
     help='Misc STAMP tools.',
@@ -35,7 +36,7 @@ stamp.add_typer(
 )
 
 # logging_callback: provide logging options and configure logging
-@stamp.callback()
+@stamp_app.callback()
 def logging_callback(
     ctx: typer.Context,
     log_dir: Annotated[
@@ -67,3 +68,9 @@ def logging_callback(
     print()
     log.debug(f'Logging configured to stderr and log file (mode: {log_mode}) at level {log_level}')
     log.info(f'Logs will be saved to: {log_path}')
+
+def stamp() -> None:
+    try:
+        stamp_app()
+    except StampError:
+        raise SystemExit(1) from None
