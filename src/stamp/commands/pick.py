@@ -202,6 +202,7 @@ def run_pick(
         log.error(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
         raise SystemExit(1)
     log.info(f'Matched {len(manifests)} tomograms/segmentations')
+    resolved_voxel_size_angstrom = manifests[0].voxel_size_angstrom
 
     runner = select_runner(backend)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -216,7 +217,7 @@ def run_pick(
         adapter = _select_adapter(picker_name, backend)
         picker_output_dir = output_dir / 'raw' / picker_name
         parameters = {
-            'voxel_size_angstrom': voxel_size_angstrom,
+            'voxel_size_angstrom': resolved_voxel_size_angstrom,
             **extra_params.get(picker_name, {}),
         }
         if picker_name == NATIVE_PICKER_NAME and vesicle_labels_mrc_by_tomogram:
@@ -277,7 +278,7 @@ def run_pick(
             'consensus_rule': consensus_rule,
             'distance_threshold': distance_threshold,
             'half_set_seed': half_set_seed,
-            'voxel_size_angstrom': voxel_size_angstrom,
+            'voxel_size_angstrom': resolved_voxel_size_angstrom,
             'backend': backend,
             'picker_params': extra_params,
             'vesicle_labels_mrc': {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()},
