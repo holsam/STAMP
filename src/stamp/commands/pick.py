@@ -288,7 +288,8 @@ def run_pick(
     log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
     if make_plots:
         segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests}
-        plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie)
+        raw_tomogram_paths = {m.tomogram_id: m.raw_tomogram_path for m in manifests}
+        plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie)
 
 # build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
 def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
