@@ -21,6 +21,8 @@ class Particle(BaseModel):
     source_picker: str
     confidence: float | None = None
     half_set: HalfSet
+    vesicle_id: str | None = Field(default=None, description='Vesicle ID from an EValuator labelled MRC')
+    beam_angle_deviation_degrees: float | None = Field(default=None, description='Angle in degrees between the pick normal and the beam-orthogonal (xy) plane (0 = beam-orthogonal; 90 = beam-aligned)')
 
     @field_validator('orientation')
     @classmethod
@@ -51,6 +53,7 @@ class ClassAssignment(BaseModel):
     cluster_id: str
     classifier: str
     inplane_angle_degrees: float | None = None
+    vesicle_id: str | None = None  # denormalised from Particle so class_assignments.json doesn't need to rejoin particle_set.json
 
 # IdentificationResult: candidate protein assignment for a cluster
 class IdentificationResult(BaseModel):

@@ -23,6 +23,7 @@ from stamp.classify.extract import (
     quaternion_to_matrix,
 )
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
+from stamp.commands.classify import _classify_combined
 from stamp.picking.geometry import quaternion_from_reference_to
 from stamp.schemas.particles import HalfSet, Particle
 
@@ -355,3 +356,64 @@ class TestAlign:
         stack = np.random.default_rng(0).random((4, 15, 15, 15))
         angles = align_inplane(stack, ['noise', 'noise', 'c00', 'c00'])
         assert set(angles) == {2, 3}
+
+# TestVesicle: class containing unit tests for vesicle_id carry-through in classification
+class TestVesicle:
+    def test_class_assignment_carries_vesicle_id(self, tmp_path: Path) -> None:
+        '''vesicle_id on a Particle survives unchanged into its ClassAssignment'''
+        rng = np.random.default_rng(0)
+        n_per_group, box = 6, 5
+        centres = np.array([[0.0, 0.0], [20.0, 0.0]])
+        features = np.vstack([rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres])
+        n_particles = features.shape[0]
+        subvolumes = np.zeros((n_particles, box, box, box), dtype=np.float32)
+
+        particles = [
+            Particle(
+                particle_id=f'p{index:06d}',
+                tomogram_id='tomo000',
+                position=(0.0, 0.0, 0.0),
+                source_picker='stamp-native',
+                half_set=HalfSet.A if index % 2 == 0 else HalfSet.B,
+                vesicle_id=f'tomo000:v{(index % 2) + 1:04d}',
+            )
+            for index in range(n_particles)
+        ]
+
+        config = ClusteringConfig(method='kmeans', n_components=2, n_clusters=2)
+        align_settings = dict(enabled=False, angular_step_degrees=10.0, iterations=1)
+        assignments, _result_by_half, _averages_by_half = _classify_combined(
+            particles, subvolumes, features, config, tmp_path, voxel_size_angstrom=1.0, align_settings=align_settings,
+        )
+
+        assert len(assignments) == n_particles
+        for particle, assignment in zip(particles, assignments):
+            assert assignment.vesicle_id == particle.vesicle_id
+
+    def test_class_assignment_vesicle_id_none_when_unset(self, tmp_path: Path) -> None:
+        '''Particles with no vesicle_id (default picking, no labels MRC) produce assignments with vesicle_id=None'''
+        rng = np.random.default_rng(1)
+        n_per_group, box = 6, 5
+        centres = np.array([[0.0, 0.0], [20.0, 0.0]])
+        features = np.vstack([rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres])
+        n_particles = features.shape[0]
+        subvolumes = np.zeros((n_particles, box, box, box), dtype=np.float32)
+
+        particles = [
+            Particle(
+                particle_id=f'p{index:06d}',
+                tomogram_id='tomo000',
+                position=(0.0, 0.0, 0.0),
+                source_picker='stamp-native',
+                half_set=HalfSet.A if index % 2 == 0 else HalfSet.B,
+            )
+            for index in range(n_particles)
+        ]
+
+        config = ClusteringConfig(method='kmeans', n_components=2, n_clusters=2)
+        align_settings = dict(enabled=False, angular_step_degrees=10.0, iterations=1)
+        assignments, _result_by_half, _averages_by_half = _classify_combined(
+            particles, subvolumes, features, config, tmp_path, voxel_size_angstrom=1.0, align_settings=align_settings,
+        )
+
+        assert all(assignment.vesicle_id is None for assignment in assignments)

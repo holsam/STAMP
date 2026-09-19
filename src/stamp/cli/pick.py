@@ -75,6 +75,18 @@ def pick(
         bool,
         typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.'),
     ] = True,
+    max_beam_angle_deviation: Annotated[
+        float | None,
+        typer.Option('--max-beam-angle-deviation', help='Normal deviation from beam-orthogonal plane to drop particles.'),
+    ] = None,
+    vesicle_labels_mrc: Annotated[
+        Path | None,
+        typer.Option('--vesicle-labels-mrc', help='Path to an EValuator labelled MRC, or a directory to be matched by filename stem.', exists=True, readable=True),
+    ] = None,
+    normalise_per_vesicle: Annotated[
+        bool,
+        typer.Option('--normalise-per-vesicle', help='Normalise stamp-native scores per vesicle instead of per tomogram.'),
+    ] = False,
 ) -> None:
     '''Run particle picking, reconcile across pickers, and assign half-sets.'''
     # Validate provided pickers
@@ -107,4 +119,7 @@ def pick(
         pick_plot_style=pick_plot_style,
         plot_format=plot_format,
         pick_zstack_movie=pick_zstack_movie,
+        max_beam_angle_deviation=max_beam_angle_deviation,
+        vesicle_labels_mrc=vesicle_labels_mrc,
+        normalise_per_vesicle=normalise_per_vesicle,
     )

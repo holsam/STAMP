@@ -9,10 +9,13 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.picking.consensus import build_particle_set, reconcile_picks
 from stamp.picking.geometry import (
+    beam_angle_deviation_degrees,
     compose_roll_about_normal,
     downsample_points,
     exclude_near_boundary,
     extract_surface,
+    local_normalise,
+    max_order_statistic_offset,
     non_maximum_suppression,
     quaternion_from_reference_to,
     robust_normalise,
@@ -20,6 +23,13 @@ from stamp.picking.geometry import (
     score_membrane_faces
 )
 from stamp.picking.native import NativePickerConfig, pick_tomogram
+from stamp.picking.vesicles import (
+    load_vesicle_labels,
+    summarise_vesicles,
+    vesicle_ids_at,
+    vesicle_surface_area_angstrom2,
+)
+from stamp.schemas.particles import HalfSet, Particle
 from stamp.schemas.picks import RawPick
 
 # _hollow_sphere: a hollow spherical shell segmentation volume
@@ -35,9 +45,7 @@ def _write_mrc(path: Path, volume: np.ndarray) -> None:
         mrc.set_data(volume.astype(np.float32))
 
 # _vesicle_with_particles: a hollow-sphere segmentation plus a tomogram with dark blobs outside the shell
-def _vesicle_with_particles(
-    shape=(60, 60, 60), radius=18.0, thickness=2.0, particle_offsets=((0, 0, 1),)
-):
+def _vesicle_with_particles(shape=(60, 60, 60), radius=18.0, thickness=2.0, particle_offsets=((0, 0, 1),)):
     '''A hollow sphere segmentation plus a matching tomogram with dark blobs planted just outside the shell along the given directions'''
     centre = np.array(shape) / 2.0
     grid = np.stack(np.meshgrid(*[np.arange(s) for s in shape], indexing='ij'), axis=-1)
@@ -72,6 +80,81 @@ def _pick(tomogram_id: str, position, picker: str, confidence=0.8, orientation=N
         confidence=confidence,
         source_picker=picker,
     )
+
+# _linear_gradient_vesicle: hollow-sphere segmentation on a tomogram whose background ramps linearly along x, with identical particle blobs planted at both ends
+def _linear_gradient_vesicle(shape=(80, 80, 120), radius=20.0, thickness=2.0) -> tuple[np.ndarray, np.ndarray]:
+    centre = np.array(shape) / 2.0
+    grid = np.stack(np.meshgrid(*[np.arange(s) for s in shape], indexing='ij'), axis=-1)
+    distance = np.linalg.norm(grid - centre, axis=-1)
+    segmentation = ((distance > radius - thickness) & (distance < radius + thickness)).astype(np.float32)
+    # Background ramps from 0 at x=0 to -4 at x=max to mimic thickness/defocus gradient
+    x_ramp = -4.0 * (np.arange(shape[2]) / (shape[2] - 1))
+    tomogram = np.broadcast_to(x_ramp[None, None, :], shape).astype(np.float32).copy()
+    # Small noise floor: real tomograms are never noiseless, and MAD needs ambient
+    # variance to behave as a stable scale estimator rather than tracking blob contamination directly
+    tomogram = tomogram + np.random.default_rng(0).normal(scale=0.3, size=shape).astype(np.float32)
+    tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
+    # Identical dark particle blobs just outside the shell, at low-x and high-x poles
+    for x_index in (shape[2] // 2 - int(radius) - 5, shape[2] // 2 + int(radius) + 5):
+        centre_particle = np.array([shape[0] / 2, shape[1] / 2, x_index])
+        particle_distance = np.linalg.norm(grid - centre_particle, axis=-1)
+        tomogram[particle_distance < 3.0] -= 3.0
+    return segmentation, tomogram
+
+# _particle_free_vesicle: a spherical shell segmentation with a tomogram of pure background noise, no planted density, for measuring false-positive rate
+def _particle_free_vesicle(seed: int) -> tuple[np.ndarray, np.ndarray]:
+    shape = (60, 60, 60)
+    centre = np.array(shape) / 2.0
+    zz, yy, xx = np.mgrid[0:shape[0], 0:shape[1], 0:shape[2]]
+    radius = np.sqrt((zz - centre[0]) ** 2 + (yy - centre[1]) ** 2 + (xx - centre[2]) ** 2)
+    segmentation = ((radius > 18.0) & (radius < 20.0)).astype(np.float32)
+    rng = np.random.default_rng(seed)
+    tomogram = rng.normal(0.0, 1.0, size=shape).astype(np.float32)
+    return segmentation, tomogram
+
+# _vesicle_with_two_protrusion_heights: a hollow-sphere segmentation with two planted particles at distinct offsets from the membrane, on opposite sides so NMS keeps them apart
+def _vesicle_with_two_protrusion_heights(
+    shape=(120, 120, 120), radius=20.0, thickness=2.0,
+    small_offset_angstrom=35.0, large_offset_angstrom=130.0, voxel_size_angstrom=10.0,
+):
+    centre = np.array(shape) / 2.0
+    grid = np.stack(np.meshgrid(*[np.arange(s) for s in shape], indexing='ij'), axis=-1)
+    distance = np.linalg.norm(grid - centre, axis=-1)
+    segmentation = ((distance > radius - thickness) & (distance < radius + thickness)).astype(np.float32)
+    tomogram = np.zeros(shape, dtype=np.float32)
+    tomogram[segmentation > 0] = -1.0
+
+    expected_positions_zyx = []
+    for direction, offset_angstrom in (((0, 0, 1), small_offset_angstrom), ((0, 0, -1), large_offset_angstrom)):
+        unit = np.array(direction, dtype=float)
+        unit /= np.linalg.norm(unit)
+        offset_voxels = offset_angstrom / voxel_size_angstrom
+        position = centre + unit * (radius + offset_voxels)
+        expected_positions_zyx.append(position)
+        index = np.round(position).astype(int)
+        tomogram[
+            index[0] - 2 : index[0] + 3,
+            index[1] - 2 : index[1] + 3,
+            index[2] - 2 : index[2] + 3,
+        ] = -8.0
+    return segmentation, tomogram, expected_positions_zyx
+
+# _count_above_threshold_uncorrected: repeat the pre-NMS scoring step at plain n_mad (no order-statistic correction), for comparison against the corrected threshold
+def _count_above_threshold_uncorrected(tmp_path: Path, config: NativePickerConfig, n_mad: float) -> int:
+    with mrcfile.open(str(tmp_path / 'seg.mrc'), permissive=True) as mrc:
+        segmentation = np.asarray(mrc.data)
+    with mrcfile.open(str(tmp_path / 'tomo.mrc'), permissive=True) as mrc:
+        tomogram = np.asarray(mrc.data).astype(np.float32).copy()
+    tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
+    vertices, normals = extract_surface(segmentation)
+    vertices, normals = downsample_points(vertices, normals, config.to_voxels(config.surface_spacing_angstrom))
+    inside = exclude_near_boundary(vertices, segmentation.shape, config.to_voxels(config.max_offset_angstrom))
+    vertices, normals = vertices[inside], normals[inside]
+    windows = [(config.to_voxels(lo), config.to_voxels(hi)) for lo, hi in config.offset_windows_angstrom]
+    _points, _n, scores, _w, _used_fallback, _mean, _profile = score_membrane_faces(
+        tomogram, vertices, normals, windows, config.n_samples, config.density_sign, scoring_mode=config.scoring_mode,
+    )
+    return int(np.sum(scores >= n_mad))
 
 # TestGeometry: class containing unit tests for test_geometry.py
 class TestGeometry:
@@ -125,14 +208,13 @@ class TestGeometry:
 
     def test_robust_normalise_handles_flat_input(self) -> None:
         '''A flat input normalises to zeros'''
-        np.testing.assert_array_equal(
-            robust_normalise(np.ones(10)), np.zeros(10)
-        )
+        normalised, _used_fallback = robust_normalise(np.ones(10))
+        np.testing.assert_array_equal(normalised, np.zeros(10))
 
     def test_robust_normalise_scales_outlier(self) -> None:
         '''A lone outlier normalises well above threshold'''
         values = np.concatenate([np.zeros(99), [100.0]])
-        normalised = robust_normalise(values)
+        normalised, _used_fallback = robust_normalise(values)
         assert normalised[-1] > 3.0
 
     def test_non_maximum_suppression_keeps_highest(self) -> None:
@@ -178,7 +260,7 @@ class TestGeometry:
         normals = np.tile([1.0, 0.0, 0.0], (vertices.shape[0], 1))
         n_points = vertices.shape[0]
         contaminated = int(np.where(ys == 20.0)[0][0])
-        _points, _n, scores = score_membrane_faces(tomo, vertices, normals, 3.0, 6.0, 3, -1)
+        _points, _n, scores, _w, _used_fallback, _mean, _profile = score_membrane_faces(tomo, vertices, normals, [(3.0, 6.0)], 3, -1)
         assert scores.shape == (2 * n_points,)
         pos_face, neg_face = scores[:n_points], scores[n_points:]
         clean = [i for i in range(n_points) if i != contaminated]
@@ -188,6 +270,32 @@ class TestGeometry:
         for i in clean:
             assert abs(pos_face[i]) < 1e-6
             assert abs(neg_face[i]) < 1e-6
+
+    def test_score_membrane_faces_reports_winning_window(self) -> None:
+        '''A point with density only in the second window is won by that window, not the first.'''
+        tomo = np.zeros((60, 60, 60), dtype=np.float32)
+        tomo[20, 20, 55] = -5.0  # offset 35 voxels along +x from the point below
+        vertices = np.array([[20.0, 20.0, 20.0]])
+        normals = np.array([[0.0, 0.0, 1.0]])
+        windows = [(2.0, 10.0), (30.0, 40.0)]
+        _points, _n, scores, winning_window, _used_fallback, _mean, _profile = score_membrane_faces(tomo, vertices, normals, windows, 5, -1)
+        # two faces per point; the +x face (index 0) sees the density, the -x face (index 1) sees nothing
+        assert winning_window[0] == 1
+        assert scores[0] > scores[1]
+
+    def test_max_order_statistic_offset_zero_for_single_window(self) -> None:
+        assert max_order_statistic_offset(1) == 0.0
+
+    def test_max_order_statistic_offset_increases_with_window_count(self) -> None:
+        assert 0.0 < max_order_statistic_offset(2) < max_order_statistic_offset(4) < max_order_statistic_offset(8)
+
+    def test_max_order_statistic_offset_rejects_zero_windows(self) -> None:
+        with pytest.raises(ValueError, match='n_windows'):
+            max_order_statistic_offset(0)
+
+    def test_score_membrane_faces_rejects_no_windows(self) -> None:
+        with pytest.raises(ValueError, match='offset_windows_voxels'):
+            score_membrane_faces(np.zeros((10, 10, 10)), np.zeros((1, 3)), np.array([[0.0, 0.0, 1.0]]), [], 5, -1)
 
     # test_compose_roll_is_identity_at_zero: zero angle leaves the normal quaternion unchanged
     def test_compose_roll_is_identity_at_zero(self):
@@ -205,6 +313,82 @@ class TestGeometry:
         moved = quaternion_to_matrix(rolled) @ np.array([0.0, 0.0, 1.0])
         assert np.allclose(moved, target, atol=1e-6)
 
+    def test_global_normalisation_biases_picks_toward_low_background_end(self, tmp_path: Path) -> None:
+        segmentation, tomogram = _linear_gradient_vesicle()
+        seg_path, tomo_path = tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc'
+        _write_mrc(seg_path, segmentation)
+        _write_mrc(tomo_path, tomogram)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=1.5, normalisation='global', scoring_mode='mean')
+        picks = pick_tomogram(seg_path, tomo_path, 'gradient', config)
+        # Both particles are equally strong so global threshold should favour low-background (high-x, deep-ramp) end
+        x_positions = [pick.position[0] for pick in picks]
+        assert len(x_positions) > 0
+        low_x_count = sum(1 for x in x_positions if x < tomogram.shape[2] / 2)
+        high_x_count = len(x_positions) - low_x_count
+        assert high_x_count > low_x_count
+
+    def test_local_normalisation_does_not_bias_picks(self, tmp_path: Path) -> None:
+        segmentation, tomogram = _linear_gradient_vesicle()
+        seg_path, tomo_path = tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc'
+        _write_mrc(seg_path, segmentation)
+        _write_mrc(tomo_path, tomogram)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=1.5, normalisation='local', local_radius_angstrom=250.0, min_local_neighbours=5, scoring_mode='mean')
+        picks = pick_tomogram(seg_path, tomo_path, 'gradient', config)
+        x_positions = [pick.position[0] for pick in picks]
+        assert len(x_positions) > 0
+        low_x_count = sum(1 for x in x_positions if x < tomogram.shape[2] / 2)
+        high_x_count = len(x_positions) - low_x_count
+        assert low_x_count > 0 and high_x_count > 0
+
+    def test_beam_aligned_and_orthogonal_particles_get_correct_deviation(self, tmp_path: Path) -> None:
+        '''A particle planted beam-aligned (normal along z) reads ~90 deg; one beam-orthogonal (normal in-plane) reads ~0 deg.'''
+        segmentation, tomogram, _ = _vesicle_with_particles(particle_offsets=((0, 0, 1), (1, 0, 0)),)
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+
+        config = NativePickerConfig(
+            voxel_size_angstrom=10.0,
+            offset_windows_angstrom=((40.0, 80.0),),
+            surface_spacing_angstrom=20.0,
+            min_particle_distance_angstrom=80.0,
+            n_mad=3.0,
+        )
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+        assert picks, 'picker found nothing where particles were planted'
+
+        deviations = np.array([p.beam_angle_deviation_degrees for p in picks])
+        # nearest-beam-aligned pick and nearest-beam-orthogonal pick, by deviation
+        assert deviations.max() > 60.0, 'expected a near-beam-aligned pick close to 90 deg'
+        assert deviations.min() < 30.0, 'expected a near-beam-orthogonal pick close to 0 deg'
+
+    def test_beam_angle_deviation_matches_closed_form(self) -> None:
+        '''Directly check the deviation formula against known normals.'''
+        assert beam_angle_deviation_degrees(np.array([0.0, 0.0, 1.0])) == pytest.approx(90.0)
+        assert beam_angle_deviation_degrees(np.array([1.0, 0.0, 0.0])) == pytest.approx(0.0)
+        assert beam_angle_deviation_degrees(np.array([0.0, 1.0, 0.0])) == pytest.approx(0.0)
+        assert beam_angle_deviation_degrees(np.array([0.0, 0.0, -1.0])) == pytest.approx(90.0)
+
+    def test_filter_removes_polar_picks_when_enabled(self) -> None:
+        particles = [
+            Particle(particle_id='p0', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=5.0),
+            Particle(particle_id='p1', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=85.0),
+        ]
+        kept = [p for p in particles if p.beam_angle_deviation_degrees is None or p.beam_angle_deviation_degrees <= 45.0]
+        assert [p.particle_id for p in kept] == ['p0']
+
+    def test_filter_retains_all_when_disabled(self) -> None:
+        particles = [
+            Particle(particle_id='p0', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=5.0),
+            Particle(particle_id='p1', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=85.0),
+        ]
+        # max_beam_angle_deviation is None: no filtering happens at all
+        max_beam_angle_deviation = None
+        kept = particles if max_beam_angle_deviation is None else [
+            p for p in particles if p.beam_angle_deviation_degrees is None or p.beam_angle_deviation_degrees <= max_beam_angle_deviation
+        ]
+        assert len(kept) == 2
+
+
 # TestNativePicker: class containing unit tests for test_native_picker.py
 class TestNativePicker:
     def test_picker_finds_planted_particle(self, tmp_path: Path) -> None:
@@ -215,8 +399,7 @@ class TestNativePicker:
 
         config = NativePickerConfig(
             voxel_size_angstrom=10.0,
-            offset_min_angstrom=40.0,
-            offset_max_angstrom=80.0,
+            offset_windows_angstrom=((40.0, 80.0),),
             surface_spacing_angstrom=20.0,
             min_particle_distance_angstrom=80.0,
             n_mad=3.0,
@@ -273,6 +456,70 @@ class TestNativePicker:
         '''A density_sign other than +1 or -1 raises'''
         with pytest.raises(ValueError, match='density_sign'):
             NativePickerConfig(voxel_size_angstrom=10.0, density_sign=0)
+
+    def test_sparse_neighbourhood_falls_back_to_global(self) -> None:
+        rng = np.random.default_rng(0)
+        # A dense cluster near the origin, plus one isolated point far away with no neighbours within radius: the isolated point should fall back to global stats
+        dense_points = rng.normal(size=(50, 3)) * 5.0
+        isolated_point = np.array([[500.0, 500.0, 500.0]])
+        points = np.vstack([dense_points, isolated_point])
+        values = rng.normal(size=51)
+        normalised, used_fallback = local_normalise(values, points, radius_voxels=20.0, min_neighbours=10)
+        assert not used_fallback[:50].any()
+        assert used_fallback[50]
+        global_median = np.median(values)
+        global_mad = np.median(np.abs(values - global_median))
+        global_scale = 1.4826 * global_mad if global_mad > 0.0 else values.std()
+        expected_isolated = (values[50] - global_median) / global_scale
+        assert normalised[50] == pytest.approx(expected_isolated)
+
+    def test_robust_normalise_local_mode_requires_points(self) -> None:
+        with pytest.raises(ValueError):
+            robust_normalise(np.ones(10), mode='local')
+
+    def test_multiscale_offsets_separate_two_protrusion_heights(self, tmp_path: Path) -> None:
+        '''Two particles at distinct protrusion heights are each best scored by the window whose range covers that height, and the recorded winning window separates them.'''
+        segmentation, tomogram, _ = _vesicle_with_two_protrusion_heights(small_offset_angstrom=35.0, large_offset_angstrom=130.0)
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.0)
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+
+        small_picks = [p for p in picks if p.offset_window_angstrom is not None and p.offset_window_angstrom[1] <= 80.0]
+        large_picks = [p for p in picks if p.offset_window_angstrom is not None and p.offset_window_angstrom[0] >= 70.0]
+        assert small_picks, 'the 35A protrusion should be won by a small offset window'
+        assert large_picks, 'the 130A protrusion should be won by a large offset window'
+        assert {p.offset_window_angstrom for p in small_picks}.isdisjoint(
+            {p.offset_window_angstrom for p in large_picks}
+        )
+
+    def test_single_window_config_matches_pre_6g_threshold(self) -> None:
+        '''A single-element offset_windows_angstrom has no order-statistic correction to apply.'''
+        config = NativePickerConfig(voxel_size_angstrom=10.0, offset_windows_angstrom=((40.0, 80.0),), n_mad=3.0)
+        assert config.effective_n_mad == pytest.approx(3.0)
+
+    def test_multiscale_threshold_correction_holds_false_positive_rate(self, tmp_path: Path) -> None:
+        '''
+        On a particle-free tomogram, scoring four windows and thresholding at effective_n_mad doesn't pass more points than scoring one window at n_mad.
+        An uncorrected max over the same four windows, thresholded at plain n_mad, does pass more points that scoring a single window.
+        '''
+        segmentation, tomogram = _particle_free_vesicle(seed=0)
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+
+        n_mad = 2.5
+        single = NativePickerConfig(voxel_size_angstrom=10.0, offset_windows_angstrom=((40.0, 80.0),), n_mad=n_mad, scoring_mode='mean')
+        multi = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=n_mad, scoring_mode='mean')  # default 4 windows
+
+        single_picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', single)
+        multi_picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', multi)
+
+        # uncorrected: same tomogram & windows, thresholded at plain n_mad instead of effective_n_mad
+        uncorrected_above = _count_above_threshold_uncorrected(tmp_path, multi, n_mad)
+
+        assert len(multi_picks) <= len(single_picks) + 1, f'corrected multi-window picking should not produce more false positives than single-window picking on a particle-free tomogram (single: {len(single_picks)}; multi: {len(multi_picks)})'
+        assert uncorrected_above > len(multi_picks), f'uncorrected thresholding passes more candidates than the corrected version (single: {len(single_picks)}; uncorrected: {uncorrected_above}; corrected: {len(multi_picks)})'
 
 # TestConsensusRules: class containing tests for consensus rules (intersection/union)
 class TestConsensusRules:
@@ -366,3 +613,146 @@ class TestConsensus:
         assert len(particle_set.particles) == 2
         assert len({particle.particle_id for particle in particle_set.particles}) == 2
         assert all(particle.half_set is not None for particle in particle_set.particles)
+
+# TestVesicle: class containing unit tests for picking/vesicle.py
+class TestVesicle:
+    def test_load_vesicle_labels_rejects_shape_mismatch(self, tmp_path: Path) -> None:
+        '''Mismatched shapes raise ValueError rather than silently misattributing'''
+        _write_mrc(tmp_path / 'labels.mrc', np.zeros((10, 10, 10)))
+        with pytest.raises(ValueError):
+            load_vesicle_labels(tmp_path / 'labels.mrc', (20, 20, 20))
+
+    def test_load_vesicle_labels_reads_integer_labels(self, tmp_path: Path) -> None:
+        '''Labels round-trip through the MRC unchanged'''
+        data = np.zeros((10, 10, 10))
+        data[2, 2, 2] = 1
+        data[7, 7, 7] = 2
+        _write_mrc(tmp_path / 'labels.mrc', data)
+        labels = load_vesicle_labels(tmp_path / 'labels.mrc', (10, 10, 10))
+        assert labels[2, 2, 2] == 1
+        assert labels[7, 7, 7] == 2
+
+    def test_vesicle_ids_at_matches_label(self) -> None:
+        '''vesicle_ids_at resolves a point to EValuator's own label, unchanged, and '' for background'''
+        labels = np.zeros((10, 10, 10), dtype=np.int64)
+        labels[2, 2, 2] = 1
+        labels[7, 7, 7] = 2
+        ids = vesicle_ids_at(labels, np.array([[2.0, 2.0, 2.0], [7.0, 7.0, 7.0], [0.0, 0.0, 0.0]]), 'tomo01')
+        assert ids[0] == 'tomo01:v0001'
+        assert ids[1] == 'tomo01:v0002'
+        assert ids[2] == ''
+
+    def test_vesicle_surface_area_assigns_faces_to_nearest_label(self) -> None:
+        '''Mesh face area lands on the vesicle nearest its centroid'''
+        vertices = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [9.0, 9.0, 9.0]])
+        faces = np.array([[0, 1, 2]])  # a single triangle near label 1, nothing near vertex 3
+        labels = np.zeros((10, 10, 10), dtype=np.int64)
+        labels[0, 0, 0] = 1
+        areas = vesicle_surface_area_angstrom2(vertices, faces, labels, voxel_size_angstrom=2.0, tomogram_id='t01')
+        assert set(areas) == {'t01:v0001'}
+        assert areas['t01:v0001'] > 0.0
+
+    def test_summarise_vesicles_reports_density(self) -> None:
+        '''Two vesicles with different pick counts but equal area get distinct densities'''
+        from types import SimpleNamespace
+        picks = [
+            SimpleNamespace(vesicle_id='t01:v0001'), SimpleNamespace(vesicle_id='t01:v0001'),
+            SimpleNamespace(vesicle_id='t01:v0002'),
+        ]
+        areas = {'t01:v0001': 2000.0, 't01:v0002': 2000.0}
+        summaries = {s.vesicle_id: s for s in summarise_vesicles(picks, areas, 't01')}
+        assert summaries['t01:v0001'].n_picks == 2
+        assert summaries['t01:v0002'].n_picks == 1
+        assert summaries['t01:v0001'].picks_per_1000_angstrom2 > summaries['t01:v0002'].picks_per_1000_angstrom2
+
+    def test_summarise_vesicles_includes_zero_pick_vesicles(self) -> None:
+        '''A vesicle with area but no picks still gets a zero-count, zero-density row'''
+        summaries = {s.vesicle_id: s for s in summarise_vesicles([], {'t01:v0001': 500.0}, 't01')}
+        assert summaries['t01:v0001'].n_picks == 0
+        assert summaries['t01:v0001'].picks_per_1000_angstrom2 == 0.0
+
+    def test_normalise_per_vesicle_without_labels_mrc_raises(self) -> None:
+        '''normalise_per_vesicle needs a labels MRC to normalise against'''
+        with pytest.raises(ValueError):
+            NativePickerConfig(voxel_size_angstrom=10.0, normalise_per_vesicle=True)
+
+    def test_picker_wires_vesicle_id_onto_picks(self, tmp_path: Path) -> None:
+        '''Picks from a labelled vesicle carry that vesicle_id; unlabelled points fall back to None'''
+        segmentation, tomogram, _ = _vesicle_with_particles()
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+        labels_path = tmp_path / 'labels.mrc'
+        _write_mrc(labels_path, np.where(segmentation > 0, 1.0, 0.0))
+
+        config = NativePickerConfig(
+            voxel_size_angstrom=10.0,
+            offset_windows_angstrom=((40.0, 80.0),),
+            surface_spacing_angstrom=20.0,
+            min_particle_distance_angstrom=80.0,
+            n_mad=3.0,
+            density_sign=-1,
+            vesicle_labels_mrc=labels_path,
+        )
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+        assert picks, 'picker found nothing where a particle was planted'
+        assert all(pick.vesicle_id in (None, 'tomo000:v0001') for pick in picks)
+
+    def test_picker_without_labels_mrc_leaves_vesicle_id_none(self, tmp_path: Path) -> None:
+        '''Default behaviour (no --vesicle-labels-mrc) is unchanged: vesicle_id stays None'''
+        segmentation, tomogram, _ = _vesicle_with_particles()
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+
+        config = NativePickerConfig(
+            voxel_size_angstrom=10.0,
+            offset_windows_angstrom=((40.0, 80.0),),
+            surface_spacing_angstrom=20.0,
+            min_particle_distance_angstrom=80.0,
+            n_mad=3.0,
+            density_sign=-1,
+        )
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+        assert picks
+        assert all(pick.vesicle_id is None for pick in picks)
+
+    def test_picker_normalise_per_vesicle_runs_end_to_end(self, tmp_path: Path) -> None:
+        '''normalise_per_vesicle=True with a labels MRC scores and picks without error'''
+        segmentation, tomogram, _ = _vesicle_with_particles()
+        _write_mrc(tmp_path / 'seg.mrc', segmentation)
+        _write_mrc(tmp_path / 'tomo.mrc', tomogram)
+        labels_path = tmp_path / 'labels.mrc'
+        _write_mrc(labels_path, np.where(segmentation > 0, 1.0, 0.0))
+
+        config = NativePickerConfig(
+            voxel_size_angstrom=10.0,
+            offset_windows_angstrom=((40.0, 80.0),),
+            surface_spacing_angstrom=20.0,
+            min_particle_distance_angstrom=80.0,
+            n_mad=3.0,
+            density_sign=-1,
+            vesicle_labels_mrc=labels_path,
+            normalise_per_vesicle=True,
+        )
+        picks = pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
+        assert picks, 'picker found nothing under per-vesicle normalisation'
+
+    def test_reconciled_pick_keeps_vesicle_id(self) -> None:
+        '''Consensus reconciliation preserves the representative pick's vesicle_id'''
+        picks_by_picker = {
+            'stamp-native': [_pick('tomo000', (0.0, 0.0, 0.0), 'stamp-native')],
+        }
+        picks_by_picker['stamp-native'][0].vesicle_id = 'tomo000:v0001'
+        reconciled = reconcile_picks(picks_by_picker, 'union', distance_threshold=15.0, tomogram_id='tomo000')
+        assert reconciled[0].vesicle_id == 'tomo000:v0001'
+
+    def test_particle_carries_vesicle_id_from_reconciled_pick(self) -> None:
+        '''build_particle_set copies vesicle_id straight across onto the Particle'''
+        reconciled_picks = [_pick('tomo000', (0.0, 0.0, 0.0), 'stamp-native')]
+        reconciled_picks[0].vesicle_id = 'tomo000:v0002'
+        particle_set = build_particle_set(
+            reconciled_picks=reconciled_picks,
+            consensus_rule='union',
+            contributing_pickers=['stamp-native'],
+            half_set_seed=0,
+        )
+        assert particle_set.particles[0].vesicle_id == 'tomo000:v0002'
