@@ -13,7 +13,6 @@ from stamp.decoy.generate import (
     generate_synthetic_noise_decoys,
 )
 from stamp.decoy.validate import (
-    DecoyContaminationError,
     assert_comparable,
     check_manifest_purity,
     is_decoy_particle_set,
@@ -21,6 +20,7 @@ from stamp.decoy.validate import (
 from stamp.picking.native import NativePickerConfig, pick_tomogram
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import HalfSet, Particle, ParticleSet
+from stamp.utils.errors import StampPipelineError
 
 # _write_vesicle_pair: write a matched segmentation/tomogram vesicle pair and return its manifest
 def _write_vesicle_pair(tmp_path: Path, tomogram_id: str = 'tomo000') -> TomogramManifest:
@@ -189,7 +189,7 @@ class TestDecoy:
             particles=[_particle('p1', 'stamp-native'), _particle('d1', 'decoy-shifted')],
             consensus_rule='union', contributing_pickers=['mixed'],
         )
-        with pytest.raises(DecoyContaminationError, match='mixes decoy and real'):
+        with pytest.raises(StampPipelineError, match='mixes decoy and real'):
             is_decoy_particle_set(mixed)
 
     def test_check_manifest_purity_rejects_mixture(self, tmp_path: Path) -> None:
@@ -202,7 +202,7 @@ class TestDecoy:
             tomogram_id='b', segmentation_path=tmp_path / 'b.mrc',
             raw_tomogram_path=tmp_path / 'b_raw.mrc', voxel_size_angstrom=10.0, is_decoy=True,
         )
-        with pytest.raises(DecoyContaminationError):
+        with pytest.raises(StampPipelineError):
             check_manifest_purity([real, fake])
         assert check_manifest_purity([real]) is False
         assert check_manifest_purity([fake]) is True
@@ -223,7 +223,7 @@ class TestDecoy:
 
         real = _set('p', 100, 'stamp-native')
         small_decoy = _set('d', 10, 'decoy-shifted')
-        with pytest.raises(ValueError, match='less than half the size'):
+        with pytest.raises(StampPipelineError, match='less than half the size'):
             assert_comparable(real, small_decoy)
 
         assert_comparable(real, _set('d', 80, 'decoy-shifted'))  # should not raise

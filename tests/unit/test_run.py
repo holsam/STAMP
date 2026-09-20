@@ -13,6 +13,7 @@ from stamp.run.state import (
     STAGE_ORDER, is_complete, mark_complete, stage_dir, stages_to_run,
 )
 from stamp.schemas.cluster_profile import ClusterProfile
+from stamp.utils.errors import StampPipelineError
 from stamp.schemas.config import RunConfig
 
 # _CONFIG_DICT: smallest dict RunConfig.model_validate accepts
@@ -115,7 +116,7 @@ class TestReport:
 
 class TestGuardBackends:
     def test_local_backend_rejects_a_gpu_only_refine_tool(self, fake_config):
-        with pytest.raises(SystemExit):
+        with pytest.raises(StampPipelineError):
             _guard_backends(fake_config)  # refine tool 'relion' requires a GPU
 
     def test_mock_backend_passes(self, fake_config):

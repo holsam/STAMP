@@ -18,6 +18,7 @@ from stamp.schemas.particles import (
     ParticleSet,
 )
 from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.utils.errors import StampPipelineError
 
 # TestManifestSchema: class containing unit tests for schemas/manifest.py
 class TestManifestSchema:
@@ -53,7 +54,7 @@ class TestParticleSchema:
 
     def test_particle_rejects_non_unit_quaternion(self):
         '''Particle should reject a quaternion if not unit-length'''
-        with pytest.raises(ValidationError):
+        with pytest.raises(StampPipelineError):
             self._valid_particle(orientation=(2.0, 0.0, 0.0, 0.0))
 
     def test_particle_rejects_invalid_half_set(self):
@@ -63,7 +64,7 @@ class TestParticleSchema:
 
     def test_particle_set_rejects_empty_particles(self):
         '''ParticleSet should reject no Particles'''
-        with pytest.raises(ValidationError):
+        with pytest.raises(StampPipelineError):
             ParticleSet(particles=[], consensus_rule='intersection', contributing_pickers=['example-picker'])
 
     def test_particle_set_accepts_valid_input(self):

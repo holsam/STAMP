@@ -11,6 +11,7 @@ from stamp.utils.halfset import assign_half_sets, split_by_half_set, validate_si
 from stamp.schemas.particles import HalfSet, Particle
 from stamp.utils import io as io_utils
 from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.utils.errors import StampPipelineError
 
 # _particle: returns a valid Particle instance
 def _particle(particle_id: str, half_set: HalfSet) -> Particle:
@@ -61,12 +62,12 @@ class TestAssignHalfSet:
 
     def test_assign_half_sets_rejects_empty_list(self) -> None:
         '''An empty particle list should raise an error'''
-        with pytest.raises(ValueError, match='empty'):
+        with pytest.raises(StampPipelineError, match='empty'):
             assign_half_sets([], seed=0)
 
     def test_assign_half_sets_rejects_duplicate_ids(self) -> None:
         '''A particle list with duplicate ids should raise an error'''
-        with pytest.raises(ValueError, match='duplicates'):
+        with pytest.raises(StampPipelineError, match='duplicates'):
             assign_half_sets(['p001', 'p001'], seed=0)
 
     def test_split_keeps_tomograms_whole(self):
@@ -87,12 +88,12 @@ class TestValidateHalfSet:
     def test_validate_single_half_set_rejects_mixed_list(self) -> None:
         '''A list of particles in mixed half sets should raise an error'''
         particles = [_particle('p001', HalfSet.A), _particle('p002', HalfSet.B)]
-        with pytest.raises(ValueError, match='mixes half-sets'):
+        with pytest.raises(StampPipelineError, match='mixes half-sets'):
             validate_single_half_set(particles)
 
     def test_validate_single_half_set_rejects_empty_list(self) -> None:
         '''An empty particle list should raise an error'''
-        with pytest.raises(ValueError, match='empty'):
+        with pytest.raises(StampPipelineError, match='empty'):
             validate_single_half_set([])
 
 class TestSplitHalfSet:
