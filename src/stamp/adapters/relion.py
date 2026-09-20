@@ -11,6 +11,7 @@ from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
 from stamp.classify.extract import quaternion_to_matrix
 from stamp.schemas.particles import Particle
+from stamp.utils.errors import StampAdapterError
 from stamp.utils.log import log
 
 # _REFERENCE_AXIS: the model axis STAMP's picker orientation quaternion maps onto the membrane normal
@@ -64,7 +65,7 @@ class RelionRefineAdapter:
     # build_command: one half-set Refine3D job seeded from this half's Stage D class average (A2)
     def build_command(self, inputs: AdapterInputs) -> ToolCommand:
         if len(inputs.input_paths) != 1:
-            raise ValueError('relion refine takes exactly one seed reference (this half\'s class average)')
+            raise StampAdapterError('relion refine takes exactly one seed reference (this half\'s class average)')
         reference = inputs.input_paths[0]
         particle_star = inputs.output_directory / 'particles.star'
         output_prefix = inputs.output_directory / 'run'

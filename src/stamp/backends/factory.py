@@ -12,6 +12,7 @@ from stamp.backends.cluster import ClusterRunner
 from stamp.backends.local import LocalRunner
 from stamp.backends.mock import MockRunner
 from stamp.schemas.cluster_profile import ClusterProfile, load_cluster_profile
+from stamp.utils.errors import StampPipelineError
 from stamp.utils.log import log
 
 # check_backend_supports: raise if specified backend cannot run adapter
@@ -19,11 +20,9 @@ def check_backend_supports(adapter: ToolAdapter, backend: str) -> None:
     if backend != 'local':
         return
     if adapter.requires_gpu:
-        log.error(f'{adapter.name} requires a GPU; --backend local cannot provide one - use --backend cluster')
-        raise SystemExit(1)
+        raise StampPipelineError(f'{adapter.name} requires a GPU; --backend local cannot provide one - use --backend cluster')
     if platform.system() == 'Darwin' and not adapter.mac_compatible:
-        log.error(f'{adapter.name} cannot run on macOS - use --backend cluster or a macOS-compatible tool')
-        raise SystemExit(1)
+        raise StampPipelineError(f'{adapter.name} cannot run on macOS - use --backend cluster or a macOS-compatible tool')
 
 # select_runner: map --backend string to Runner
 def select_runner(
@@ -40,11 +39,9 @@ def select_runner(
         return LocalRunner()
     if backend == 'cluster':
         if shutil.which('sbatch') is None:
-            log.error('--backend cluster used but sbatch is not on PATH - run STAMP on a cluster login node, or use --backend local/mock')
-            raise SystemExit(1)
+            raise StampPipelineError('--backend cluster used but sbatch is not on PATH - run STAMP on a cluster login node, or use --backend local/mock')
         log.debug(f'Selected runner: {backend}')
         if cluster_profile is None:
             log.debug('No cluster profile given, loading default')
         return ClusterRunner(profile=cluster_profile or load_cluster_profile(), requires_gpu=requires_gpu)
-    log.error(f'Unknown backend {backend!r}')
-    raise SystemExit(1)
+    raise StampPipelineError(f'Unknown backend {backend!r}')

@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 # Import main CLI
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 
 # Initialise runner
 runner = CliRunner()
@@ -19,7 +19,7 @@ COMMANDS = ['pick', 'decoy', 'classify', 'identify', 'refine', 'run']
 class TestCli:
     def test_help_lists_all_commands(self):
         '''All commands should appear in help text'''
-        result = runner.invoke(stamp, ['--help'])
+        result = runner.invoke(stamp_app, ['--help'])
         assert result.exit_code == 0
         for command in COMMANDS:
             assert command in result.output

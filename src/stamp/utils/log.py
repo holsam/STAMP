@@ -108,7 +108,7 @@ def resolve_log_path(
     if mode == 'append':
         write_header = not path.exists()
         return path
-    raise ValueError(f'Unknown mode {mode}, expected one of: concat, overwrite, create')
+    raise ValueError(f'Unknown mode {mode!r}, expected one of: overwrite, new, append')
 
 # configure_logging: returns None, configures the single terminal logging sink
 def configure_logging(

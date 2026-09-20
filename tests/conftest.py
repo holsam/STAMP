@@ -3,11 +3,11 @@ STAMP: test suite shared fixtures
 '''
 
 # Import external dependencies
-import json, logging, mrcfile, numpy as np, pytest
+import contextlib, json, logging, mrcfile, numpy as np, pytest
 from loguru import logger
 from pathlib import Path
 from typer.testing import CliRunner
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 
 # Initialise CLI runner
 _runner = CliRunner()
@@ -22,7 +22,8 @@ class _PropagateHandler(logging.Handler):
 def _propagate_loguru_to_caplog():
     handler_id = logger.add(_PropagateHandler(), format='{message}')
     yield
-    logger.remove(handler_id)
+    with contextlib.suppress(ValueError):
+        logger.remove(handler_id)
 
 # _make_dataset: 3 segmentation/tomogram pairs with a membrane slab + planted blobs, plus candidates.yaml
 def _make_dataset(root: Path) -> Path:
@@ -103,7 +104,7 @@ iterations = 2
 def _run_mock_pipeline(root: Path, args: list[str] | None = None) -> Path:
     _make_dataset(root)
     config = _write_config(root)
-    result = _runner.invoke(stamp, ['run', '--config', str(config), *(args or [])])
+    result = _runner.invoke(stamp_app, ['run', '--config', str(config), *(args or [])])
     assert result.exit_code == 0, result.output
     return root / 'out'
 

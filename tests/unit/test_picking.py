@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.picking.consensus import build_particle_set, reconcile_picks
+from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.picking.geometry import (
     beam_angle_deviation_degrees,
     compose_roll_about_normal,
@@ -167,7 +168,7 @@ class TestGeometry:
 
     def test_extract_surface_rejects_empty_segmentation(self) -> None:
         '''An all-zero segmentation raises.'''
-        with pytest.raises(ValueError, match='no voxels above'):
+        with pytest.raises(StampValidationError, match='no voxels above'):
             extract_surface(np.zeros((10, 10, 10), dtype=np.float32))
 
     def test_downsample_reduces_points_and_is_deterministic(self) -> None:
@@ -449,12 +450,12 @@ class TestNativePicker:
         _write_mrc(tmp_path / 'seg.mrc', np.ones((20, 20, 20), dtype=np.float32))
         _write_mrc(tmp_path / 'tomo.mrc', np.zeros((30, 30, 30), dtype=np.float32))
         config = NativePickerConfig(voxel_size_angstrom=10.0)
-        with pytest.raises(ValueError, match='does not match tomogram shape'):
+        with pytest.raises(StampValidationError, match='does not match tomogram shape'):
             pick_tomogram(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'tomo000', config)
 
     def test_config_rejects_bad_density_sign(self) -> None:
         '''A density_sign other than +1 or -1 raises'''
-        with pytest.raises(ValueError, match='density_sign'):
+        with pytest.raises(StampPipelineError, match='density_sign'):
             NativePickerConfig(voxel_size_angstrom=10.0, density_sign=0)
 
     def test_sparse_neighbourhood_falls_back_to_global(self) -> None:
@@ -673,7 +674,7 @@ class TestVesicle:
 
     def test_normalise_per_vesicle_without_labels_mrc_raises(self) -> None:
         '''normalise_per_vesicle needs a labels MRC to normalise against'''
-        with pytest.raises(ValueError):
+        with pytest.raises(StampPipelineError):
             NativePickerConfig(voxel_size_angstrom=10.0, normalise_per_vesicle=True)
 
     def test_picker_wires_vesicle_id_onto_picks(self, tmp_path: Path) -> None:
