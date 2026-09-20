@@ -69,7 +69,7 @@ def _write_config(root: Path, **overrides) -> Path:
 [run]
 segmentation_dir = "seg"
 raw_tomogram_dir = "tomo"
-output_dir = "out"
+output_dir = "."
 voxel_size_angstrom = 13.48
 backend = "mock"
 {overrides.get('run_extra', '')}
@@ -106,7 +106,7 @@ def _run_mock_pipeline(root: Path, args: list[str] | None = None) -> Path:
     config = _write_config(root)
     result = _runner.invoke(stamp_app, ['run', '--config', str(config), *(args or [])])
     assert result.exit_code == 0, result.output
-    return root / 'out'
+    return root / 'stamp'
 
 # make_dataset: fixture to call _make_dataset
 @pytest.fixture

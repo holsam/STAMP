@@ -199,3 +199,8 @@ def resolve_directory_voxel_size_angstrom(paths: list[Path]) -> float | None:
         breakdown = ', '.join(f'{value}Å x{count}' for value, count in counts.most_common())
         log.warning(f'Multiple voxel sizes were found in MRC headers ({breakdown}) - using the most common {most_common_value}')
     return most_common_value
+
+# resolve_output_dir: append stamp/<command> to supplied output dir
+def resolve_output_dir(output_dir: Path, command: str, track: str | None = None) -> Path:
+    base = output_dir / 'stamp' / command
+    return Path(f'{base}_{track}') if track else base

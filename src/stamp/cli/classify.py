@@ -9,6 +9,8 @@ from typing import Annotated, Literal
 
 # Import classify command functions/variables
 import stamp.commands.classify as classifyfuncs
+from stamp.utils.errors import StampPipelineError
+from stamp.utils.io import resolve_output_dir
 
 # Initialise Typer app
 classifyCli = typer.Typer(
@@ -16,20 +18,22 @@ classifyCli = typer.Typer(
     add_completion = False,
 )
 
+# Define expected particle set output filenames
+_EXPECTED_FILES = {
+    'particle_set.json': None,
+    'decoy_particle_set.json': 'decoy',
+}
+
 # Define classify command
 @classifyCli.command()
 def classify(
     particles: Annotated[
         Path,
-        typer.Option(help='particle_set.json or decoy_particle_set.json', exists=True)
+        typer.Option('-p', '--particles', help='particle_set.json or decoy_particle_set.json', exists=True)
     ],
     raw_tomogram_dir: Annotated[
         Path,
         typer.Option('-r', '--raw-dir', help='Raw tomogram directory.', exists=True, file_okay=False),
-    ],
-    output_dir: Annotated[
-        Path,
-        typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
     ],
     voxel_size_angstrom: Annotated[
         float,
@@ -39,6 +43,10 @@ def classify(
         Path | None,
         typer.Option('-s', '--seg-dir', help='Segmentation directory for membrane voxel replacement.', exists=True, file_okay=False),
     ] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
+    ] = Path('.'),
     box_angstrom: Annotated[
         float,
         typer.Option('--box-length-a', help='Extraction box edge length, in Å.')
@@ -103,11 +111,15 @@ def classify(
     ] = 'tiff',
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
+    if particles.name in _EXPECTED_FILES.keys():
+        track = _EXPECTED_FILES.get(particles.name)
+    else:
+        raise StampPipelineError(f'-p/--particles must be particle_set.json or decoy_particle_set.json, not {particles}')
     classifyfuncs.run_classify(
         particles=particles,
         raw_tomogram_dir=raw_tomogram_dir,
         segmentation_dir=segmentation_dir,
-        output_dir=output_dir,
+        output_dir=resolve_output_dir(output_dir, 'classify', track),
         voxel_size_angstrom=voxel_size_angstrom,
         box_angstrom=box_angstrom,
         n_radial_bins=n_radial_bins,

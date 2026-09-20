@@ -70,7 +70,7 @@ class TestStagesToRun:
 
 class TestState:
     def test_stage_dir_layout(self, tmp_path):
-        assert stage_dir(tmp_path, 'decoy', 'pick') == tmp_path / 'decoy' / 'stage_pick'
+        assert stage_dir(tmp_path, 'decoy', 'pick') == tmp_path / 'stamp' / 'decoy'
 
     def test_is_complete_needs_both_flag_and_sidecar(self, tmp_path):
         mark_complete(tmp_path, 'real', 'pick')
@@ -80,9 +80,10 @@ class TestState:
         assert is_complete(tmp_path, 'real', 'pick') is True
 
     def test_mark_complete_survives_a_corrupt_state_file(self, tmp_path):
-        (tmp_path / 'run_state.json').write_text('{ not json')
+        (tmp_path / 'stamp').mkdir()
+        (tmp_path / 'stamp' / 'run_state.json').write_text('{ not json')
         mark_complete(tmp_path, 'real', 'pick')
-        assert json.loads((tmp_path / 'run_state.json').read_text()) == {'real': {'pick': True}}
+        assert json.loads((tmp_path / 'stamp' / 'run_state.json').read_text()) == {'real': {'pick': True}}
 
 class TestReport:
     def test_decoy_banner_variants(self):

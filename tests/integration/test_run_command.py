@@ -14,9 +14,9 @@ runner = CliRunner()
 class TestRunCommand:
     def test_run_produces_both_tracks_and_report(self, tmp_path, run_mock_pipeline):
         out = run_mock_pipeline(tmp_path)
-        assert (out / 'real' / 'stage_pick' / 'particle_set.json').is_file()
-        assert (out / 'decoy' / 'stage_pick' / 'decoy_particle_set.json').is_file()
-        assert (out / 'real' / 'stage_classify').is_dir()
+        assert (out / 'pick' / 'particle_set.json').is_file()
+        assert (out / 'decoy' / 'decoy_particle_set.json').is_file()
+        assert (out / 'classify_real').is_dir()
 
         sidecars = list(out.rglob('params.toml'))
         assert len(sidecars) >= 4
@@ -33,7 +33,7 @@ class TestRunCommand:
         config = write_config(tmp_path)
         first = runner.invoke(stamp_app, ['run', '--config', str(config)])
         assert first.exit_code == 0
-        state = json.loads((tmp_path / 'out' / 'run_state.json').read_text())
+        state = json.loads((tmp_path / 'stamp' / 'run_state.json').read_text())
         assert state['real']['pick'] is True
 
         second = runner.invoke(stamp_app, ['run', '--config', str(config)])

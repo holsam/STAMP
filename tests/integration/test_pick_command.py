@@ -41,16 +41,14 @@ class TestPickCommand:
     # check `stamp pick` runs the native picker and writes outputs
     def test_pick_runs_native_picker_end_to_end(self, tmp_path: Path) -> None:
         seg_dir, raw_dir = tmp_path / 'seg', tmp_path / 'raw'
-        output_dir = tmp_path / 'out'
         _write_pair(seg_dir, raw_dir, 'tomo000')
-
         result = runner.invoke(
             stamp_app,
             [
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(output_dir),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--consensus-rule', 'union',
                 '--picker-params', json.dumps({'stamp-native': {'n_mad': 2.5, 'offset_windows_angstrom': [[20.0, 80.0]]}}),
@@ -60,6 +58,7 @@ class TestPickCommand:
         )
 
         assert result.exit_code == 0, result.output
+        output_dir = tmp_path / 'stamp' / 'pick'
         particle_set_path = output_dir / 'particle_set.json'
         assert particle_set_path.exists()
 
@@ -83,7 +82,7 @@ class TestPickCommand:
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(tmp_path / 'out'),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--picker-params', json.dumps({'stamp-native': {'n_mad': 2.5, 'offset_windows_angstrom': [[20.0, 80.0]]}}),
                 '--backend', 'local',
@@ -116,7 +115,7 @@ class TestPickCommand:
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(tmp_path / 'out'),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--picker-params', json.dumps({'stamp-native': {'n_mad': 2.5, 'offset_windows_angstrom': [[20.0, 80.0]]}}),
                 '--backend', 'local',
@@ -136,7 +135,7 @@ class TestPickCommand:
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(tmp_path / 'out'),
+                '--out-dir', tmp_path,
                 '--picker-params', json.dumps({'stamp-native': {'n_mad': 2.5, 'offset_windows_angstrom': [[20.0, 80.0]]}}),
                 '--backend', 'local',
                 'stamp-native',
@@ -156,7 +155,7 @@ class TestPickCommand:
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(tmp_path / 'out'),
+                '--out-dir', tmp_path,
                 '--picker-params', json.dumps({'stamp-native': {'n_mad': 2.5, 'offset_windows_angstrom': [[20.0, 80.0]]}}),
                 '--backend', 'local',
                 'stamp-native',

@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 # Import pick command functions/variables
 import stamp.commands.pick as pickfuncs
+from stamp.utils.io import resolve_output_dir
 
 # Initialise Typer app
 pickCli = typer.Typer(
@@ -108,7 +109,7 @@ def pick(
         picker_names=picker_names,
         segmentation_dir=segmentation_dir,
         raw_tomogram_dir=raw_tomogram_dir,
-        output_dir=output_dir,
+        output_dir=resolve_output_dir(output_dir, 'pick'),
         voxel_size_angstrom=voxel_size_angstrom,
         extra_params=extra_params,
         consensus_rule=consensus_rule,

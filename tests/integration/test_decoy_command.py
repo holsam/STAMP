@@ -35,7 +35,7 @@ def _write_pair(seg_dir: Path, raw_dir: Path, tomogram_id: str) -> None:
 
 # _run_pick: run `stamp pick` on a fresh vesicle pair and return its paths
 def _run_pick(tmp_path: Path) -> tuple[Path, Path, Path]:
-    seg_dir, raw_dir, pick_out = tmp_path / 'seg', tmp_path / 'raw', tmp_path / 'pick'
+    seg_dir, raw_dir, pick_out = tmp_path / 'seg', tmp_path / 'raw', tmp_path / 'stamp' / 'pick'
     _write_pair(seg_dir, raw_dir, 'tomo000')
     result = runner.invoke(
         stamp_app,
@@ -43,7 +43,7 @@ def _run_pick(tmp_path: Path) -> tuple[Path, Path, Path]:
             'pick',
             '--seg-dir', str(seg_dir),
             '--raw-dir', str(raw_dir),
-            '--out-dir', str(pick_out),
+            '--out-dir', tmp_path,
             '--voxel-size-a', '10.0',
             '--picker-params', json.dumps({'stamp-native': {'n_mad': 2.5, 'offset_windows_angstrom': [[20.0, 80.0]]}}),
             '--backend', 'local',
@@ -68,7 +68,7 @@ class TestDecoyCommand:
                 '--real-particle-set', str(particle_set_path),
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(output_dir),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--picker-params', json.dumps({'n_mad': 2.5, 'offset_windows_angstrom': [[20.0, 80.0]]}),
                 '--n-decoys-per-tomogram', '20',
@@ -78,7 +78,7 @@ class TestDecoyCommand:
         assert result.exit_code == 0, result.output
 
         decoy_set = ParticleSet.model_validate(
-            json.loads((output_dir / 'decoy_particle_set.json').read_text())
+            json.loads((tmp_path / 'stamp' / 'decoy' / 'decoy_particle_set.json').read_text())
         )
         assert decoy_set.particles
         assert all(p.source_picker.startswith('decoy-') for p in decoy_set.particles)
@@ -94,7 +94,7 @@ class TestDecoyCommand:
                 '--real-particle-set', str(particle_set_path),
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(tmp_path / 'decoy_shifted'),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--min-shift-a', '100.0',
                 '--max-shift-a', '180.0',
@@ -111,7 +111,7 @@ class TestDecoyCommand:
             [
                 'decoy',
                 '--method', 'synthetic-noise',
-                '--out-dir', str(output_dir),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--n-synthetic-tomograms', '2',
                 '--synthetic-shape', '40,40,40',
@@ -119,6 +119,7 @@ class TestDecoyCommand:
                 '--seed', '3',
             ],
         )
+        output_dir = tmp_path / 'stamp' / 'decoy'
         assert result.exit_code == 0, result.output
         assert (output_dir / 'decoy_particle_set.json').exists()
         assert (output_dir / 'decoy_manifests.json').exists()
@@ -148,14 +149,13 @@ class TestDecoyCommand:
         with mrcfile.new(raw_dir / 'tomo000.mrc', overwrite=True) as mrc:
             mrc.set_data(tomogram)
 
-        pick_out = tmp_path / 'pick'
         pick_result = runner.invoke(
             stamp_app,
             [
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(pick_out),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--picker-params', json.dumps({'n_mad': 2.0, 'offset_windows_angstrom': [[20.0, 80.0]]}),
                 '--backend', 'local',
@@ -163,7 +163,7 @@ class TestDecoyCommand:
             ],
         )
         assert pick_result.exit_code == 0, pick_result.output
-        particle_set_path = pick_out / 'particle_set.json'
+        particle_set_path = tmp_path / 'stamp' / 'pick' / 'particle_set.json'
         real_set = ParticleSet.model_validate(json.loads(particle_set_path.read_text()))
         assert len(real_set.particles) >= 3
 
@@ -176,7 +176,7 @@ class TestDecoyCommand:
                 '--real-particle-set', str(particle_set_path),
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(output_dir),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--picker-params', json.dumps({'n_mad': 2.0, 'offset_windows_angstrom': [[20.0, 80.0]]}),
                 '--n-decoys-per-tomogram', '1',
@@ -187,4 +187,4 @@ class TestDecoyCommand:
         assert result.exit_code != 0
         assert isinstance(result.exception, StampPipelineError)
         assert 'less than half the size of the real set' in str(result.exception)
-        assert not (output_dir / 'decoy_particle_set.json').exists()
+        assert not (tmp_path / 'stamp' / 'decoy' / 'decoy_particle_set.json').exists()
