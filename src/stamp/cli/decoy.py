@@ -21,7 +21,7 @@ decoyCli = typer.Typer(
 @decoyCli.command()
 def decoy(
     voxel_size_angstrom: Annotated[
-        float = None,
+        float | None,
         typer.Option('--voxel-size-a', help='Voxel size in Å. Read from MRC headers if omitted.'),
     ] = None,
     output_dir: Annotated[
@@ -34,67 +34,67 @@ def decoy(
     ] = 'rejected-surface',
     real_particle_set: Annotated[
         Path | None,
-        typer.Option('--real-particle-set', help='particle_set.json from `stamp pick`. Required unless using --method synthetic-noise.'),
+        typer.Option('--real-particle-set', help='particle_set.json from `stamp pick`. Required unless using --method synthetic-noise.', rich_help_panel = 'Inputs'),
     ] = None,
     segmentation_dir: Annotated[
         Path | None,
-        typer.Option('-s', '--seg-dir', help='Segmentation directory. Required unless using --method synthetic-noise.'),
+        typer.Option('-s', '--seg-dir', help='Segmentation directory. Required unless using --method synthetic-noise.', rich_help_panel = 'Inputs'),
     ] = None,
     raw_tomogram_dir: Annotated[
         Path | None,
-        typer.Option('-r', '--raw-dir', help='Raw tomogram directory. Required unless using --method synthetic-noise.'),
+        typer.Option('-r', '--raw-dir', help='Raw tomogram directory. Required unless using --method synthetic-noise.', rich_help_panel = 'Inputs'),
     ] = None,
     picker_params: Annotated[
         str,
-        typer.Option('--picker-params', help='JSON of native-picker parameters. Must match the values used for `stamp pick`, or decoys won\'t be drawn from the same candidate pool.'),
+        typer.Option('--picker-params', help='JSON of native-picker parameters. Must match the values used for `stamp pick`, or decoys won\'t be drawn from the same candidate pool.', rich_help_panel = 'Inputs'),
     ] = '{}',
     n_decoys_per_tomogram: Annotated[
         int,
-        typer.Option('--n-decoys-per-tomogram', help='Decoy positions per tomogram.'),
+        typer.Option('--n-decoys-per-tomogram', help='Decoy positions per tomogram.', rich_help_panel = 'Decoy placement'),
     ] = 50,
     min_distance_from_real_angstrom: Annotated[
         float,
-        typer.Option('--min-distance-from-real-a', help='Minimum separation from any real pick (rejected-surface).'),
+        typer.Option('--min-distance-from-real-a', help='Minimum separation from any real pick.', rich_help_panel = 'Rejected surface decoy'),
     ] = 100.0,
     min_distance_from_picks_angstrom: Annotated[
         float,
-        typer.Option('--min-pick-distance-a', help='Minimum separation from any real pick (shifted).'),
+        typer.Option('--min-pick-distance-a', help='Minimum separation from any real pick.', rich_help_panel = 'Shifted decoy'),
     ] = 60.0,
     min_shift_angstrom: Annotated[
         float,
-        typer.Option('--min-shift-a', help='Minimum displacement (shifted).'),
+        typer.Option('--min-shift-a', help='Minimum displacement.', rich_help_panel = 'Shifted decoy'),
     ] = 200.0,
     max_shift_angstrom: Annotated[
         float,
-        typer.Option('--max-shift-a', help='Maximum displacement (shifted).'),
+        typer.Option('--max-shift-a', help='Maximum displacement.', rich_help_panel = 'Shifted decoy'),
     ] = 600.0,
     n_synthetic_tomograms: Annotated[
         int,
-        typer.Option('--n-synthetic-tomograms', help='Noise volumes (synthetic-noise).'),
+        typer.Option('--n-synthetic-tomograms', help='Noise volumes.', rich_help_panel = 'Synthetic noise decoy'),
     ] = 3,
     synthetic_shape: Annotated[
         str,
-        typer.Option('--synthetic-shape', help='z,y,x (synthetic-noise).'),
+        typer.Option('--synthetic-shape', help='z,y,x dimensions of volume to create.', rich_help_panel = 'Synthetic noise decoy'),
     ] = '200,200,200',
     seed: Annotated[
         int,
-        typer.Option('--seed', help='Seed for sampling and half-set assignment.'),
+        typer.Option('--seed', help='Seed for sampling and half-set assignment.', rich_help_panel = 'Decoy placement'),
     ] = 0,
     make_plots: Annotated[
         bool,
-        typer.Option('--plots/--no-plots', help='Write decoy position plots.'),
+        typer.Option('--plots/--no-plots', help='Write decoy position plots.', rich_help_panel = 'Plotting'),
     ] = True,
     pick_plot_style: Annotated[
         Literal['scatter', 'segmented', 'both'],
-        typer.Option('--pick-plot-style', help='Plot style to use.'),
+        typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel = 'Plotting'),
     ] = 'both',
     plot_format: Annotated[
         Literal['png', 'jpg', 'tiff', 'svg'],
-        typer.Option('--plot-format', help='Image format for static plots.'),
+        typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
     ] = 'tiff',
     pick_zstack_movie: Annotated[
         bool,
-        typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.'),
+        typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.', rich_help_panel = 'Plotting'),
     ] = True,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data.'''

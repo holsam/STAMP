@@ -39,21 +39,23 @@ def identify(
     ] = None,
     backend: Annotated[
         Literal['local', 'mock'],
-        typer.Option('--backend', help='Backend to use for processing.')
+        typer.Option('--backend', help='Backend to use for processing.', rich_help_panel = 'Backend')
     ] = 'local',
     fitter: Annotated[
         Literal['native'],
-        typer.Option('--fitter', help='Fitter to use for identification.')
+        typer.Option('--fitter', help='Fitter to use for identification.', rich_help_panel = 'Backend')
     ] = 'native',
-    fetch_missing: Annotated[bool, typer.Option('--fetch-missing',
-        help='Fetch an AlphaFold model when a candidate has no local structure_path.')] = False,
+    fetch_missing: Annotated[
+        bool,
+        typer.Option('--fetch-missing', help='Fetch an AlphaFold model when a candidate has no local structure_path.', rich_help_panel = 'Backend'),
+    ] = False,
     make_plots: Annotated[
         bool,
-        typer.Option('--plots/--no-plots', help='Write fit-score heatmap and decoy-control histogram plots.'),
+        typer.Option('--plots/--no-plots', help='Write fit-score heatmap and decoy-control histogram plots.', rich_help_panel = 'Plotting'),
     ] = True,
     plot_format: Annotated[
         Literal['png', 'jpg', 'tiff', 'svg'],
-        typer.Option('--plot-format', help='Image format for static plots.'),
+        typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
     ] = 'tiff',
 ) -> None:
     '''Fit predicted structures to class averages and score candidates.'''

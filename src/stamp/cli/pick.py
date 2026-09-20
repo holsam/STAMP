@@ -42,52 +42,52 @@ def pick(
     ] = None,
     picker_params: Annotated[
         str,
-        typer.Option('--picker-params', help='JSON of per-picker parameters.'),
+        typer.Option('--picker-params', help='JSON of per-picker parameters.', rich_help_panel = 'Consensus'),
     ] = '{}',
     consensus_rule: Annotated[
         Literal['union', 'intersection'],
-        typer.Option('--consensus-rule', help='Rule to use for consensus reconciliation.'),
+        typer.Option('--consensus-rule', help='Rule to use for consensus reconciliation.', rich_help_panel = 'Consensus'),
     ] = 'union',
     distance_threshold: Annotated[
         float,
-        typer.Option('--distance-threshold', help='Voxel distance within which picks are merged.'),
+        typer.Option('--distance-threshold', help='Voxel distance within which picks are merged.', rich_help_panel = 'Consensus'),
     ] = 15.0,
     half_set_seed: Annotated[
         int,
-        typer.Option('--half-set-seed', help='Seed for half-set assignment.'),
+        typer.Option('--half-set-seed', help='Seed for half-set assignment.', rich_help_panel = 'Consensus'),
     ] = 0,
     backend: Annotated[
         Literal['local', 'mock'],
-        typer.Option('--backend', help='Backend to use for processing.'),
+        typer.Option('--backend', help='Backend to use for processing.', rich_help_panel = 'Backend'),
     ] = 'local',
-    make_plots: Annotated[
-        bool,
-        typer.Option('--plots/--no-plots', help='Write consensus-pick position plots.'),
-    ] = True,
-    pick_plot_style: Annotated[
-        Literal['scatter', 'segmented', 'both'],
-        typer.Option('--pick-plot-style', help='Plot style to use.'),
-    ] = 'both',
-    plot_format: Annotated[
-        Literal['png', 'jpg', 'tiff', 'svg'],
-        typer.Option('--plot-format', help='Image format for static plots.'),
-    ] = 'tiff',
-    pick_zstack_movie: Annotated[
-        bool,
-        typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.'),
-    ] = True,
     max_beam_angle_deviation: Annotated[
         float | None,
-        typer.Option('--max-beam-angle-deviation', help='Normal deviation from beam-orthogonal plane to drop particles.'),
+        typer.Option('--max-beam-angle-deviation', help='Normal deviation from beam-orthogonal plane to drop particles.', rich_help_panel = 'Filtering'),
     ] = None,
     vesicle_labels_mrc: Annotated[
         Path | None,
-        typer.Option('--vesicle-labels-mrc', help='Path to an EValuator labelled MRC, or a directory to be matched by filename stem.', exists=True, readable=True),
+        typer.Option('--vesicle-labels-mrc', help='Path to an EValuator labelled MRC, or a directory to be matched by filename stem.', exists=True, readable=True, rich_help_panel = 'Filtering'),
     ] = None,
     normalise_per_vesicle: Annotated[
         bool,
-        typer.Option('--normalise-per-vesicle', help='Normalise stamp-native scores per vesicle instead of per tomogram.'),
+        typer.Option('--normalise-per-vesicle', help='Normalise stamp-native scores per vesicle instead of per tomogram.', rich_help_panel = 'Filtering'),
     ] = False,
+    make_plots: Annotated[
+        bool,
+        typer.Option('--plots/--no-plots', help='Write consensus-pick position plots.', rich_help_panel = 'Plotting'),
+    ] = True,
+    pick_plot_style: Annotated[
+        Literal['scatter', 'segmented', 'both'],
+        typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel = 'Plotting'),
+    ] = 'both',
+    plot_format: Annotated[
+        Literal['png', 'jpg', 'tiff', 'svg'],
+        typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
+    ] = 'tiff',
+    pick_zstack_movie: Annotated[
+        bool,
+        typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.', rich_help_panel = 'Plotting'),
+    ] = True,
 ) -> None:
     '''Run particle picking, reconcile across pickers, and assign half-sets.'''
     # Validate provided pickers
