@@ -64,14 +64,13 @@ class TestClassifyCommand:
     def test_classify_end_to_end(self, tmp_path: Path) -> None:
         '''Classify runs end to end and writes assignments, averages and params.'''
         particle_set_path, raw_dir = _build_dataset(tmp_path)
-        output_dir = tmp_path / 'classify'
         result = runner.invoke(
             stamp_app,
             [
                 'classify',
                 '--particles', str(particle_set_path),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(output_dir),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--box-length-a', '200.0',
                 '--method', 'kmeans',
@@ -79,6 +78,7 @@ class TestClassifyCommand:
                 '--n-components', '10',
             ],
         )
+        output_dir = tmp_path / 'stamp' / 'classify'
         assert result.exit_code == 0, result.output
         assignments = json.loads((output_dir / 'class_assignments.json').read_text())
         assert len(assignments) > 0
@@ -100,7 +100,7 @@ class TestClassifyCommand:
                 'classify',
                 '--particles', str(particle_set_path),
                 '--raw-dir', str(raw_dir),
-                '--out-dir', str(tmp_path / 'strict'),
+                '--out-dir', tmp_path,
                 '--voxel-size-a', '10.0',
                 '--box-length-a', '200.0',
                 '--method', 'kmeans',
