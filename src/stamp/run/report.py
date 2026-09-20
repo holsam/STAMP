@@ -22,6 +22,7 @@ def _decoy_banner(outcome: RunOutcome) -> str:
 # write_report: write report.md and report.json
 def write_report(outcome: RunOutcome, output_dir: Path) -> tuple[Path, Path]:
     log.debug(f'Writing report for output_dir={output_dir}')
+    output_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         'decoy_control': outcome.decoy_control,
         'decoy_enabled': outcome.decoy_enabled,

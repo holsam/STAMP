@@ -9,7 +9,6 @@ from pathlib import Path
 from stamp.run.orchestrate import run_pipeline
 from stamp.run.report import write_report
 from stamp.schemas.config import load_run_config
-from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log
 
 # run_full_pipeline: load the config, run every track, write the combined report
@@ -30,7 +29,6 @@ def run_full_pipeline(
         config.stage.identify.backend = backend
         config.stage.refine.backend = backend
     log.debug(f'Overrides applied: no_decoy={no_decoy}, backend={backend!r}')
-    output_dir = resolve_output_dir(config.run.output_dir, 'run')
-    outcome = run_pipeline(config, output_dir, force=force, from_stage=from_stage)
-    md_path, _ = write_report(outcome, output_dir)
+    outcome = run_pipeline(config, config.run.output_dir, force=force, from_stage=from_stage)
+    md_path, _ = write_report(outcome, config.run.output_dir / 'stamp')
     log.info(f'Run complete. Report: {md_path}')

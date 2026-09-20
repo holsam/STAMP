@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 # Import classify command functions/variables
 import stamp.commands.classify as classifyfuncs
+from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import resolve_output_dir
 
 # Initialise Typer app
@@ -17,12 +18,18 @@ classifyCli = typer.Typer(
     add_completion = False,
 )
 
+# Define expected particle set output filenames
+_EXPECTED_FILES = {
+    'particle_set.json': None,
+    'decoy_particle_set.json': 'decoy',
+}
+
 # Define classify command
 @classifyCli.command()
 def classify(
     particles: Annotated[
         Path,
-        typer.Option(help='particle_set.json or decoy_particle_set.json', exists=True)
+        typer.Option('-p', '--particles', help='particle_set.json or decoy_particle_set.json', exists=True)
     ],
     raw_tomogram_dir: Annotated[
         Path,
@@ -104,11 +111,15 @@ def classify(
     ] = 'tiff',
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
+    if particles.name in _EXPECTED_FILES.keys():
+        track = _EXPECTED_FILES.get(particles.name)
+    else:
+        raise StampPipelineError(f'-p/--particles must be particle_set.json or decoy_particle_set.json, not {particles}')
     classifyfuncs.run_classify(
         particles=particles,
         raw_tomogram_dir=raw_tomogram_dir,
         segmentation_dir=segmentation_dir,
-        output_dir=resolve_output_dir(output_dir, 'classify'),
+        output_dir=resolve_output_dir(output_dir, 'classify', track),
         voxel_size_angstrom=voxel_size_angstrom,
         box_angstrom=box_angstrom,
         n_radial_bins=n_radial_bins,

@@ -9,6 +9,7 @@ from pathlib import Path
 # Import STAMP objects
 from stamp.schemas.config import RunConfig
 from stamp.utils.log import log
+from stamp.utils.io import resolve_output_dir
 
 # STAGE_ORDER: pipeline stages in order
 STAGE_ORDER = ['pick', 'classify', 'identify', 'refine']
@@ -16,7 +17,7 @@ _STATE_NAME = 'run_state.json'
 
 # _state_path: return path to run state file
 def _state_path(output_dir: Path) -> Path:
-    return output_dir / _STATE_NAME
+    return output_dir / 'stamp' / _STATE_NAME
 
 #  _read_state: read state file
 def _read_state(output_dir: Path) -> dict:
@@ -31,12 +32,13 @@ def _read_state(output_dir: Path) -> dict:
 
 # _write_state: write the state file
 def _write_state(output_dir: Path, state: dict) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _state_path(output_dir).parent.mkdir(parents=True, exist_ok=True)
     _state_path(output_dir).write_text(json.dumps(state, indent=2))
 
 # stage_dir: output directory for one track's stage
 def stage_dir(output_dir: Path, track: str, stage: str) -> Path:
-    return output_dir / track / f'stage_{stage}'
+    command = 'decoy' if (stage == 'pick' and track == 'decoy') else stage
+    return resolve_output_dir(output_dir, command, track if stage == 'classify' else None)
 
 # mark_complete: record a stage as finished
 def mark_complete(output_dir: Path, track: str, stage: str) -> None:
