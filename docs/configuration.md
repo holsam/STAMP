@@ -10,7 +10,7 @@ This document outlines how to configure a `stamp run` call using a `stamp_run.to
 [run]
 segmentation_dir = "seg"
 raw_tomogram_dir = "tomo"
-output_dir = "out"
+output_dir = "."                                # root for output files (files will be saved to <output_dir>/stamp/<stage>)
 voxel_size_angstrom = 13.48
 backend = "local"                               # local | mock | cluster
 stop_after = "refine"                           # pick | classify | identify | refine | omit for full run
