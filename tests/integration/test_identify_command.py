@@ -6,7 +6,7 @@ STAMP: integration tests for `stamp identify`
 import json, mrcfile, numpy as np
 from scipy.ndimage import gaussian_filter
 from typer.testing import CliRunner
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 
 # Initialise runner
 runner = CliRunner()
@@ -48,7 +48,7 @@ class TestIdentifyCommand:
         )
 
         out = tmp_path / 'out'
-        result = runner.invoke(stamp, [
+        result = runner.invoke(stamp_app, [
             'identify',
             '--classes', str(classes),
             '--candidates', str(tmp_path / 'candidates.yaml'),

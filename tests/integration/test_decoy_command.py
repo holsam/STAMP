@@ -8,8 +8,9 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 # Import internal STAMP objects
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 from stamp.schemas.particles import ParticleSet
+from stamp.utils.errors import StampPipelineError
 
 # Initialise runner
 runner = CliRunner()
@@ -37,7 +38,7 @@ def _run_pick(tmp_path: Path) -> tuple[Path, Path, Path]:
     seg_dir, raw_dir, pick_out = tmp_path / 'seg', tmp_path / 'raw', tmp_path / 'pick'
     _write_pair(seg_dir, raw_dir, 'tomo000')
     result = runner.invoke(
-        stamp,
+        stamp_app,
         [
             'pick',
             '--seg-dir', str(seg_dir),
@@ -60,7 +61,7 @@ class TestDecoyCommand:
         output_dir = tmp_path / 'decoy'
 
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'decoy',
                 '--method', 'rejected-surface',
@@ -86,7 +87,7 @@ class TestDecoyCommand:
         '''Shifted runs end to end without error.'''
         seg_dir, raw_dir, particle_set_path = _run_pick(tmp_path)
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'decoy',
                 '--method', 'shifted',
@@ -106,7 +107,7 @@ class TestDecoyCommand:
         '''Synthetic-noise writes the decoy set, manifests and volume dirs.'''
         output_dir = tmp_path / 'decoy_noise'
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'decoy',
                 '--method', 'synthetic-noise',
@@ -149,7 +150,7 @@ class TestDecoyCommand:
 
         pick_out = tmp_path / 'pick'
         pick_result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'pick',
                 '--seg-dir', str(seg_dir),
@@ -168,7 +169,7 @@ class TestDecoyCommand:
 
         output_dir = tmp_path / 'decoy_undersized'
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'decoy',
                 '--method', 'rejected-surface',
@@ -184,6 +185,6 @@ class TestDecoyCommand:
         )
 
         assert result.exit_code != 0
-        assert isinstance(result.exception, ValueError)
+        assert isinstance(result.exception, StampPipelineError)
         assert 'less than half the size of the real set' in str(result.exception)
         assert not (output_dir / 'decoy_particle_set.json').exists()

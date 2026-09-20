@@ -8,7 +8,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 # Import internal STAMP objects
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 from stamp.schemas.particles import ParticleSet
 
 # Initialise runner
@@ -45,7 +45,7 @@ class TestPickCommand:
         _write_pair(seg_dir, raw_dir, 'tomo000')
 
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'pick',
                 '--seg-dir', str(seg_dir),
@@ -78,7 +78,7 @@ class TestPickCommand:
             mrc.set_data(np.zeros((60, 60, 60), dtype=np.float32))
 
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'pick',
                 '--seg-dir', str(seg_dir),
@@ -111,7 +111,7 @@ class TestPickCommand:
         with mrcfile.new(seg_dir / 'Position_1_stack_Vol.denoised_segmented.mrc', overwrite=True) as mrc:
             mrc.set_data(segmentation)
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'pick',
                 '--seg-dir', str(seg_dir),
@@ -131,7 +131,7 @@ class TestPickCommand:
         seg_dir, raw_dir = tmp_path / 'seg', tmp_path / 'raw'
         _write_pair(seg_dir, raw_dir, 'tomo000', voxel_size=10.0)
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'pick',
                 '--seg-dir', str(seg_dir),
@@ -151,7 +151,7 @@ class TestPickCommand:
         _write_pair(seg_dir, raw_dir, 'tomo001', voxel_size=10.0)
         _write_pair(seg_dir, raw_dir, 'tomo002', voxel_size=14.0)
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'pick',
                 '--seg-dir', str(seg_dir),

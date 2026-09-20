@@ -8,7 +8,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 # Import main CLI
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 
 # Initialise runner
 runner = CliRunner()
@@ -66,7 +66,7 @@ class TestClassifyCommand:
         particle_set_path, raw_dir = _build_dataset(tmp_path)
         output_dir = tmp_path / 'classify'
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 'classify',
                 '--particles', str(particle_set_path),
@@ -94,7 +94,7 @@ class TestClassifyCommand:
         '''Strict mode reports cross-half cluster matching.'''
         particle_set_path, raw_dir = _build_dataset(tmp_path)
         result = runner.invoke(
-            stamp,
+            stamp_app,
             [
                 '-vv',
                 'classify',

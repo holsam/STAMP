@@ -5,7 +5,7 @@ STAMP: integration tests for `stamp refine`
 # Import external dependencies
 import json, mrcfile, numpy as np, pytest
 from typer.testing import CliRunner
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 
 # Initialise runner
 runner = CliRunner()
@@ -61,7 +61,7 @@ def _fixture(tmp_path, mixed=False):
     return stage_d
 
 def _invoke(tmp_path, stage_d, out):
-    return runner.invoke(stamp, [
+    return runner.invoke(stamp_app, [
         'refine',
         '--class-id', 'c00',
         '--identification', str(tmp_path / 'identification.json'),
