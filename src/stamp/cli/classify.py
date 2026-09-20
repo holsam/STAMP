@@ -18,12 +18,6 @@ classifyCli = typer.Typer(
     add_completion = False,
 )
 
-# Define expected particle set output filenames
-_EXPECTED_FILES = {
-    'particle_set.json': None,
-    'decoy_particle_set.json': 'decoy',
-}
-
 # Define classify command
 @classifyCli.command()
 def classify(
@@ -111,15 +105,11 @@ def classify(
     ] = 'tiff',
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
-    if particles.name in _EXPECTED_FILES.keys():
-        track = _EXPECTED_FILES.get(particles.name)
-    else:
-        raise StampPipelineError(f'-p/--particles must be particle_set.json or decoy_particle_set.json, not {particles}')
     classifyfuncs.run_classify(
         particles=particles,
         raw_tomogram_dir=raw_tomogram_dir,
         segmentation_dir=segmentation_dir,
-        output_dir=resolve_output_dir(output_dir, 'classify', track),
+        output_dir=output_dir,
         voxel_size_angstrom=voxel_size_angstrom,
         box_angstrom=box_angstrom,
         n_radial_bins=n_radial_bins,

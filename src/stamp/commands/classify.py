@@ -25,7 +25,7 @@ from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import write_sidecar
+from stamp.utils.io import resolve_output_dir, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
@@ -103,6 +103,7 @@ def run_classify(
         random_state=random_state,
     )
 
+    output_dir = resolve_output_dir(output_dir, 'classify', 'decoy' if is_decoy else None)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     align_settings = dict(
