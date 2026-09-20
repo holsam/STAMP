@@ -163,6 +163,10 @@ class TestIo:
         assert parsed.stamp_commit != 'unknown'
         assert parsed.input_checksums['particle_set']
 
+    @pytest.mark.parametrize('command', ['pick', 'decoy', 'classify', 'identify', 'refine'])
+    def test_expected_output_dir_resolved(self, tmp_path, command):
+        assert io_utils.resolve_output_dir(tmp_path, command) == tmp_path / 'stamp' / command
+
 class TestIoMatchByStem:
     def test_exact_match(self) -> None:
         raw = [Path('/raw/tomo000.mrc'), Path('/raw/tomo001.mrc')]
