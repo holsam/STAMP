@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 # Import decoy command functions/variables
 import stamp.commands.decoy as decoyfuncs
+from stamp.utils.io import resolve_output_dir
 
 # Initialise Typer app
 decoyCli = typer.Typer(
@@ -19,14 +20,14 @@ decoyCli = typer.Typer(
 # Define decoy command
 @decoyCli.command()
 def decoy(
-    output_dir: Annotated[
-        Path,
-        typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
-    ],
     voxel_size_angstrom: Annotated[
         float,
         typer.Option('--voxel-size-a', help='Voxel size, in Ångstrom.'),
     ],
+    output_dir: Annotated[
+        Path,
+        typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
+    ] = Path('.'),
     method: Annotated[
         Literal['rejected-surface', 'shifted', 'synthetic-noise'],
         typer.Option('--method', help='Decoy method to use.'),
@@ -105,7 +106,7 @@ def decoy(
 
     # Run decoy generation
     decoyfuncs.run_decoy(
-        output_dir=output_dir,
+        output_dir=resolve_output_dir(output_dir, 'decoy'),
         method=method,
         parameters=parameters,
         real_particle_set=real_particle_set,

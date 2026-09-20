@@ -7,10 +7,14 @@ import typer
 from pathlib import Path
 from typing import Annotated, Literal
 
+# Import refine command functions/variables
 import stamp.commands.refine as refinefuncs
+from stamp.utils.io import resolve_output_dir
 
+# Initialise Typer app
 refineCli = typer.Typer(no_args_is_help=True, add_completion=False)
 
+# Define refine command
 @refineCli.command()
 def refine(
     class_id: Annotated[
@@ -77,7 +81,7 @@ def refine(
         particles=particles,
         class_assignments=class_assignments,
         raw_tomogram_dir=raw_tomogram_dir,
-        output_dir=output_dir,
+        output_dir=resolve_output_dir(output_dir, 'refine'),
         tool=tool,
         mask=mask,
         iterations=iterations,

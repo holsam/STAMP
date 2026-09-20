@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 # Import classify command functions/variables
 import stamp.commands.classify as classifyfuncs
+from stamp.utils.io import resolve_output_dir
 
 # Initialise Typer app
 classifyCli = typer.Typer(
@@ -27,10 +28,6 @@ def classify(
         Path,
         typer.Option('-r', '--raw-dir', help='Raw tomogram directory.', exists=True, file_okay=False),
     ],
-    output_dir: Annotated[
-        Path,
-        typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
-    ],
     voxel_size_angstrom: Annotated[
         float,
         typer.Option('--voxel-size-a', help='Voxel size, in Å.'),
@@ -39,6 +36,10 @@ def classify(
         Path | None,
         typer.Option('-s', '--seg-dir', help='Segmentation directory for membrane voxel replacement.', exists=True, file_okay=False),
     ] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
+    ] = Path('.'),
     box_angstrom: Annotated[
         float,
         typer.Option('--box-length-a', help='Extraction box edge length, in Å.')
@@ -107,7 +108,7 @@ def classify(
         particles=particles,
         raw_tomogram_dir=raw_tomogram_dir,
         segmentation_dir=segmentation_dir,
-        output_dir=output_dir,
+        output_dir=resolve_output_dir(output_dir, 'classify'),
         voxel_size_angstrom=voxel_size_angstrom,
         box_angstrom=box_angstrom,
         n_radial_bins=n_radial_bins,
