@@ -6,6 +6,8 @@ STAMP: particle-level schema
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal
+# Import internal STAMP objects
+from stamp.schemas.utils import assert_unit_quaternion
 
 # HalfSet: class for half-set label that gets assigned at the end of consensus picking
 class HalfSet(str, Enum):
@@ -29,9 +31,7 @@ class Particle(BaseModel):
     def _quaternion_is_unit_length(cls, value: tuple[float, float, float, float] | None) -> tuple[float, float, float, float] | None:
         if value is None:
             return value
-        norm = sum(component**2 for component in value) ** 0.5
-        if not (0.99 <= norm <= 1.01):
-            raise ValueError(f'orientation quaternion must be unit-length, got norm={norm:.4f}')
+        assert_unit_quaternion(value)
         return value
 
 # ParticleSet: output of consensus picking for a single run
