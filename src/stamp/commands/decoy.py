@@ -52,6 +52,9 @@ def run_decoy(
     pick_zstack_movie: bool = True,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data'''
+    if voxel_size_angstrom is None:
+        _HEADER_DIR = raw_tomogram_dir or segmentation_dir
+        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(_HEADER_DIR.glob('*.mrc')))
     log.progress(f'Generating decoy dataset ({method})')
     config_fields = {
         key: value
@@ -78,8 +81,6 @@ def run_decoy(
             json.dumps([m.model_dump(mode='json') for m in decoy_manifests], indent=2)
         )
     else:
-        if not (real_particle_set and segmentation_dir and raw_tomogram_dir):
-            raise StampPipelineError(f'--method {method} requires --real-particle-set, --segmentation-dir and --raw-tomogram-dir')
         real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
         manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
         if not manifests:

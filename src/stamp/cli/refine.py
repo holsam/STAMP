@@ -43,7 +43,7 @@ def refine(
     ] = Path('.'),
     voxel_size_angstrom: Annotated[
         float | None,
-        typer.Option('--voxel-size-a', help='Voxel size of the input tomograms, in Angstrom.'),
+        typer.Option('--voxel-size-a', help='Voxel size in Å. Read from MRC headers if omitted.'),
     ] = None,
     tool: Annotated[
         Literal['relion', 'm'],

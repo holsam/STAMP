@@ -30,9 +30,9 @@ def classify(
         typer.Option('-r', '--raw-dir', help='Raw tomogram directory.', exists=True, file_okay=False),
     ],
     voxel_size_angstrom: Annotated[
-        float,
-        typer.Option('--voxel-size-a', help='Voxel size, in Å.'),
-    ],
+        float | None,
+        typer.Option('--voxel-size-a', help='Voxel size in Å. Read from MRC headers if omitted.'),
+    ] = None,
     segmentation_dir: Annotated[
         Path | None,
         typer.Option('-s', '--seg-dir', help='Segmentation directory for membrane voxel replacement.', exists=True, file_okay=False),

@@ -21,9 +21,9 @@ decoyCli = typer.Typer(
 @decoyCli.command()
 def decoy(
     voxel_size_angstrom: Annotated[
-        float,
-        typer.Option('--voxel-size-a', help='Voxel size, in Ångstrom.'),
-    ],
+        float = None,
+        typer.Option('--voxel-size-a', help='Voxel size in Å. Read from MRC headers if omitted.'),
+    ] = None,
     output_dir: Annotated[
         Path,
         typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
@@ -103,6 +103,14 @@ def decoy(
         parameters = json.loads(picker_params)
     except json.JSONDecodeError as exc:
         raise typer.BadParameter(f'--picker-params is not valid JSON: {exc}') from None
+
+    # Validate method requirements
+    if method in ['rejected-surface', 'shifted']:
+        if any([real_particle_set is None, segmentation_dir is None, raw_tomogram_dir is None]):
+            raise StampPipelineError(f'--method {method} requires --real-particle-set, --segmentation-dir and --raw-tomogram-dir')
+    else:
+        if all([voxel_size_angstrom is None, segmentation_dir is None, raw_tomogram_dir is None]):
+            raise StampPipelineError(f'--method {method} requires one of --voxel-size-a, -s/--seg-dir or -r/--raw-dir to be set.')
 
     # Run decoy generation
     decoyfuncs.run_decoy(

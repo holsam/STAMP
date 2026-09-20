@@ -25,7 +25,7 @@ from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import resolve_output_dir, write_sidecar
+from stamp.utils.io import resolve_directory_voxel_size_angstrom, resolve_output_dir, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
@@ -54,6 +54,10 @@ def run_classify(
     make_plots: bool = True,
     plot_format: str = 'tiff',
 ) -> None:
+    if voxel_size_angstrom is None:
+        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(raw_tomogram_dir.glob('*.mrc')))
+        if voxel_size_angstrom is None:
+            raise StampPipelineError('Voxel size not given and not found in any MRC header in --raw-dir.')
     log.progress('Classifying particle set')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
