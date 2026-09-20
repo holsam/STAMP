@@ -8,9 +8,10 @@ from pathlib import Path
 # Import STAMP objects
 from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
+from stamp.utils.errors import StampAdapterError, StampConfigError
 from stamp.utils.log import log
 
-# _M_ENTRYPOINT: unconfirmed M CLI signature, isolated to one constant
+# _M_ENTRYPOINT: unconfirmed M CLI signature
 _M_ENTRYPOINT = ('MTools', 'refine')
 
 # MRefineAdapter: command-build-only M pass over one half's RELION output
@@ -25,11 +26,8 @@ class MRefineAdapter:
 
     # build_command: M multi-particle refinement over the RELION output for one half
     def build_command(self, inputs: AdapterInputs) -> ToolCommand:
-        '''M multi-particle refinement over the RELION output for one
-        half. Population/species config shape from published docs;
-        confirm on the cluster.'''
         if len(inputs.input_paths) != 1:
-            raise ValueError('m refine takes one input: this half\'s RELION output directory')
+            raise StampConfigError('m refine takes one input: this half\'s RELION output directory')
         relion_dir = inputs.input_paths[0]
         population = inputs.output_directory / 'population.settings'
         refined_map = inputs.output_directory / 'm_class001.mrc'
@@ -54,8 +52,7 @@ class MRefineAdapter:
     def parse_output(self, result: RunResult) -> AdapterOutput:
         refined_map = next((p for p in result.output_paths if p.name.endswith('.mrc')), None)
         if refined_map is None or not Path(refined_map).is_file():
-            log.error('M produced no refined map')
-            raise ValueError('M produced no refined map')
+            raise StampAdapterError('M produced no refined map')
         return AdapterOutput(
             output_paths=[Path(refined_map)],
             parsed={'final_map': str(refined_map)},

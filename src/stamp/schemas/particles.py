@@ -6,8 +6,10 @@ STAMP: particle-level schema
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal
+
 # Import internal STAMP objects
 from stamp.schemas.utils import assert_unit_quaternion
+from stamp.utils.errors import StampPipelineError
 
 # HalfSet: class for half-set label that gets assigned at the end of consensus picking
 class HalfSet(str, Enum):
@@ -44,7 +46,7 @@ class ParticleSet(BaseModel):
     @classmethod
     def _not_empty(cls, value: list[Particle]) -> list[Particle]:
         if not value:
-            raise ValueError('ParticleSet must contain at least one particle')
+            raise StampPipelineError('ParticleSet must contain at least one particle')
         return value
 
 # ClassAssignment: class for a single particles's cluster membership
