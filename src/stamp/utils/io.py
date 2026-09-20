@@ -201,5 +201,6 @@ def resolve_directory_voxel_size_angstrom(paths: list[Path]) -> float | None:
     return most_common_value
 
 # resolve_output_dir: append stamp/<command> to supplied output dir
-def resolve_output_dir(output_dir: Path, command: str) -> Path:
-    return output_dir / 'stamp' / command
+def resolve_output_dir(output_dir: Path, command: str, track: str | None = None) -> Path:
+    base = output_dir / 'stamp' / command
+    return Path(f'{base}_{track}') if track else base
