@@ -99,6 +99,7 @@ def run_refine(
     runner = select_runner(backend, requires_gpu=getattr(adapter, 'requires_gpu', False))
     parameters = {'voxel_size_angstrom': voxel_size_angstrom, 'iterations': iterations}
 
+    failed_targets: list[str] = []
     for target in targets:
         log.progress(f'Refining class {target}')
         if combined_halfset:
@@ -126,6 +127,7 @@ def run_refine(
             fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape))
         except (StampValidationError, StampAdapterError) as exc:
             log.error(f'{target}: {exc}')
+            failed_targets.append(target)
             continue
 
         final_a.replace(tree['combined'] / 'final_A.mrc')
@@ -160,6 +162,8 @@ def run_refine(
                 ('reference:B', reference_b),
             ] + ([('mask', mask)] if mask else []),
         )
+    if failed_targets:
+        raise StampPipelineError(f'{len(failed_targets)} of {len(targets)} class(es) failed: {", ".join(failed_targets)}')
     log.info(f'Refinement complete for {len(targets)} class(es)')
 
 # build_refine_commands: create ToolCommand for `stamp refine`
