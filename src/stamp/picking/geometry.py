@@ -11,6 +11,7 @@ from skimage import measure
 from typing import Literal
 
 # Import internal STAMP objects
+from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
 
 # Reference axis that a particle's assigned orientation rotates onto the surface normal. +z in (x, y, z) output convention
@@ -19,16 +20,13 @@ REFERENCE_AXIS_XYZ = np.array([0.0, 0.0, 1.0])
 # extract_surface: extract a membrane surface from a binary segmentation, returning (vertices, normals)
 def extract_surface(segmentation: np.ndarray, level: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
     if not np.any(segmentation > level):
-        log.error('Segmentation contains no voxels above the surface level; nothing to extract')
-        raise ValueError('Segmentation contains no voxels above the surface level; nothing to extract')
+        raise StampValidationError('Segmentation contains no voxels above the surface level; nothing to extract')
     try:
         vertices, faces, normals, _values = measure.marching_cubes(segmentation.astype(np.float32), level=level)
     except (RuntimeError, ValueError) as exc:
-        log.error(f'Surface extraction failed: {exc}')
-        raise ValueError(f'Surface extraction failed: {exc}') from exc
+        raise StampValidationError(f'Surface extraction failed: {exc}') from exc
     if vertices.shape[0] == 0:
-        log.error('Surface extraction produced no vertices')
-        raise ValueError('Surface extraction produced no vertices')
+        raise StampValidationError('Surface extraction produced no vertices')
     lengths = np.linalg.norm(normals, axis=1, keepdims=True)
     lengths[lengths == 0.0] = 1.0
     log.debug(f'Extracted surface: {len(vertices)} vertices, {len(faces)} faces')

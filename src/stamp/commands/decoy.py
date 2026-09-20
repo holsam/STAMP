@@ -21,6 +21,7 @@ from stamp.picking.native import NativePickerConfig
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
+from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
@@ -64,8 +65,7 @@ def run_decoy(
     if method == METHOD_SYNTHETIC_NOISE:
         shape = tuple(int(value) for value in synthetic_shape.split(','))
         if len(shape) != 3:
-            log.error('--synthetic-shape must be three integers')
-            raise SystemExit(1)
+            raise StampPipelineError('--synthetic-shape must be three integers')
         decoy_set, decoy_manifests = generate_synthetic_noise_decoys(
             tomogram_shape=shape,
             n_tomograms=n_synthetic_tomograms,
@@ -79,13 +79,11 @@ def run_decoy(
         )
     else:
         if not (real_particle_set and segmentation_dir and raw_tomogram_dir):
-            log.error(f'--method {method} requires --real-particle-set, --segmentation-dir and --raw-tomogram-dir')
-            raise SystemExit(1)
+            raise StampPipelineError(f'--method {method} requires --real-particle-set, --segmentation-dir and --raw-tomogram-dir')
         real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
         manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
         if not manifests:
-            log.error('No matched segmentation/tomogram pairs found')
-            raise SystemExit(1)
+            raise StampPipelineError('No matched segmentation/tomogram pairs found')
 
         if method == METHOD_REJECTED_SURFACE:
             decoy_set = generate_rejected_surface_decoys(
@@ -109,8 +107,7 @@ def run_decoy(
             )
 
     if decoy_set is None or not decoy_set.particles:
-        log.error('No decoy positions generated. For rejected-surface, check that --min-distance-from-real-angstrom isn\'t excluding the whole surface; for shifted, check that the shift range fits inside the volume.')
-        raise SystemExit(1)
+        raise StampPipelineError('No decoy positions generated. For rejected-surface, check that --min-distance-from-real-angstrom isn\'t excluding the whole surface; for shifted, check that the shift range fits inside the volume.')
 
     if method != METHOD_SYNTHETIC_NOISE and real_particle_set is not None:
         assert_comparable(real_set, decoy_set)

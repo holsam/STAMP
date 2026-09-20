@@ -223,7 +223,7 @@ def run_pipeline(
             'class_id': class_dir.name,
             'resolution_angstrom': sidecar['parameters'].get('resolution_angstrom'),
         })
-    log.progress(f'Pipeline finished ({stop_after})')
+    log.info(f'Pipeline finished ({stop_after})')
     return _finalise(outcome, output_dir)
 
 # _finalise: collect each sidecar into outcome for appendix

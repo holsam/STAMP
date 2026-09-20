@@ -20,6 +20,7 @@ from stamp.picking.vesicles import load_vesicle_labels, summarise_vesicles, vesi
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
+from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
@@ -36,8 +37,7 @@ def _execute(adapter: ToolAdapter, inputs: AdapterInputs, runner: Runner) -> lis
     log.debug(f'{adapter.name}: dispatching {" ".join(command.argv)}')
     result = runner.run(command)
     if not result.succeeded:
-        log.error(f'{adapter.name} failed (exit {result.exit_code}): {result.stderr}')
-        raise SystemExit(1)
+        raise StampPipelineError(f'{adapter.name} failed (exit {result.exit_code}): {result.stderr}')
     output = adapter.parse_output(result)
     return [RawPick(**raw) for raw in output.parsed.get('picks', [])]
 
@@ -48,8 +48,7 @@ def _select_adapter(picker_name: str, backend: str) -> ToolAdapter:
 
     adapter = REAL_ADAPTERS.get(picker_name)
     if adapter is None:
-        log.error(f'Unknown picker {picker_name!r}')
-        raise SystemExit(1)
+        raise StampPipelineError(f'Unknown picker {picker_name!r}')
     check_backend_supports(adapter, backend)
     return adapter
 
@@ -69,8 +68,7 @@ def _load_manifests(
     if voxel_size_angstrom is None:
         resolved_voxel_size = resolve_directory_voxel_size_angstrom(list(matched.values()))
         if resolved_voxel_size is None:
-            log.error(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
-            raise SystemExit(1)
+            raise StampPipelineError(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
     for segmentation_path, raw_path in matched.items():
         manifests.append(
             TomogramManifest(
@@ -163,7 +161,11 @@ def _write_vesicle_summary(
         with mrcfile.open(str(manifest.segmentation_path), permissive=True) as mrc:
             segmentation = np.asarray(mrc.data)
         labels = load_vesicle_labels(labels_mrc, segmentation.shape)
-        vertices, _normals = extract_surface(segmentation)
+        try:
+            vertices, _normals = extract_surface(segmentation)
+        except StampValidationError as exc:
+            log.error(f'{manifest.tomogram_id}: vesicle summary failed ({exc})')
+            continue
         _v, faces, _n2, _val = measure.marching_cubes(segmentation.astype(np.float32), level=0.5)
         areas = vesicle_surface_area_angstrom2(vertices, faces, labels, manifest.voxel_size_angstrom, manifest.tomogram_id)
         for summary in summarise_vesicles(picks, areas, manifest.tomogram_id):
@@ -199,8 +201,7 @@ def run_pick(
     # Load manifests to check for matching files
     manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
     if not manifests:
-        log.error(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
-        raise SystemExit(1)
+        raise StampPipelineError(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
     log.info(f'Matched {len(manifests)} tomograms/segmentations')
     resolved_voxel_size_angstrom = manifests[0].voxel_size_angstrom
 
@@ -209,8 +210,7 @@ def run_pick(
 
     vesicle_labels_mrc_by_tomogram = _resolve_vesicle_labels(vesicle_labels_mrc, manifests)
     if normalise_per_vesicle and not vesicle_labels_mrc_by_tomogram:
-        log.error('--normalise-per-vesicle requires --vesicle-labels-mrc to resolve to at least one tomogram')
-        raise SystemExit(1)
+        raise StampPipelineError('--normalise-per-vesicle requires --vesicle-labels-mrc to resolve to at least one tomogram')
 
     picks_by_picker: dict[str, list[RawPick]] = {}
     for picker_name in picker_names:
@@ -240,8 +240,7 @@ def run_pick(
         all_reconciled.extend(reconciled)
 
     if not all_reconciled:
-        log.error('No particles survived reconciliation. If using stamp-native, try lowering n_mad or check density_sign matches your tomograms (-1 for conventional dark-protein contrast).')
-        raise SystemExit(1)
+        raise StampPipelineError('No particles survived reconciliation. If using stamp-native, try lowering n_mad or check density_sign matches your tomograms (-1 for conventional dark-protein contrast).')
 
     particle_set = build_particle_set(
         reconciled_picks=all_reconciled,
@@ -259,8 +258,7 @@ def run_pick(
         dropped = before - len(particle_set.particles)
         log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {dropped} of {before} particles')
         if not particle_set.particles:
-            log.error('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
-            raise SystemExit(1)
+            raise StampPipelineError('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
 
     report_beam_angle_distribution(particle_set.particles)
 

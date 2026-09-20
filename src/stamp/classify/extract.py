@@ -8,6 +8,7 @@ from scipy.ndimage import map_coordinates
 
 # Import STAMP schema
 from stamp.schemas.particles import Particle
+from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
 
 # quaternion_to_matrix: return a rotation matrix from a unit quaternion (w, x, y, z)
@@ -77,21 +78,26 @@ def extract_particle_set(
     for tomogram_id, group in by_tomogram.items():
         path = tomogram_paths.get(tomogram_id)
         if path is None:
+            log.warning(f'{tomogram_id}: no matching raw tomogram path, skipping {len(group)} particle(s)')
             skipped.extend(group)
             continue
 
-        with mrcfile.open(str(path), permissive=True) as mrc:
-            tomogram = np.asarray(mrc.data).astype(np.float32)
+        try:
+            with mrcfile.open(str(path), permissive=True) as mrc:
+                tomogram = np.asarray(mrc.data).astype(np.float32)
 
-        seg_path = segmentation_paths.get(tomogram_id)
-        if seg_path is not None:
-            with mrcfile.open(str(seg_path), permissive=True) as mrc:
-                segmentation = np.asarray(mrc.data)
-            if segmentation.shape != tomogram.shape:
-                log.error(f'Segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id!r}')
-                raise ValueError(f'segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id!r}; they must be the same volume at the same binning')
-            # replace membrane voxels with the background median so the class average is not dominated by the membrane slab
-            tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
+            seg_path = segmentation_paths.get(tomogram_id)
+            if seg_path is not None:
+                with mrcfile.open(str(seg_path), permissive=True) as mrc:
+                    segmentation = np.asarray(mrc.data)
+                if segmentation.shape != tomogram.shape:
+                    raise StampValidationError(f'segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id!r}; they must be the same volume at the same binning')
+                # replace membrane voxels with the background median so the class average is not dominated by the membrane slab
+                tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
+        except StampValidationError as exc:
+            log.error(f'{tomogram_id}: {exc}')
+            skipped.extend(group)
+            continue
 
         for particle in group:
             if particle.orientation is None:
