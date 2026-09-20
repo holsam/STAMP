@@ -81,11 +81,15 @@ def run_refine(
     mask: Path | None,
     iterations: int,
     backend: str,
-    voxel_size_angstrom: float,
+    voxel_size_angstrom: float | None,
     combined_halfset: bool,
     make_plots: bool = True,
     plot_format: str = 'tiff',
 ) -> None:
+    if voxel_size_angstrom is None:
+        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(raw_tomogram_dir.glob('*.mrc')))
+        if voxel_size_angstrom is None:
+            raise StampValidationError('Voxel size not given and not found in any MRC header in --raw-dir.')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     assignments = [ClassAssignment.model_validate(row) for row in json.loads(class_assignments.read_text())]
     angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None}
