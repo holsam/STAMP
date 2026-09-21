@@ -53,9 +53,13 @@ class NativePickerAdapter:
         vesicle_labels_mrc_by_tomogram = inputs.parameters.get('vesicle_labels_mrc_by_tomogram', {})
         inputs.output_directory.mkdir(parents=True, exist_ok=True)
 
-        log.progress(f'Running stamp-native over {len(inputs.input_paths)} tomogram(s)')
+        total = len(inputs.input_paths)
+        log.progress(f'Running stamp-native over {total} tomogram(s)')
         picks: list[RawPick] = []
-        for segmentation_path, tomogram_path, tomogram_id in zip(inputs.input_paths, inputs.raw_tomogram_paths, inputs.tomogram_ids):
+        report_every = max(1, total // 10)
+        for index, (segmentation_path, tomogram_path, tomogram_id) in enumerate(
+            zip(inputs.input_paths, inputs.raw_tomogram_paths, inputs.tomogram_ids), start=1
+        ):
             tomogram_config = config
             labels_path = vesicle_labels_mrc_by_tomogram.get(tomogram_id)
             if labels_path is not None:
@@ -67,9 +71,11 @@ class NativePickerAdapter:
                 tomogram_picks = pick_tomogram(segmentation_path, tomogram_path, tomogram_id, tomogram_config)
             except StampValidationError as exc:
                 log.error(f'{tomogram_id}: {exc}')
-                continue
-            log.debug(f'{tomogram_id}: {len(tomogram_picks)} raw picks')
-            cache_path = inputs.output_directory / f'{tomogram_id}.json'
-            cache_path.write_text(json.dumps([pick.model_dump() for pick in tomogram_picks], indent=2))
-            picks.extend(tomogram_picks)
+            else:
+                log.debug(f'{tomogram_id}: {len(tomogram_picks)} raw picks')
+                cache_path = inputs.output_directory / f'{tomogram_id}.json'
+                cache_path.write_text(json.dumps([pick.model_dump() for pick in tomogram_picks], indent=2))
+                picks.extend(tomogram_picks)
+            if index % report_every == 0 or index == total:
+                log.progress(f'stamp-native: {index}/{total} tomograms complete')
         return picks
