@@ -92,6 +92,10 @@ def pick(
         bool,
         typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.', rich_help_panel = 'Plotting'),
     ] = True,
+    keep_raw: Annotated[
+        bool,
+        typer.Option('--keep-raw', help='Keep the raw per-picker output directory instead of archiving it to raw.tar.gz.', rich_help_panel = 'Backend'),
+    ] = False,
 ) -> None:
     '''Run particle picking, reconcile across pickers, and assign half-sets.'''
     # Validate provided pickers
@@ -128,4 +132,5 @@ def pick(
         max_beam_angle_deviation=max_beam_angle_deviation,
         vesicle_labels_mrc=vesicle_labels_mrc,
         normalise_per_vesicle=normalise_per_vesicle,
+        keep_raw=keep_raw,
     )

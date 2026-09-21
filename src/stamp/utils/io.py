@@ -3,7 +3,7 @@ STAMP: input/output utilities
 '''
 
 # Import external dependencies
-import hashlib, json, mrcfile, subprocess, tomli_w
+import hashlib, json, mrcfile, shutil, subprocess, tarfile, tomli_w
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -201,6 +201,14 @@ def resolve_directory_voxel_size_angstrom(paths: list[Path]) -> float | None:
         breakdown = ', '.join(f'{value}Å x{count}' for value, count in counts.most_common())
         log.warning(f'Multiple voxel sizes were found in MRC headers ({breakdown}) - using the most common {most_common_value}')
     return most_common_value
+
+# archive_and_remove_directory: tar+gzip a directory to '<directory>.tar.gz' next to it, then delete the directory
+def archive_and_remove_directory(directory: Path) -> Path:
+    archive_path = directory.with_suffix(directory.suffix + '.tar.gz')
+    with tarfile.open(archive_path, 'w:gz') as tar:
+        tar.add(directory, arcname=directory.name)
+    shutil.rmtree(directory)
+    return archive_path
 
 # resolve_output_dir: append stamp/<command> to supplied output dir
 def resolve_output_dir(output_dir: Path, command: str, track: str | None = None) -> Path:

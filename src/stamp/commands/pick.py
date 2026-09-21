@@ -22,7 +22,7 @@ from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import archive_and_remove_directory, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.picks import plot_positions
@@ -225,6 +225,7 @@ def run_pick(
     max_beam_angle_deviation: float | None = None,
     vesicle_labels_mrc: Path | None = None,
     normalise_per_vesicle: bool = False,
+    keep_raw: bool = False,
 ) -> None:
     # Load manifests to check for matching files
     manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
@@ -317,6 +318,12 @@ def run_pick(
         raw_tomogram_paths = {m.tomogram_id: m.raw_tomogram_path for m in manifests}
         plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, max_workers=n_workers)
 
+    if not keep_raw:
+        raw_dir = output_dir / 'raw'
+        if raw_dir.is_dir():
+            archive_path = archive_and_remove_directory(raw_dir)
+            log.info(f'Archived raw picker output to {archive_path}')
+
 # build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
 def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
     target = stage_dir(output_dir, 'real', 'pick')
@@ -335,4 +342,5 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
     argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
     if config.plots.pick_zstack_movie:
         argv.append('--pick-zstack-movie')
+    argv.append('--keep-raw' if config.stage.pick.keep_raw else '--no-keep-raw')
     return [ToolCommand(tool='pick', argv=argv, working_directory=target, output_paths=[target / 'particle_set.json'])]
