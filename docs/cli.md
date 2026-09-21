@@ -54,7 +54,7 @@ Argument/Option | Default | Use
 `--half-set-seed` | `0` | Seed for half-set assignment
 `--backend` | `local` | Backend to use for picking (`local` or `mock`)
 `--plots/--no-plots` | `--plots` | Write consensus-pick position plots
-`--pick-plot-style` | `both` | Style of consensus-pick position plots (`scatter` or `segmented` or `both`)
+`--pick-plot-style` | `segmented` | Style of consensus-pick position plots (`segmented` or `none`)
 `--plot-format` | `tiff` | Consensus-pick position plot file format (`png` or `jpg` or `tiff` or `svg`)
 `--pick-zstack-movie/--no-pick-zstack-movie` | `--pick-zstack-movie` | Write a per-tomogram movie through Z with picks highlighted
 `--max-beam-angle-deviation` | `None` | Drop particles whose normal deviates from the beam-orthogonal plane by more than this many degrees
@@ -88,7 +88,7 @@ Option | Default | Use
 `--seed` | `0` | Seed to use for sampling and half-set assignment
 `-backend` | `local` | Backend to use for picking (`local` or `mock`)
 `--plots/--no-plots` | `--plots` | Write decoy position plots
-`--pick-plot-style` | `both` | Style of decoy position plots (`scatter` or `segmented` or `both`)
+`--pick-plot-style` | `segmented` | Style of decoy position plots (`segmented` or `none`)
 `--plot-format` | `tiff` | Decoy plot file format (`png` or `jpg` or `tiff` or `svg`)
 `--pick-zstack-movie/--no-pick-zstack-movie` | `--pick-zstack-movie` | Write a per-tomogram movie through Z with picks highlighted
 

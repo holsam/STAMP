@@ -81,9 +81,9 @@ def pick(
         typer.Option('--plots/--no-plots', help='Write consensus-pick position plots.', rich_help_panel = 'Plotting'),
     ] = True,
     pick_plot_style: Annotated[
-        Literal['scatter', 'segmented', 'both'],
+        Literal['segmented', 'none'],
         typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel = 'Plotting'),
-    ] = 'both',
+    ] = 'segmented',
     plot_format: Annotated[
         Literal['png', 'jpg', 'tiff', 'svg'],
         typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),

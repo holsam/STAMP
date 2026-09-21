@@ -219,7 +219,7 @@ def run_pick(
     backend,
     n_workers: int = 1,
     make_plots: bool = True,
-    pick_plot_style: str = 'both',
+    pick_plot_style: str = 'segmented',
     plot_format: str = 'tiff',
     pick_zstack_movie: bool = True,
     max_beam_angle_deviation: float | None = None,

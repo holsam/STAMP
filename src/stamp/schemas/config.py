@@ -29,7 +29,7 @@ class RunSettings(_Strict):
 class PlotSettings(_Strict):
     enabled: bool = True
     format: Literal['png', 'jpg', 'tiff', 'svg'] = 'tiff'
-    pick_style: Literal['scatter', 'segmented', 'both'] = 'both'
+    pick_style: Literal['segmented', 'none'] = 'segmented'
     pick_zstack_movie: bool = False
 
 # DecoySettings: the [decoy] table

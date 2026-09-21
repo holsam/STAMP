@@ -48,7 +48,7 @@ def run_decoy(
     seed,
     n_workers: int = 1,
     make_plots: bool = True,
-    pick_plot_style: str = 'both',
+    pick_plot_style: str = 'segmented',
     plot_format: str = 'tiff',
     pick_zstack_movie: bool = True,
 ) -> None:
@@ -146,7 +146,7 @@ def run_decoy(
     log.info(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
     if make_plots:
         segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests} if method != METHOD_SYNTHETIC_NOISE else {}
-        style = pick_plot_style if segmentation_paths else 'scatter'
+        style = pick_plot_style if segmentation_paths else 'none'
         plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths), max_workers=n_workers)
 
 
