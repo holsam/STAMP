@@ -189,6 +189,7 @@ def run_pipeline(
             backend=config.stage.identify.backend if config.stage.identify.backend != 'cluster' else 'local',
             fitter=config.stage.identify.fitter,
             fetch_missing=config.stage.identify.fetch_missing,
+            n_workers=config.stage.identify.n_workers,
         )
         mark_complete(output_dir, 'real', 'identify')
     outcome.identifications = json.loads((identify_dir / 'identification.json').read_text())

@@ -74,6 +74,7 @@ class IdentifyStage(_Strict):
     fitter: Literal['native'] = 'native'
     fetch_missing: bool = False
     backend: Literal['local', 'mock', 'cluster'] | None = None
+    n_workers: int = 1
 
 class RefineStage(_Strict):
     tool: Literal['relion', 'm'] = 'relion'
