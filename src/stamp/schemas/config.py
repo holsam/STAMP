@@ -51,6 +51,7 @@ class PickStage(_Strict):
     distance_threshold: float = 15.0
     half_set_seed: int = 0
     backend: Literal['local', 'mock', 'cluster'] | None = None
+    n_workers: int = 1
 
 class ClassifyStage(_Strict):
     method: Literal['hdbscan', 'kmeans'] = 'hdbscan'

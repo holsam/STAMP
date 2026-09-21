@@ -43,6 +43,7 @@ def _real_pick(config: RunConfig, output_dir: Path) -> Path:
         distance_threshold=config.stage.pick.distance_threshold,
         half_set_seed=config.stage.pick.half_set_seed,
         backend=config.stage.pick.backend,
+        n_workers=config.stage.pick.n_workers,
     )
     return target / 'particle_set.json'
 

@@ -190,6 +190,7 @@ def run_pick(
     distance_threshold,
     half_set_seed,
     backend,
+    n_workers: int = 1,
     make_plots: bool = True,
     pick_plot_style: str = 'both',
     plot_format: str = 'tiff',
@@ -220,9 +221,11 @@ def run_pick(
             'voxel_size_angstrom': resolved_voxel_size_angstrom,
             **extra_params.get(picker_name, {}),
         }
-        if picker_name == NATIVE_PICKER_NAME and vesicle_labels_mrc_by_tomogram:
-            parameters['vesicle_labels_mrc_by_tomogram'] = {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()}
-            parameters.setdefault('normalise_per_vesicle', normalise_per_vesicle)
+        if picker_name == NATIVE_PICKER_NAME:
+            parameters.setdefault('n_workers', n_workers)
+            if vesicle_labels_mrc_by_tomogram:
+                parameters['vesicle_labels_mrc_by_tomogram'] = {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()}
+                parameters.setdefault('normalise_per_vesicle', normalise_per_vesicle)
 
         log.progress(f'Running {picker_name}...')
         picks_by_picker[picker_name] = _run_picker(adapter, manifests, picker_output_dir, parameters, runner, backend)
