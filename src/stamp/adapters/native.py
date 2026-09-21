@@ -3,6 +3,7 @@ STAMP: in-process adapter for the stamp-native picker
 '''
 
 # Import external dependencies
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -50,6 +51,7 @@ class NativePickerAdapter:
         }
         config = NativePickerConfig(**config_fields)
         vesicle_labels_mrc_by_tomogram = inputs.parameters.get('vesicle_labels_mrc_by_tomogram', {})
+        inputs.output_directory.mkdir(parents=True, exist_ok=True)
 
         log.progress(f'Running stamp-native over {len(inputs.input_paths)} tomogram(s)')
         picks: list[RawPick] = []
@@ -67,5 +69,7 @@ class NativePickerAdapter:
                 log.error(f'{tomogram_id}: {exc}')
                 continue
             log.debug(f'{tomogram_id}: {len(tomogram_picks)} raw picks')
+            cache_path = inputs.output_directory / f'{tomogram_id}.json'
+            cache_path.write_text(json.dumps([pick.model_dump() for pick in tomogram_picks], indent=2))
             picks.extend(tomogram_picks)
         return picks
