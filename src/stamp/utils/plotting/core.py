@@ -89,10 +89,10 @@ def tile_particles(particles, box, columns=None):
 
 # show_segmentation: membrane in grey, protein density in solid orange, optional picks
 def show_segmentation(ax, segmentation, field_px, picks=None):
-    ax.imshow(segmentation == 1, cmap='Greys', alpha=0.55, vmin=0, vmax=1)
-    ax.imshow(np.ma.masked_where(segmentation != 2, segmentation), cmap=PROTEIN_CMAP, alpha=0.85)
+    ax.imshow(segmentation == 1, cmap='Greys', alpha=0.7, vmin=0, vmax=1)
+    ax.imshow(np.ma.masked_where(segmentation != 2, segmentation), cmap=PROTEIN_CMAP, alpha=0.95)
     if picks is not None and len(picks):
-        ax.scatter(picks[:, 0], picks[:, 1], s=14, c=GREEN, label='consensus picks')
+        ax.scatter(picks[:, 0], picks[:, 1], s=6, c=GREEN, label='consensus picks')
     ax.set_xlim(0, field_px)
     ax.set_ylim(field_px, 0)
     bare(ax)
