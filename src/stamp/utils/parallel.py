@@ -9,7 +9,7 @@ from functools import partial
 from typing import TypeVar
 
 # Import internal STAMP objects
-from stamp.utils.log import log
+from stamp.utils.log import get_worker_log_config, init_worker_logging, log
 
 T = TypeVar('T')
 R = TypeVar('R')
@@ -50,7 +50,8 @@ def run_parallel(
             _handle(item, index, lambda item=item: worker_fn(item))
         return results
 
-    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+    level_name, log_path = get_worker_log_config()
+    with ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker_logging, initargs=(level_name, log_path)) as pool:
         future_to_item = {pool.submit(worker_fn, item): item for item in items}
         for index, future in enumerate(as_completed(future_to_item), start=1):
             item = future_to_item[future]
