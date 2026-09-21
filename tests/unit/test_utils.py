@@ -12,6 +12,7 @@ from stamp.schemas.particles import HalfSet, Particle
 from stamp.utils import io as io_utils
 from stamp.schemas.provenance import ProvenanceSidecar
 from stamp.utils.errors import StampPipelineError
+from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
 # _particle: returns a valid Particle instance
 def _particle(particle_id: str, half_set: HalfSet) -> Particle:
@@ -22,6 +23,16 @@ def _particle(particle_id: str, half_set: HalfSet) -> Particle:
         source_picker='example-picker',
         half_set=half_set,
     )
+
+# _square: return square of given integer
+def _square(x: int) -> int:
+    return x * x
+
+# _fail_on_three: raises error for one item
+def _fail_on_three(x: int) -> int:
+    if x == 3:
+        raise ValueError('boom')
+    return x * x
 
 class TestAssignHalfSet:
     def test_same_seed_and_ids_give_identical_split(self) -> None:
@@ -167,6 +178,20 @@ class TestIo:
     def test_expected_output_dir_resolved(self, tmp_path, command):
         assert io_utils.resolve_output_dir(tmp_path, command) == tmp_path / 'stamp' / command
 
+    def test_archive_and_remove_directory(self, tmp_path):
+        directory = tmp_path / 'raw'
+        directory.mkdir()
+        (directory / 'a.txt').write_text('one')
+        (directory / 'b.txt').write_text('two')
+        archive_path = io_utils.archive_and_remove_directory(directory)
+        assert archive_path == tmp_path / 'raw.tar.gz'
+        assert archive_path.is_file()
+        assert not directory.exists()
+        import tarfile
+        with tarfile.open(archive_path) as tar:
+            names = set(tar.getnames())
+        assert names == {'raw', 'raw/a.txt', 'raw/b.txt'}
+
 class TestIoMatchByStem:
     def test_exact_match(self) -> None:
         raw = [Path('/raw/tomo000.mrc'), Path('/raw/tomo001.mrc')]
@@ -245,3 +270,46 @@ class TestIoResolveDirectoryVoxelSizeAngstrom:
         with mrcfile.new(path, overwrite=True) as mrc:
             mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
         assert io_utils.resolve_directory_voxel_size_angstrom([path]) is None
+
+class TestParallel:
+    def test_sequential_default_matches_map(self):
+        assert sorted(run_parallel([1, 2, 3], _square, max_workers=1, label='sq')) == [1, 4, 9]
+
+    def test_pooled_matches_sequential(self):
+        sequential = sorted(run_parallel([1, 2, 3, 4], _square, max_workers=1, label='sq'))
+        pooled = sorted(run_parallel([1, 2, 3, 4], _square, max_workers=2, label='sq'))
+        assert sequential == pooled
+
+    def test_on_success_called_per_item(self):
+        seen = []
+        run_parallel([1, 2, 3], _square, max_workers=1, label='sq', on_success=lambda item, result: seen.append((item, result)))
+        assert sorted(seen) == [(1, 1), (2, 4), (3, 9)]
+
+    def test_on_error_isolates_failing_item_sequential(self):
+        errors = []
+        results = run_parallel([1, 2, 3, 4], _fail_on_three, max_workers=1, label='sq', on_error=lambda item, exc: errors.append(item))
+        assert errors == [3]
+        assert sorted(results) == [1, 4, 16]
+
+    def test_on_error_isolates_failing_item_pooled(self):
+        errors = []
+        results = run_parallel([1, 2, 3, 4], _fail_on_three, max_workers=2, label='sq', on_error=lambda item, exc: errors.append(item))
+        assert errors == [3]
+        assert sorted(results) == [1, 4, 16]
+
+    def test_no_on_error_reraises(self):
+        with pytest.raises(ValueError):
+            run_parallel([1, 2, 3], _fail_on_three, max_workers=1, label='sq')
+
+    def test_empty_items_returns_empty(self):
+        assert run_parallel([], _square, max_workers=4, label='sq') == []
+
+    def test_run_parallel_ordered_preserves_input_order_pooled(self):
+        items = [5, 1, 4, 2, 3]
+        assert run_parallel_ordered(items, _square, max_workers=3, label='sq') == [25, 1, 16, 4, 9]
+
+    def test_run_parallel_ordered_matches_sequential(self):
+        items = list(range(8))
+        sequential = run_parallel_ordered(items, _square, max_workers=1, label='sq')
+        batch = run_parallel_ordered(items, _square, max_workers=4, label='sq')
+        assert sequential == batch

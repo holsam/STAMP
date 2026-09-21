@@ -25,7 +25,7 @@ from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import resolve_directory_voxel_size_angstrom, resolve_output_dir, write_sidecar
+from stamp.utils.io import match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
@@ -51,6 +51,7 @@ def run_classify(
     azimuthal_modes = 4,
     min_radius_fraction = 0.25,
     n_azimuthal_samples = 64,
+    n_workers: int = 1,
     make_plots: bool = True,
     plot_format: str = 'tiff',
 ) -> None:
@@ -62,9 +63,11 @@ def run_classify(
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
     log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles')
-    tomogram_paths = {
-        path.stem: path for path in sorted(raw_tomogram_dir.glob('*.mrc'))
-    }
+    tomogram_ids = sorted({particle.tomogram_id for particle in particle_set.particles})
+    matched, unmatched = match_by_stem([Path(f'{tomogram_id}.mrc') for tomogram_id in tomogram_ids], sorted(raw_tomogram_dir.glob('*.mrc')))
+    for stem_path in unmatched:
+        log.warning(f'No raw tomogram matching {stem_path.stem}, its particles will be skipped')
+    tomogram_paths = {stem_path.stem: raw_path for stem_path, raw_path in matched.items()}
     segmentation_paths = (
         {path.stem: str(path) for path in sorted(segmentation_dir.glob('*.mrc'))} if segmentation_dir is not None else {}
     )
@@ -73,7 +76,7 @@ def run_classify(
         box_voxels += 1  # odd box keeps the particle exactly centred
 
     subvolumes, kept, skipped = extract_particle_set(
-        particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels, segmentation_paths=segmentation_paths,
+        particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels, segmentation_paths=segmentation_paths, n_workers=n_workers,
     )
     if skipped:
         log.warning(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
@@ -87,6 +90,7 @@ def run_classify(
         max_azimuthal_mode=azimuthal_modes,
         n_azimuthal_samples=n_azimuthal_samples,
         min_radius_fraction=min_radius_fraction,
+        n_workers=n_workers,
     )
     log.debug(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
 
@@ -107,13 +111,13 @@ def run_classify(
         random_state=random_state,
     )
 
-    output_dir = resolve_output_dir(output_dir, 'classify', 'decoy' if is_decoy else None)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     align_settings = dict(
         enabled=inplane_alignment,
         angular_step_degrees=inplane_angular_step_degrees,
         iterations=inplane_iterations,
+        n_workers=n_workers,
     )
     if not inplane_alignment:
         log.warning('--no-inplane-alignment: class averages are a rotational average about the membrane normal (Cinf assumed). Downstream fit scores and half-map FSC will reflect the shared radial profile, not a 3D structure.')
@@ -149,6 +153,7 @@ def run_classify(
             'azimuthal_modes': azimuthal_modes,
             'n_azimuthal_samples': n_azimuthal_samples,
             'min_radius_fraction': min_radius_fraction,
+            'n_workers': n_workers,
             'is_decoy': is_decoy,
             'membrane_subtracted': bool(segmentation_paths),
             'n_extracted': len(kept),
@@ -200,6 +205,7 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
         '--seed', str(settings.random_state),
         '--inplane-step-deg', str(settings.inplane_angular_step_degrees),
         '--inplane-iterations', str(settings.inplane_iterations),
+        '-n', str(settings.n_workers),
     ]
     if not settings.strict_halfset_independence:
         argv.append('--no-strict-halfset-independence')
@@ -220,6 +226,7 @@ def _resolve_and_apply_inplane(
         cluster_ids,
         angular_step_degrees=align_settings['angular_step_degrees'],
         iterations=align_settings['iterations'],
+        n_workers=align_settings['n_workers'],
     )
     rolled = np.stack([roll_about_normal(volume, angles.get(index, 0.0)) for index, volume in enumerate(subvolumes)])
     return rolled, angles

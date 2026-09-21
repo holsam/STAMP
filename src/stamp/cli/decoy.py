@@ -80,14 +80,18 @@ def decoy(
         int,
         typer.Option('--seed', help='Seed for sampling and half-set assignment.', rich_help_panel = 'Decoy placement'),
     ] = 0,
+    n_workers: Annotated[
+        int,
+        typer.Option('-n', '--n-processes', help='Number of processes to use for per-tomogram decoy generation (1 = sequential).', rich_help_panel = 'Decoy placement'),
+    ] = 1,
     make_plots: Annotated[
         bool,
         typer.Option('--plots/--no-plots', help='Write decoy position plots.', rich_help_panel = 'Plotting'),
     ] = True,
     pick_plot_style: Annotated[
-        Literal['scatter', 'segmented', 'both'],
+        Literal['segmented', 'none'],
         typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel = 'Plotting'),
-    ] = 'both',
+    ] = 'segmented',
     plot_format: Annotated[
         Literal['png', 'jpg', 'tiff', 'svg'],
         typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
@@ -96,6 +100,10 @@ def decoy(
         bool,
         typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.', rich_help_panel = 'Plotting'),
     ] = True,
+    pick_plot_3d: Annotated[
+        bool,
+        typer.Option('--pick-plot-3d/--no-pick-plot-3d', help='Create a static 3D pick visualisation per tomogram.', rich_help_panel = 'Plotting'),
+    ] = False,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data.'''
     # Validate picker parameters
@@ -129,8 +137,10 @@ def decoy(
         n_synthetic_tomograms=n_synthetic_tomograms,
         synthetic_shape=synthetic_shape,
         seed=seed,
+        n_workers=n_workers,
         make_plots=make_plots,
         pick_plot_style=pick_plot_style,
         plot_format=plot_format,
         pick_zstack_movie=pick_zstack_movie,
+        pick_plot_3d=pick_plot_3d,
     )

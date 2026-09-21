@@ -43,6 +43,7 @@ def _real_pick(config: RunConfig, output_dir: Path) -> Path:
         distance_threshold=config.stage.pick.distance_threshold,
         half_set_seed=config.stage.pick.half_set_seed,
         backend=config.stage.pick.backend,
+        n_workers=config.stage.pick.n_workers,
     )
     return target / 'particle_set.json'
 
@@ -77,6 +78,7 @@ def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) ->
         n_synthetic_tomograms=config.decoy.n_synthetic_tomograms,
         synthetic_shape=','.join(str(dimension) for dimension in shape),
         seed=config.stage.pick.half_set_seed,
+        n_workers=config.decoy.n_workers,
     )
     return target / 'decoy_particle_set.json'
 
@@ -101,6 +103,7 @@ def _classify_track(config: RunConfig, output_dir: Path, track: str, particles: 
         inplane_alignment=settings.inplane_alignment,
         inplane_angular_step_degrees=settings.inplane_angular_step_degrees,
         inplane_iterations=settings.inplane_iterations,
+        n_workers=settings.n_workers,
     )
     return target
 
@@ -186,6 +189,7 @@ def run_pipeline(
             backend=config.stage.identify.backend if config.stage.identify.backend != 'cluster' else 'local',
             fitter=config.stage.identify.fitter,
             fetch_missing=config.stage.identify.fetch_missing,
+            n_workers=config.stage.identify.n_workers,
         )
         mark_complete(output_dir, 'real', 'identify')
     outcome.identifications = json.loads((identify_dir / 'identification.json').read_text())

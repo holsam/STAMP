@@ -4,6 +4,7 @@ STAMP: consensus picking logic
 
 # Import external dependencies
 import json, mrcfile, numpy as np
+from dataclasses import dataclass
 from pathlib import Path
 from skimage import measure
 
@@ -13,7 +14,7 @@ from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.native import NativePickerAdapter
 from stamp.backends.base import Runner, ToolCommand
 from stamp.backends.factory import check_backend_supports, select_runner
-from stamp.picking.consensus import build_particle_set, reconcile_picks
+from stamp.picking.consensus import build_particle_set, reconcile_picks_for_tomograms
 from stamp.picking.geometry import extract_surface
 from stamp.picking.native import PICKER_NAME as NATIVE_PICKER_NAME
 from stamp.picking.vesicles import load_vesicle_labels, summarise_vesicles, vesicle_surface_area_angstrom2
@@ -21,8 +22,9 @@ from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import archive_and_remove_directory, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
+from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.picks import plot_positions
 from stamp.utils.reporting import report_beam_angle_distribution
 
@@ -142,34 +144,59 @@ def _resolve_vesicle_labels(vesicle_labels_mrc: Path | None, manifests: list[Tom
         resolved[manifest.tomogram_id] = match
     return resolved
 
+# _VesicleSummaryJob: one tomogram's summary inputs
+@dataclass(frozen=True)
+class _VesicleSummaryJob:
+    tomogram_id: str
+    segmentation_path: Path
+    labels_mrc: Path
+    voxel_size_angstrom: float
+    picks: list[RawPick]
+
+# _summarise_one_tomogram: multiprocessing worker entry point
+def _summarise_one_tomogram(job: _VesicleSummaryJob) -> list[dict]:
+    with mrcfile.open(str(job.segmentation_path), permissive=True) as mrc:
+        segmentation = np.asarray(mrc.data)
+    labels = load_vesicle_labels(job.labels_mrc, segmentation.shape)
+    vertices, _normals = extract_surface(segmentation)
+    _v, faces, _n2, _val = measure.marching_cubes(segmentation.astype(np.float32), level=0.5)
+    areas = vesicle_surface_area_angstrom2(vertices, faces, labels, job.voxel_size_angstrom, job.tomogram_id)
+    return [summary.__dict__ for summary in summarise_vesicles(job.picks, areas, job.tomogram_id)]
+
 # _write_vesicle_summary: per-vesicle pick count, area and density across all tomograms, written as vesicle_summary.json
 def _write_vesicle_summary(
     all_reconciled: list[RawPick],
     manifests: list[TomogramManifest],
     vesicle_labels_mrc_by_tomogram: dict[str, Path],
     output_dir: Path,
+    n_workers: int = 1,
 ) -> None:
-    rows = []
     picks_by_tomogram: dict[str, list[RawPick]] = {}
     for pick in all_reconciled:
         picks_by_tomogram.setdefault(pick.tomogram_id, []).append(pick)
+
+    jobs: list[_VesicleSummaryJob] = []
     for manifest in manifests:
         labels_mrc = vesicle_labels_mrc_by_tomogram.get(manifest.tomogram_id)
         picks = picks_by_tomogram.get(manifest.tomogram_id, [])
         if labels_mrc is None or not any(p.vesicle_id for p in picks):
             continue
-        with mrcfile.open(str(manifest.segmentation_path), permissive=True) as mrc:
-            segmentation = np.asarray(mrc.data)
-        labels = load_vesicle_labels(labels_mrc, segmentation.shape)
-        try:
-            vertices, _normals = extract_surface(segmentation)
-        except StampValidationError as exc:
-            log.error(f'{manifest.tomogram_id}: vesicle summary failed ({exc})')
-            continue
-        _v, faces, _n2, _val = measure.marching_cubes(segmentation.astype(np.float32), level=0.5)
-        areas = vesicle_surface_area_angstrom2(vertices, faces, labels, manifest.voxel_size_angstrom, manifest.tomogram_id)
-        for summary in summarise_vesicles(picks, areas, manifest.tomogram_id):
-            rows.append(summary.__dict__)
+        jobs.append(_VesicleSummaryJob(manifest.tomogram_id, manifest.segmentation_path, labels_mrc, manifest.voxel_size_angstrom, picks))
+
+    rows_by_tomogram: dict[str, list[dict]] = {}
+
+    def _on_success(job: _VesicleSummaryJob, result: list[dict]) -> None:
+        rows_by_tomogram[job.tomogram_id] = result
+
+    def _on_error(job: _VesicleSummaryJob, exc: Exception) -> None:
+        if isinstance(exc, StampValidationError):
+            log.error(f'{job.tomogram_id}: vesicle summary failed ({exc})')
+        else:
+            raise exc
+
+    run_parallel(jobs, _summarise_one_tomogram, max_workers=n_workers, label='vesicle-summary', on_success=_on_success, on_error=_on_error)
+
+    rows = [row for job in jobs for row in rows_by_tomogram.get(job.tomogram_id, [])]
     if not rows:
         return
     summary_path = output_dir / 'vesicle_summary.json'
@@ -190,13 +217,16 @@ def run_pick(
     distance_threshold,
     half_set_seed,
     backend,
+    n_workers: int = 1,
     make_plots: bool = True,
-    pick_plot_style: str = 'both',
+    pick_plot_style: str = 'segmented',
     plot_format: str = 'tiff',
     pick_zstack_movie: bool = True,
+    pick_plot_3d: bool = False,
     max_beam_angle_deviation: float | None = None,
     vesicle_labels_mrc: Path | None = None,
     normalise_per_vesicle: bool = False,
+    keep_raw: bool = False,
 ) -> None:
     # Load manifests to check for matching files
     manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
@@ -220,35 +250,34 @@ def run_pick(
             'voxel_size_angstrom': resolved_voxel_size_angstrom,
             **extra_params.get(picker_name, {}),
         }
-        if picker_name == NATIVE_PICKER_NAME and vesicle_labels_mrc_by_tomogram:
-            parameters['vesicle_labels_mrc_by_tomogram'] = {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()}
-            parameters.setdefault('normalise_per_vesicle', normalise_per_vesicle)
+        if picker_name == NATIVE_PICKER_NAME:
+            parameters.setdefault('n_workers', n_workers)
+            if vesicle_labels_mrc_by_tomogram:
+                parameters['vesicle_labels_mrc_by_tomogram'] = {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()}
+                parameters.setdefault('normalise_per_vesicle', normalise_per_vesicle)
 
         log.progress(f'Running {picker_name}...')
         picks_by_picker[picker_name] = _run_picker(adapter, manifests, picker_output_dir, parameters, runner, backend)
         log.info(f'{picker_name}: {len(picks_by_picker[picker_name])} raw picks')
 
-    all_reconciled: list[RawPick] = []
-    for manifest in manifests:
-        reconciled = reconcile_picks(
-            picks_by_picker=picks_by_picker,
-            consensus_rule=consensus_rule,  # type: ignore[arg-type]
-            distance_threshold=distance_threshold,
-            tomogram_id=manifest.tomogram_id,
-        )
-        log.debug(f'{manifest.tomogram_id}: {len(reconciled)} reconciled picks')
-        all_reconciled.extend(reconciled)
-
+    log.progress(f'Reconciling picks...')
+    all_reconciled = reconcile_picks_for_tomograms(
+        picks_by_picker=picks_by_picker,
+        consensus_rule=consensus_rule,  # type: ignore[arg-type]
+        distance_threshold=distance_threshold,
+        tomogram_ids=[manifest.tomogram_id for manifest in manifests],
+        n_workers=n_workers,
+    )
     if not all_reconciled:
         raise StampPipelineError('No particles survived reconciliation. If using stamp-native, try lowering n_mad or check density_sign matches your tomograms (-1 for conventional dark-protein contrast).')
 
+    log.progress(f'Building particle set and determining beam angle distribution')
     particle_set = build_particle_set(
         reconciled_picks=all_reconciled,
         consensus_rule=consensus_rule,  # type: ignore[arg-type]
         contributing_pickers=picker_names,
         half_set_seed=half_set_seed,
     )
-
     if max_beam_angle_deviation is not None:
         before = len(particle_set.particles)
         particle_set.particles = [
@@ -259,13 +288,13 @@ def run_pick(
         log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {dropped} of {before} particles')
         if not particle_set.particles:
             raise StampPipelineError('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
-
     report_beam_angle_distribution(particle_set.particles)
-
     particle_set_path = output_dir / 'particle_set.json'
     particle_set_path.write_text(particle_set.model_dump_json(indent=2))
+    log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
 
-    _write_vesicle_summary(all_reconciled, manifests, vesicle_labels_mrc_by_tomogram, output_dir)
+    _write_vesicle_summary(all_reconciled, manifests, vesicle_labels_mrc_by_tomogram, output_dir, n_workers=n_workers)
+    log.progress(f'Writing parameters...')
     write_sidecar(
         output_dir,
         stage='pick',
@@ -284,11 +313,17 @@ def run_pick(
         inputs=[(f'segmentation:{m.tomogram_id}', m.segmentation_path) for m in manifests] + [(f'raw_tomogram:{m.tomogram_id}', m.raw_tomogram_path) for m in manifests],
     )
 
-    log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
+    log.progress(f'Rendering plots...')
     if make_plots:
         segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests}
         raw_tomogram_paths = {m.tomogram_id: m.raw_tomogram_path for m in manifests}
-        plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie)
+        plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)
+
+    if not keep_raw:
+        raw_dir = output_dir / 'raw'
+        if raw_dir.is_dir():
+            archive_path = archive_and_remove_directory(raw_dir)
+            log.info(f'Archived raw picker output to {archive_path}')
 
 # build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
 def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
@@ -303,9 +338,13 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--distance-threshold', str(config.stage.pick.distance_threshold),
         '--half-set-seed', str(config.stage.pick.half_set_seed),
         '--backend', 'local',
+        '--n-processes', str(config.stage.pick.n_workers),
     ]
     argv.append('--plots' if config.plots.enabled else '--no-plots')
     argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
     if config.plots.pick_zstack_movie:
         argv.append('--pick-zstack-movie')
+    if config.plots.pick_plot_3d:
+        argv.append('--pick-plot-3d')
+    argv.append('--keep-raw' if config.stage.pick.keep_raw else '--no-keep-raw')
     return [ToolCommand(tool='pick', argv=argv, working_directory=target, output_paths=[target / 'particle_set.json'])]

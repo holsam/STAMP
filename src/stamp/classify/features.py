@@ -4,10 +4,12 @@ STAMP: rotationally invariant features from subvolumes
 
 # Import external dependencies
 import numpy as np
+from functools import partial
 from scipy.ndimage import map_coordinates
 
 # Import internal STAMP objects
 from stamp.utils.log import log
+from stamp.utils.parallel import run_parallel_ordered
 
 # cylindrical_bins: precompute per-voxel radial bin index and validity mask
 def cylindrical_bins(box_voxels: int, n_radial_bins: int) -> tuple[np.ndarray, np.ndarray]:
@@ -107,6 +109,7 @@ def build_feature_matrix(
     max_azimuthal_mode: int = 4,
     n_azimuthal_samples: int = 64,
     min_radius_fraction: float = 0.25,
+    n_workers: int = 1,
 ) -> np.ndarray:
     log.debug(f'Building features for {subvolumes.shape[0]} subvolumes, max_mode={max_azimuthal_mode}')
     if subvolumes.shape[0] == 0:
@@ -114,7 +117,9 @@ def build_feature_matrix(
     if not 0.0 <= min_radius_fraction < 1.0:
         raise ValueError('min_radius_fraction must be between [0, 1)')
 
-    stacked = np.stack([azimuthal_magnitudes(subvolume, n_radial_bins, n_azimuthal_samples, max_azimuthal_mode) for subvolume in subvolumes])  # (n_particles, n_modes, n_radial_bins, box_voxels)
+    worker = partial(azimuthal_magnitudes, n_radial_bins=n_radial_bins, n_azimuthal_samples=n_azimuthal_samples, max_mode=max_azimuthal_mode)
+    magnitudes = run_parallel_ordered(list(subvolumes), worker, max_workers=n_workers, label='feature-extraction')
+    stacked = np.stack(magnitudes)  # (n_particles, n_modes, n_radial_bins, box_voxels)
 
     n_particles = stacked.shape[0]
     first_outer_bin = int(np.floor(min_radius_fraction * n_radial_bins))

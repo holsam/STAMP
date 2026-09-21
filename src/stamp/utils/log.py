@@ -110,6 +110,9 @@ def resolve_log_path(
         return path
     raise ValueError(f'Unknown mode {mode!r}, expected one of: overwrite, new, append')
 
+# _worker_log_config: (level_name, log_path) as configured by main STAMP process
+_worker_log_config: tuple[str, Path | None] | None = None
+
 # configure_logging: returns None, configures the single terminal logging sink
 def configure_logging(
     directory: Path | None,
@@ -117,6 +120,7 @@ def configure_logging(
     quiet: int,
     verbosity: int
 ) -> None:
+    global _worker_log_config
     register_custom_levels()
     level_name = resolve_level(verbosity, quiet)
     logger.remove()
@@ -135,8 +139,21 @@ def configure_logging(
         f.writelines(buffer)
     # Set up actual log file sink
     logger.add(log_path, format=LOG_FORMAT, level=level_name, colorize=False, mode='a')
+    _worker_log_config = (level_name, log_path)
     # Return log file path
     return log_path, level_name
+
+# get_worker_log_config: the main process's currently configured (level_name, log_path)
+def get_worker_log_config() -> tuple[str, Path | None]:
+    return _worker_log_config or ('WARNING', None)
+
+# init_worker_logging: replicate logging sinks in a worker
+def init_worker_logging(level_name: str, log_path: Path | None) -> None:
+    register_custom_levels()
+    logger.remove()
+    logger.add(sys.stderr, format=LOG_FORMAT, level=level_name, colorize=True)
+    if log_path is not None:
+        logger.add(log_path, format=LOG_FORMAT, level=level_name, colorize=False, mode='a')
 
 # Register custom levels at import time
 register_custom_levels()

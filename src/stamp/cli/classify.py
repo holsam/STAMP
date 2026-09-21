@@ -3,12 +3,14 @@ STAMP: unsupervised classification CLI
 '''
 
 # Import external dependencies
-import typer
+import json, typer
 from pathlib import Path
 from typing import Annotated, Literal
 
 # Import classify command functions/variables
 import stamp.commands.classify as classifyfuncs
+from stamp.decoy.validate import is_decoy_particle_set
+from stamp.schemas.particles import ParticleSet
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import resolve_output_dir
 
@@ -95,6 +97,10 @@ def classify(
         int,
         typer.Option(help='Azimuthal sampling points (must be at least 2*(modes+1)).', rich_help_panel = 'Subvolume extraction'),
     ] = 64,
+    n_workers: Annotated[
+        int,
+        typer.Option('-n', '--n-processes', help='Number of processes to use for per-cluster in-plane alignment (1 = sequential).'),
+    ] = 1,
     make_plots: Annotated[
         bool,
         typer.Option('--plots/--no-plots', help='Write embedding and class-average plots.', rich_help_panel = 'Plotting'),
@@ -105,11 +111,12 @@ def classify(
     ] = 'tiff',
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
+    is_decoy = is_decoy_particle_set(ParticleSet.model_validate(json.loads(particles.read_text())))
     classifyfuncs.run_classify(
         particles=particles,
         raw_tomogram_dir=raw_tomogram_dir,
         segmentation_dir=segmentation_dir,
-        output_dir=output_dir,
+        output_dir=resolve_output_dir(output_dir, 'classify', 'decoy' if is_decoy else None),
         voxel_size_angstrom=voxel_size_angstrom,
         box_angstrom=box_angstrom,
         n_radial_bins=n_radial_bins,
@@ -122,6 +129,7 @@ def classify(
         inplane_alignment=inplane_alignment,
         inplane_angular_step_degrees=inplane_angular_step_degrees,
         inplane_iterations=inplane_iterations,
+        n_workers=n_workers,
         azimuthal_modes=azimuthal_modes,
         min_radius_fraction=min_radius_fraction,
         n_azimuthal_samples=n_azimuthal_samples,

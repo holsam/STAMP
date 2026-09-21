@@ -4,12 +4,14 @@ STAMP: subvolume extraction
 
 # Import external dependencies
 import mrcfile, numpy as np
+from dataclasses import dataclass
 from scipy.ndimage import map_coordinates
 
 # Import STAMP schema
 from stamp.schemas.particles import Particle
 from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
+from stamp.utils.parallel import run_parallel
 
 # quaternion_to_matrix: return a rotation matrix from a unit quaternion (w, x, y, z)
 def quaternion_to_matrix(quaternion: tuple[float, float, float, float]) -> np.ndarray:
@@ -59,12 +61,46 @@ def box_fits_inside(
     position = np.array(position_xyz)
     return bool(np.all(position >= radius) and np.all(position <= extent_xyz - radius))
 
+# _ExtractTomogramJob: one tomogram's particle group, picklable for ProcessPoolExecutor
+@dataclass(frozen=True)
+class _ExtractTomogramJob:
+    tomogram_id: str
+    group: list[Particle]
+    tomogram_path: str
+    segmentation_path: str | None
+    box_voxels: int
+
+# _extract_one_tomogram: worker entry point — loads one tomogram and extracts subvolumes for its particles
+def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], list[Particle], list[np.ndarray]]:
+    with mrcfile.open(str(job.tomogram_path), permissive=True) as mrc:
+        tomogram = np.asarray(mrc.data).astype(np.float32)
+
+    if job.segmentation_path is not None:
+        with mrcfile.open(str(job.segmentation_path), permissive=True) as mrc:
+            segmentation = np.asarray(mrc.data)
+        if segmentation.shape != tomogram.shape:
+            raise StampValidationError(f'segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {job.tomogram_id!r}; they must be the same volume at the same binning')
+        # replace membrane voxels with the background median so the class average is not dominated by the membrane slab
+        tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
+
+    kept: list[Particle] = []
+    skipped: list[Particle] = []
+    subvolumes: list[np.ndarray] = []
+    for particle in job.group:
+        if particle.orientation is None or not box_fits_inside(particle.position, tomogram.shape, job.box_voxels):
+            skipped.append(particle)
+            continue
+        subvolumes.append(extract_subvolume(tomogram, particle.position, particle.orientation, job.box_voxels))
+        kept.append(particle)
+    return kept, skipped, subvolumes
+
 # extract_particle_set: extract subvolumes for a list of particles
 def extract_particle_set(
     particles: list[Particle],
     tomogram_paths: dict[str, str],
     box_voxels: int,
     segmentation_paths: dict[str, str] | None = None,
+    n_workers: int = 1,
 ) -> tuple[np.ndarray, list[Particle], list[Particle]]:
     by_tomogram: dict[str, list[Particle]] = {}
     for particle in particles:
@@ -75,41 +111,38 @@ def extract_particle_set(
     kept: list[Particle] = []
     skipped: list[Particle] = []
 
+    jobs: list[_ExtractTomogramJob] = []
     for tomogram_id, group in by_tomogram.items():
         path = tomogram_paths.get(tomogram_id)
         if path is None:
             log.warning(f'{tomogram_id}: no matching raw tomogram path, skipping {len(group)} particle(s)')
             skipped.extend(group)
             continue
+        jobs.append(_ExtractTomogramJob(tomogram_id, group, path, segmentation_paths.get(tomogram_id), box_voxels))
 
-        try:
-            with mrcfile.open(str(path), permissive=True) as mrc:
-                tomogram = np.asarray(mrc.data).astype(np.float32)
+    # keep results ordered by input tomogram order so kept/subvolumes stay aligned deterministically
+    result_by_tomogram: dict[str, tuple[list[Particle], list[Particle], list[np.ndarray]]] = {}
 
-            seg_path = segmentation_paths.get(tomogram_id)
-            if seg_path is not None:
-                with mrcfile.open(str(seg_path), permissive=True) as mrc:
-                    segmentation = np.asarray(mrc.data)
-                if segmentation.shape != tomogram.shape:
-                    raise StampValidationError(f'segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id!r}; they must be the same volume at the same binning')
-                # replace membrane voxels with the background median so the class average is not dominated by the membrane slab
-                tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
-        except StampValidationError as exc:
-            log.error(f'{tomogram_id}: {exc}')
-            skipped.extend(group)
+    def _on_success(job: _ExtractTomogramJob, result: tuple[list[Particle], list[Particle], list[np.ndarray]]) -> None:
+        result_by_tomogram[job.tomogram_id] = result
+
+    def _on_error(job: _ExtractTomogramJob, exc: Exception) -> None:
+        if isinstance(exc, StampValidationError):
+            log.error(f'{job.tomogram_id}: {exc}')
+            skipped.extend(job.group)
+        else:
+            raise exc
+
+    run_parallel(jobs, _extract_one_tomogram, max_workers=n_workers, label='subvolume-extraction', on_success=_on_success, on_error=_on_error)
+
+    for job in jobs:
+        result = result_by_tomogram.get(job.tomogram_id)
+        if result is None:
             continue
-
-        for particle in group:
-            if particle.orientation is None:
-                skipped.append(particle)
-                continue
-            if not box_fits_inside(particle.position, tomogram.shape, box_voxels):
-                skipped.append(particle)
-                continue
-            subvolumes.append(
-                extract_subvolume(tomogram, particle.position, particle.orientation, box_voxels)
-            )
-            kept.append(particle)
+        tomogram_kept, tomogram_skipped, tomogram_subvolumes = result
+        kept.extend(tomogram_kept)
+        skipped.extend(tomogram_skipped)
+        subvolumes.extend(tomogram_subvolumes)
 
     log.debug(f'extract_particle_set: {len(kept)} kept, {len(skipped)} skipped')
     if not subvolumes:

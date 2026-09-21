@@ -29,8 +29,9 @@ class RunSettings(_Strict):
 class PlotSettings(_Strict):
     enabled: bool = True
     format: Literal['png', 'jpg', 'tiff', 'svg'] = 'tiff'
-    pick_style: Literal['scatter', 'segmented', 'both'] = 'both'
+    pick_style: Literal['segmented', 'none'] = 'segmented'
     pick_zstack_movie: bool = False
+    pick_plot_3d: bool = False
 
 # DecoySettings: the [decoy] table
 class DecoySettings(_Strict):
@@ -43,6 +44,7 @@ class DecoySettings(_Strict):
     max_shift_angstrom: float = 600.0
     n_synthetic_tomograms: int = 3
     synthetic_shape_voxels: tuple[int, int, int] | None = None  # None = match the first real tomogram
+    n_workers: int = 1
 
 # Per-stage tables mirror each command's options
 class PickStage(_Strict):
@@ -51,6 +53,8 @@ class PickStage(_Strict):
     distance_threshold: float = 15.0
     half_set_seed: int = 0
     backend: Literal['local', 'mock', 'cluster'] | None = None
+    n_workers: int = 1
+    keep_raw: bool = False
 
 class ClassifyStage(_Strict):
     method: Literal['hdbscan', 'kmeans'] = 'hdbscan'
@@ -64,6 +68,7 @@ class ClassifyStage(_Strict):
     inplane_angular_step_degrees: float = 10.0
     inplane_iterations: int = 3
     random_state: int = 0
+    n_workers: int = 1
 
 class IdentifyStage(_Strict):
     candidates: Path
@@ -71,6 +76,7 @@ class IdentifyStage(_Strict):
     fitter: Literal['native'] = 'native'
     fetch_missing: bool = False
     backend: Literal['local', 'mock', 'cluster'] | None = None
+    n_workers: int = 1
 
 class RefineStage(_Strict):
     tool: Literal['relion', 'm'] = 'relion'
