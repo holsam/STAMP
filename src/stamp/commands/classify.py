@@ -25,7 +25,7 @@ from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import resolve_directory_voxel_size_angstrom, resolve_output_dir, write_sidecar
+from stamp.utils.io import match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
@@ -63,9 +63,11 @@ def run_classify(
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
     log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles')
-    tomogram_paths = {
-        path.stem: path for path in sorted(raw_tomogram_dir.glob('*.mrc'))
-    }
+    tomogram_ids = sorted({particle.tomogram_id for particle in particle_set.particles})
+    matched, unmatched = match_by_stem([Path(f'{tomogram_id}.mrc') for tomogram_id in tomogram_ids], sorted(raw_tomogram_dir.glob('*.mrc')))
+    for stem_path in unmatched:
+        log.warning(f'No raw tomogram matching {stem_path.stem}, its particles will be skipped')
+    tomogram_paths = {stem_path.stem: raw_path for stem_path, raw_path in matched.items()}
     segmentation_paths = (
         {path.stem: str(path) for path in sorted(segmentation_dir.glob('*.mrc'))} if segmentation_dir is not None else {}
     )
@@ -109,7 +111,6 @@ def run_classify(
         random_state=random_state,
     )
 
-    output_dir = resolve_output_dir(output_dir, 'classify', 'decoy' if is_decoy else None)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     align_settings = dict(

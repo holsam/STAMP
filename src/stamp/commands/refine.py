@@ -21,7 +21,7 @@ from stamp.refine.halfset_guard import (
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, ParticleSet
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
-from stamp.utils.io import write_sidecar
+from stamp.utils.io import resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import finish, plot_path
 from stamp.utils.plotting.refine import fsc_curve

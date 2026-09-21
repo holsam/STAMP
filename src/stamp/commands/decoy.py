@@ -22,7 +22,7 @@ from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import write_sidecar
+from stamp.utils.io import resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 

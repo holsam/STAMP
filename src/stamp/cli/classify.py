@@ -3,12 +3,14 @@ STAMP: unsupervised classification CLI
 '''
 
 # Import external dependencies
-import typer
+import json, typer
 from pathlib import Path
 from typing import Annotated, Literal
 
 # Import classify command functions/variables
 import stamp.commands.classify as classifyfuncs
+from stamp.decoy.validate import is_decoy_particle_set
+from stamp.schemas.particles import ParticleSet
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import resolve_output_dir
 
@@ -109,11 +111,12 @@ def classify(
     ] = 'tiff',
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
+    is_decoy = is_decoy_particle_set(ParticleSet.model_validate(json.loads(particles.read_text())))
     classifyfuncs.run_classify(
         particles=particles,
         raw_tomogram_dir=raw_tomogram_dir,
         segmentation_dir=segmentation_dir,
-        output_dir=output_dir,
+        output_dir=resolve_output_dir(output_dir, 'classify', 'decoy' if is_decoy else None),
         voxel_size_angstrom=voxel_size_angstrom,
         box_angstrom=box_angstrom,
         n_radial_bins=n_radial_bins,
