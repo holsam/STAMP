@@ -337,6 +337,7 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--distance-threshold', str(config.stage.pick.distance_threshold),
         '--half-set-seed', str(config.stage.pick.half_set_seed),
         '--backend', 'local',
+        '--n-processes', str(config.stage.pick.n_workers),
     ]
     argv.append('--plots' if config.plots.enabled else '--no-plots')
     argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
