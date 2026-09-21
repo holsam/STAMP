@@ -258,6 +258,7 @@ def run_pick(
         picks_by_picker[picker_name] = _run_picker(adapter, manifests, picker_output_dir, parameters, runner, backend)
         log.info(f'{picker_name}: {len(picks_by_picker[picker_name])} raw picks')
 
+    log.progress(f'Reconciling picks...')
     all_reconciled = reconcile_picks_for_tomograms(
         picks_by_picker=picks_by_picker,
         consensus_rule=consensus_rule,  # type: ignore[arg-type]
@@ -265,17 +266,16 @@ def run_pick(
         tomogram_ids=[manifest.tomogram_id for manifest in manifests],
         n_workers=n_workers,
     )
-
     if not all_reconciled:
         raise StampPipelineError('No particles survived reconciliation. If using stamp-native, try lowering n_mad or check density_sign matches your tomograms (-1 for conventional dark-protein contrast).')
 
+    log.progress(f'Building particle set and determining beam angle distribution')
     particle_set = build_particle_set(
         reconciled_picks=all_reconciled,
         consensus_rule=consensus_rule,  # type: ignore[arg-type]
         contributing_pickers=picker_names,
         half_set_seed=half_set_seed,
     )
-
     if max_beam_angle_deviation is not None:
         before = len(particle_set.particles)
         particle_set.particles = [
@@ -286,13 +286,13 @@ def run_pick(
         log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {dropped} of {before} particles')
         if not particle_set.particles:
             raise StampPipelineError('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
-
     report_beam_angle_distribution(particle_set.particles)
-
     particle_set_path = output_dir / 'particle_set.json'
     particle_set_path.write_text(particle_set.model_dump_json(indent=2))
+    log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
 
     _write_vesicle_summary(all_reconciled, manifests, vesicle_labels_mrc_by_tomogram, output_dir, n_workers=n_workers)
+    log.progress(f'Writing parameters...')
     write_sidecar(
         output_dir,
         stage='pick',
@@ -311,7 +311,7 @@ def run_pick(
         inputs=[(f'segmentation:{m.tomogram_id}', m.segmentation_path) for m in manifests] + [(f'raw_tomogram:{m.tomogram_id}', m.raw_tomogram_path) for m in manifests],
     )
 
-    log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
+    log.progress(f'Rendering plots...')
     if make_plots:
         segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests}
         raw_tomogram_paths = {m.tomogram_id: m.raw_tomogram_path for m in manifests}
