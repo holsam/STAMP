@@ -222,6 +222,7 @@ def run_pick(
     pick_plot_style: str = 'segmented',
     plot_format: str = 'tiff',
     pick_zstack_movie: bool = True,
+    pick_plot_3d: bool = False,
     max_beam_angle_deviation: float | None = None,
     vesicle_labels_mrc: Path | None = None,
     normalise_per_vesicle: bool = False,
@@ -316,7 +317,7 @@ def run_pick(
     if make_plots:
         segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests}
         raw_tomogram_paths = {m.tomogram_id: m.raw_tomogram_path for m in manifests}
-        plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, max_workers=n_workers)
+        plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
     if not keep_raw:
         raw_dir = output_dir / 'raw'
@@ -343,5 +344,7 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
     argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
     if config.plots.pick_zstack_movie:
         argv.append('--pick-zstack-movie')
+    if config.plots.pick_plot_3d:
+        argv.append('--pick-plot-3d')
     argv.append('--keep-raw' if config.stage.pick.keep_raw else '--no-keep-raw')
     return [ToolCommand(tool='pick', argv=argv, working_directory=target, output_paths=[target / 'particle_set.json'])]

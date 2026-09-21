@@ -57,6 +57,7 @@ Argument/Option | Default | Use
 `--pick-plot-style` | `segmented` | Style of consensus-pick position plots (`segmented` or `none`)
 `--plot-format` | `tiff` | Consensus-pick position plot file format (`png` or `jpg` or `tiff` or `svg`)
 `--pick-zstack-movie/--no-pick-zstack-movie` | `--pick-zstack-movie` | Write a per-tomogram movie through Z with picks highlighted
+`--pick-plot-3d/--no-pick-plot-3d` | `--no-pick-plot-3d` | Write a static 3D pick visualisation per tomogram
 `--max-beam-angle-deviation` | `None` | Drop particles whose normal deviates from the beam-orthogonal plane by more than this many degrees
 `--vesicle-labels-mrc` | `None` | Path to an MRC file produced by EValuator's `label` command, or a directory to be matched by filename stem
 `--normalise-per-vesicle` | `False` | Normalise `stamp-native` scores per vesicle instead of per tomogram
@@ -91,6 +92,7 @@ Option | Default | Use
 `--pick-plot-style` | `segmented` | Style of decoy position plots (`segmented` or `none`)
 `--plot-format` | `tiff` | Decoy plot file format (`png` or `jpg` or `tiff` or `svg`)
 `--pick-zstack-movie/--no-pick-zstack-movie` | `--pick-zstack-movie` | Write a per-tomogram movie through Z with picks highlighted
+`--pick-plot-3d/--no-pick-plot-3d` | `--no-pick-plot-3d` | Write a static 3D pick visualisation per tomogram
 
 ### `stamp decoy` methods
 `stamp decoy` provides three methods for generating decoy picks:

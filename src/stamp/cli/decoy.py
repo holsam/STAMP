@@ -100,6 +100,10 @@ def decoy(
         bool,
         typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.', rich_help_panel = 'Plotting'),
     ] = True,
+    pick_plot_3d: Annotated[
+        bool,
+        typer.Option('--pick-plot-3d/--no-pick-plot-3d', help='Create a static 3D pick visualisation per tomogram.', rich_help_panel = 'Plotting'),
+    ] = False,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data.'''
     # Validate picker parameters
@@ -138,4 +142,5 @@ def decoy(
         pick_plot_style=pick_plot_style,
         plot_format=plot_format,
         pick_zstack_movie=pick_zstack_movie,
+        pick_plot_3d=pick_plot_3d,
     )

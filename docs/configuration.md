@@ -32,6 +32,7 @@ enabled = true
 format = "tiff"                                 # png | jpg | tiff | svg
 pick_style = "segmented"                        # segmented | none
 pick_zstack_movie = false
+pick_plot_3d = false
 
 [stage.pick]
 pickers = ["stamp-native"]
@@ -112,6 +113,7 @@ Key | Type | Default
 `format` | `png`\|`jpg`\|`tiff`\|`svg` | `tiff`
 `pick_style` | `segmented`\|`none` | `segmented`
 `pick_zstack_movie` | bool | `False`
+`pick_plot_3d` | bool | `False`
 
 ### `[stage.pick]`
 

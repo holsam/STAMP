@@ -92,6 +92,10 @@ def pick(
         bool,
         typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.', rich_help_panel = 'Plotting'),
     ] = True,
+    pick_plot_3d: Annotated[
+        bool,
+        typer.Option('--pick-plot-3d/--no-pick-plot-3d', help='Create a static 3D pick visualisation per tomogram.', rich_help_panel = 'Plotting'),
+    ] = False,
     keep_raw: Annotated[
         bool,
         typer.Option('--keep-raw', help='Keep the raw per-picker output directory instead of archiving it to raw.tar.gz.', rich_help_panel = 'Backend'),
@@ -129,6 +133,7 @@ def pick(
         pick_plot_style=pick_plot_style,
         plot_format=plot_format,
         pick_zstack_movie=pick_zstack_movie,
+        pick_plot_3d=pick_plot_3d,
         max_beam_angle_deviation=max_beam_angle_deviation,
         vesicle_labels_mrc=vesicle_labels_mrc,
         normalise_per_vesicle=normalise_per_vesicle,
