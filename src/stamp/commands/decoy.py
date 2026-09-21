@@ -147,7 +147,7 @@ def run_decoy(
     if make_plots:
         segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests} if method != METHOD_SYNTHETIC_NOISE else {}
         style = pick_plot_style if segmentation_paths else 'scatter'
-        plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths))
+        plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths), max_workers=n_workers)
 
 
 # build_decoy_commands: create ToolCommand for `stamp decoy`
