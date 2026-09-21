@@ -4,12 +4,15 @@ STAMP: pick/decoy position plots — xy scatter, segmentation overlay, Z-stack Q
 
 # Import external dependencies
 import matplotlib.pyplot as plt, mrcfile, numpy as np
+from dataclasses import dataclass
 from matplotlib.animation import FFMpegWriter, FuncAnimation, PillowWriter
 from pathlib import Path
+from typing import Literal
 
 # Import internal STAMP objects
 from stamp.utils.plotting.core import GREEN, PlotFormat, central_slice, finish, plot_path, scatter_groups, show_segmentation
 from stamp.utils.log import log
+from stamp.utils.parallel import run_parallel
 
 _HALF_COLOUR = {'A': '#4da6ff', 'B': '#ff9d4d'}
 
@@ -36,6 +39,34 @@ def plot_scatter(particles, output_dir: Path, fmt: PlotFormat, stem: str = 'cons
     for ax, (tomogram_id, members) in zip(axes[0], sorted(by_tomogram.items())):
         _scatter_panel(ax, members, tomogram_id)
     finish(fig, plot_path(output_dir, stem, fmt))
+
+# _ZstackJob: one Z-stack movie's inputs
+@dataclass(frozen=True)
+class _ZstackJob:
+    tomogram_id: str
+    positions: np.ndarray
+    volume_path: Path
+    output_dir: Path
+    stem_suffix: str
+    render_kind: Literal['segmentation', 'raw']
+    fps: int
+    slab_voxels: float
+
+_RENDER_PLANE_BY_KIND = {
+    'segmentation': _render_segmentation_plane,
+    'raw': _render_raw_plane,
+}
+
+# _render_movie_job: multiprocessing worker entry point
+def _render_movie_job(job: _ZstackJob) -> None:
+    import matplotlib
+    matplotlib.use('Agg', force=True)  # subprocess-safe headless backend
+    with mrcfile.open(str(job.volume_path), permissive=True) as mrc:
+        volume = np.asarray(mrc.data)
+    _zstack_movie_for_background(
+        job.tomogram_id, job.positions, volume, job.output_dir,
+        job.stem_suffix, _RENDER_PLANE_BY_KIND[job.render_kind], job.fps, job.slab_voxels,
+    )
 
 # plot_segmented: segmentation-slice-plus-picks panel per tomogram
 def plot_segmented(
@@ -170,23 +201,23 @@ def plot_zstack_movie(
     *,
     slab_voxels: float = 3.0,
     fps: int = 8,
+    max_workers: int = 1,
 ) -> None:
     by_tomogram = _group_by_tomogram(particles)
+    jobs: list[_ZstackJob] = []
     for tomogram_id, members in sorted(by_tomogram.items()):
         positions = np.array([p.position for p in members])  # (n, 3): x, y, z
         segmentation_path = segmentation_path_by_tomogram.get(tomogram_id)
         if segmentation_path is None:
             log.warning(f'No segmentation.mrc for {tomogram_id}, skipping Z-stack movie')
         else:
-            with mrcfile.open(str(segmentation_path), permissive=True) as mrc:
-                volume = np.asarray(mrc.data)
-            _zstack_movie_for_background(tomogram_id, positions, volume, output_dir, '_segmentation', _render_segmentation_plane, fps, slab_voxels)
-
+            jobs.append(_ZstackJob(tomogram_id, positions, segmentation_path, output_dir, '_segmentation', 'segmentation', fps, slab_voxels))
         raw_path = (raw_tomogram_path_by_tomogram or {}).get(tomogram_id)
         if raw_path is not None:
-            with mrcfile.open(str(raw_path), permissive=True) as mrc:
-                raw_volume = np.asarray(mrc.data)
-            _zstack_movie_for_background(tomogram_id, positions, raw_volume, output_dir, '_raw', _render_raw_plane, fps, slab_voxels)
+            jobs.append(_ZstackJob(tomogram_id, positions, raw_path, output_dir, '_raw', 'raw', fps, slab_voxels))
+    def _on_error(job: _ZstackJob, exc: Exception) -> None:
+        log.warning(f'{job.tomogram_id}: Z-stack movie render failed ({exc})')
+    run_parallel(jobs, _render_movie_job, max_workers=max_workers, label='zstack movies', on_error=_on_error)
 
 # plot_positions: segmented/movie degrades to scatter-only when no segmentation paths are given
 def plot_positions(
@@ -198,6 +229,7 @@ def plot_positions(
     raw_tomogram_path_by_tomogram: dict[str, Path] | None = None,
     *,
     zstack_movie: bool = False,
+    max_workers: int = 1,
 ) -> None:
     if style in ('scatter', 'both'):
         plot_scatter(particles, output_dir, fmt)
@@ -212,4 +244,4 @@ def plot_positions(
         if not segmentation_path_by_tomogram and not raw_tomogram_path_by_tomogram:
             log.warning('--pick-zstack-movie but no segmentation or raw tomogram found, skipping')
         else:
-            plot_zstack_movie(particles, segmentation_path_by_tomogram or {}, output_dir, raw_tomogram_path_by_tomogram)
+            plot_zstack_movie(particles, segmentation_path_by_tomogram or {}, output_dir, raw_tomogram_path_by_tomogram, max_workers=max_workers)
