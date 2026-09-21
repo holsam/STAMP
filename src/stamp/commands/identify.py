@@ -18,6 +18,7 @@ from stamp.run.state import stage_dir
 from stamp.identify.fit import fit_candidate, rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.identify.simulate import simulate_density, to_comparable
+from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import PlotFormat, finish, plot_path
@@ -45,8 +46,7 @@ def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
             grouped[match.group(1)].append(np.transpose(np.asarray(mrc.data), (2, 1, 0)))
             voxel_sizes[match.group(1)] = float(mrc.voxel_size.x)
     if not grouped:
-        log.error(f'No cNN-named class averages in {directory}')
-        raise SystemExit(1)
+        raise StampPipelineError(f'No cNN-named class averages in {directory}')
     return {cid: (np.mean(volumes, axis=0), voxel_sizes[cid]) for cid, volumes in grouped.items()}
 
 # _score_panel: fit every candidate to every class average, returns {class_id: {candidate: score}}
@@ -79,8 +79,7 @@ def run_identify(
 ) -> None:
     log.progress('Identifying classes against candidate panel')
     if resolution is None:
-        log.error('Resolution is required: use --resolution or set [stage.identify].resolution')
-        raise SystemExit(1)
+        raise StampPipelineError('Resolution is required: use --resolution or set [stage.identify].resolution')
     panel = load_candidate_panel(candidates, fetch_missing=fetch_missing)
     log.info(f'Loaded {len(panel)} candidates')
     class_averages = load_class_averages(classes)

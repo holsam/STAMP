@@ -30,5 +30,5 @@ def run_full_pipeline(
         config.stage.refine.backend = backend
     log.debug(f'Overrides applied: no_decoy={no_decoy}, backend={backend!r}')
     outcome = run_pipeline(config, config.run.output_dir, force=force, from_stage=from_stage)
-    md_path, _ = write_report(outcome, config.run.output_dir)
+    md_path, _ = write_report(outcome, config.run.output_dir / 'stamp')
     log.info(f'Run complete. Report: {md_path}')

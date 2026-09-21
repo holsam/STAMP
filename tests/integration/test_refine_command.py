@@ -5,7 +5,7 @@ STAMP: integration tests for `stamp refine`
 # Import external dependencies
 import json, mrcfile, numpy as np, pytest
 from typer.testing import CliRunner
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 
 # Initialise runner
 runner = CliRunner()
@@ -60,15 +60,15 @@ def _fixture(tmp_path, mixed=False):
     (tmp_path / 'tomo').mkdir()
     return stage_d
 
-def _invoke(tmp_path, stage_d, out):
-    return runner.invoke(stamp, [
+def _invoke(tmp_path, stage_d):
+    return runner.invoke(stamp_app, [
         'refine',
         '--class-id', 'c00',
         '--identification', str(tmp_path / 'identification.json'),
         '--particles', str(tmp_path / 'particle_set.json'),
         '--class-assignments', str(stage_d / 'class_assignments.json'),
         '--raw-dir', str(tmp_path / 'tomo'),
-        '--out-dir', str(out),
+        '--out-dir', tmp_path,
         '--voxel-size-a', '3.0',
         '--backend', 'mock',
     ])
@@ -77,9 +77,9 @@ def _invoke(tmp_path, stage_d, out):
 class TestRefineCommand:
     def test_refine_mock_writes_independent_halves(self, tmp_path):
         stage_d = _fixture(tmp_path)
-        out = tmp_path / 'refine'
-        result = _invoke(tmp_path, stage_d, out)
+        result = _invoke(tmp_path, stage_d)
         assert result.exit_code == 0, result.output
+        out = tmp_path / 'stamp' / 'refine'
         combined = out / 'c00'
         assert (combined / 'final_A.mrc').is_file() and (combined / 'final_B.mrc').is_file()
         assert (combined / 'fsc.txt').is_file() and (combined / 'fsc.svg').is_file()
@@ -88,7 +88,7 @@ class TestRefineCommand:
 
     def test_refine_rejects_half_set_mixed_class(self, tmp_path):
         stage_d = _fixture(tmp_path, mixed=True)
-        out = tmp_path / 'refine'
-        result = _invoke(tmp_path, stage_d, out)
+        result = _invoke(tmp_path, stage_d)
         assert result.exit_code != 0
+        out = tmp_path / 'stamp' / 'refine'
         assert not (out / 'c00' / 'halfA' / 'particles.star').exists()

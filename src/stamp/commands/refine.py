@@ -20,6 +20,7 @@ from stamp.refine.halfset_guard import (
 )
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, ParticleSet
+from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
 from stamp.utils.io import write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import finish, plot_path
@@ -32,8 +33,7 @@ _ADAPTERS = {'relion': RelionRefineAdapter, 'm': MRefineAdapter}
 def _seed_reference(class_averages_dir: Path, class_id: str, half: str) -> Path:
     matches = sorted(class_averages_dir.glob(f'{class_id}_half{half}_*.mrc'))
     if not matches:
-        log.error(f'No class average for {class_id} half {half} in {class_averages_dir}')
-        raise SystemExit(1)
+        raise StampPipelineError(f'No class average for {class_id} half {half} in {class_averages_dir}')
     return matches[0]
 
 # _with_inplane: return a copy of the particle with the estimated in-plane roll folded into its orientation
@@ -56,8 +56,7 @@ def _run_half(adapter, runner, particles, reference, workdir, parameters, backen
     log.debug(f'{workdir.name}: dispatching {adapter.name} refinement')
     result = runner.run(command)
     if not result.succeeded:
-        log.error(f'Refine failed for {workdir.name}: {result.stderr}')
-        raise SystemExit(1)
+        raise StampPipelineError(f'Refine failed for {workdir.name}: {result.stderr}')
     final_map = workdir / f'final_{workdir.name[-1]}.mrc'
     if backend == 'mock':
         # mock backend runs nothing; synthesise a deterministic map from the seed
@@ -82,11 +81,15 @@ def run_refine(
     mask: Path | None,
     iterations: int,
     backend: str,
-    voxel_size_angstrom: float,
+    voxel_size_angstrom: float | None,
     combined_halfset: bool,
     make_plots: bool = True,
     plot_format: str = 'tiff',
 ) -> None:
+    if voxel_size_angstrom is None:
+        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(raw_tomogram_dir.glob('*.mrc')))
+        if voxel_size_angstrom is None:
+            raise StampValidationError('Voxel size not given and not found in any MRC header in --raw-dir.')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     assignments = [ClassAssignment.model_validate(row) for row in json.loads(class_assignments.read_text())]
     angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None}
@@ -100,31 +103,36 @@ def run_refine(
     runner = select_runner(backend, requires_gpu=getattr(adapter, 'requires_gpu', False))
     parameters = {'voxel_size_angstrom': voxel_size_angstrom, 'iterations': iterations}
 
+    failed_targets: list[str] = []
     for target in targets:
         log.progress(f'Refining class {target}')
         if combined_halfset:
-            log.error('--combined-halfset escape hatch is A2 future work')
-            raise SystemExit(1)
-        half_a, half_b = split_class_by_half(target, assignments, particle_set.particles)
-        half_a = [_with_inplane(p, angle_by_particle) for p in half_a]
-        half_b = [_with_inplane(p, angle_by_particle) for p in half_b]
-        tree = refine_output_tree(output_dir, target)
-        reference_a = _seed_reference(class_averages_dir, target, 'A')
-        reference_b = _seed_reference(class_averages_dir, target, 'B')
-        assert_distinct_references(reference_a, reference_b)
+            raise StampPipelineError('--combined-halfset escape hatch is A2 future work')
+        try:
+            half_a, half_b = split_class_by_half(target, assignments, particle_set.particles)
+            half_a = [_with_inplane(p, angle_by_particle) for p in half_a]
+            half_b = [_with_inplane(p, angle_by_particle) for p in half_b]
+            tree = refine_output_tree(output_dir, target)
+            reference_a = _seed_reference(class_averages_dir, target, 'A')
+            reference_b = _seed_reference(class_averages_dir, target, 'B')
+            assert_distinct_references(reference_a, reference_b)
 
-        final_a = _run_half(adapter, runner, half_a, reference_a, tree['A'], parameters, backend)
-        final_b = _run_half(adapter, runner, half_b, reference_b, tree['B'], parameters, backend)
+            final_a = _run_half(adapter, runner, half_a, reference_a, tree['A'], parameters, backend)
+            final_b = _run_half(adapter, runner, half_b, reference_b, tree['B'], parameters, backend)
 
-        with mrcfile.open(str(final_a), permissive=True) as mrc:
-            map_a = np.asarray(mrc.data, dtype=np.float32)
-        with mrcfile.open(str(final_b), permissive=True) as mrc:
-            map_b = np.asarray(mrc.data, dtype=np.float32)
-        user_mask = None
-        if mask is not None:
-            with mrcfile.open(str(mask), permissive=True) as mrc:
-                user_mask = np.asarray(mrc.data, dtype=np.float32)
-        fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape))
+            with mrcfile.open(str(final_a), permissive=True) as mrc:
+                map_a = np.asarray(mrc.data, dtype=np.float32)
+            with mrcfile.open(str(final_b), permissive=True) as mrc:
+                map_b = np.asarray(mrc.data, dtype=np.float32)
+            user_mask = None
+            if mask is not None:
+                with mrcfile.open(str(mask), permissive=True) as mrc:
+                    user_mask = np.asarray(mrc.data, dtype=np.float32)
+            fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape))
+        except (StampValidationError, StampAdapterError) as exc:
+            log.error(f'{target}: {exc}')
+            failed_targets.append(target)
+            continue
 
         final_a.replace(tree['combined'] / 'final_A.mrc')
         final_b.replace(tree['combined'] / 'final_B.mrc')
@@ -158,7 +166,9 @@ def run_refine(
                 ('reference:B', reference_b),
             ] + ([('mask', mask)] if mask else []),
         )
-    log.progress(f'Refinement complete for {len(targets)} class(es)')
+    if failed_targets:
+        raise StampPipelineError(f'{len(failed_targets)} of {len(targets)} class(es) failed: {", ".join(failed_targets)}')
+    log.info(f'Refinement complete for {len(targets)} class(es)')
 
 # build_refine_commands: create ToolCommand for `stamp refine`
 def build_refine_commands(config, output_dir: Path) -> list[ToolCommand]:

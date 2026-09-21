@@ -6,7 +6,7 @@ STAMP: integration tests for `stamp identify`
 import json, mrcfile, numpy as np
 from scipy.ndimage import gaussian_filter
 from typer.testing import CliRunner
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 
 # Initialise runner
 runner = CliRunner()
@@ -47,17 +47,17 @@ class TestIdentifyCommand:
             '  - name: large\n    structure_path: large.pdb\n'
         )
 
-        out = tmp_path / 'out'
-        result = runner.invoke(stamp, [
+        result = runner.invoke(stamp_app, [
             'identify',
             '--classes', str(classes),
             '--candidates', str(tmp_path / 'candidates.yaml'),
             '--decoy-classes', str(decoys),
-            '--output-dir', str(out),
+            '--output-dir', tmp_path,
             '--resolution', '30.0',
         ])
         assert result.exit_code == 0, result.output
 
+        out = tmp_path / 'stamp' / 'identify'
         identifications = json.loads((out / 'identification.json').read_text())
         assert {row['cluster_id'] for row in identifications} == {'c00', 'c01'}
         assert all(row['score_gap_to_runner_up'] >= 0.0 for row in identifications)

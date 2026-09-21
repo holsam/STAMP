@@ -11,6 +11,7 @@ from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
 from stamp.picking.native import PICKER_NAME, NativePickerConfig, pick_tomogram
 from stamp.schemas.picks import RawPick
+from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.log import log
 
 # _IN_PROCESS_MESSAGE: define a message for if build_command/parse_output are called directly
@@ -34,13 +35,13 @@ class NativePickerAdapter:
 
     def run_in_process(self, inputs: AdapterInputs) -> list[RawPick]:
         if not inputs.input_paths or not inputs.raw_tomogram_paths:
-            raise ValueError('stamp-native requires matched segmentation and raw tomogram paths; pass --raw-tomogram-dir to stamp pick')
+            raise StampPipelineError('stamp-native requires matched segmentation and raw tomogram paths; pass --raw-tomogram-dir to stamp pick')
         if not (len(inputs.input_paths) == len(inputs.raw_tomogram_paths) == len(inputs.tomogram_ids)):
-            raise ValueError('Mismatched input lengths: segmentations, raw tomograms and tomogram IDs must correspond one-to-one')
+            raise StampPipelineError('Mismatched input lengths: segmentations, raw tomograms and tomogram IDs must correspond one-to-one')
 
         voxel_size = inputs.parameters.get('voxel_size_angstrom')
         if voxel_size is None:
-            raise ValueError('stamp-native requires voxel_size_angstrom')
+            raise StampPipelineError('stamp-native requires voxel_size_angstrom')
 
         config_fields = {
             key: value
@@ -58,8 +59,13 @@ class NativePickerAdapter:
             if labels_path is not None:
                 tomogram_config = replace(config, vesicle_labels_mrc=Path(labels_path))
             elif config.normalise_per_vesicle:
+                log.warning(f'{tomogram_id}: no vesicle labels found, disabling normalise_per_vesicle for this tomogram')
                 tomogram_config = replace(config, normalise_per_vesicle=False, vesicle_labels_mrc=None)
-            tomogram_picks = pick_tomogram(segmentation_path, tomogram_path, tomogram_id, tomogram_config)
+            try:
+                tomogram_picks = pick_tomogram(segmentation_path, tomogram_path, tomogram_id, tomogram_config)
+            except StampValidationError as exc:
+                log.error(f'{tomogram_id}: {exc}')
+                continue
             log.debug(f'{tomogram_id}: {len(tomogram_picks)} raw picks')
             picks.extend(tomogram_picks)
         return picks

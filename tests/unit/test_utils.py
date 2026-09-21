@@ -3,13 +3,15 @@ STAMP: unit tests for utilities
 '''
 
 # Import external dependencies
-import pytest, subprocess, tomllib
+import mrcfile, numpy as np, pytest, subprocess, tomllib
+from pathlib import Path
 
 # Import internal functions and schema
 from stamp.utils.halfset import assign_half_sets, split_by_half_set, validate_single_half_set
 from stamp.schemas.particles import HalfSet, Particle
 from stamp.utils import io as io_utils
 from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.utils.errors import StampPipelineError
 
 # _particle: returns a valid Particle instance
 def _particle(particle_id: str, half_set: HalfSet) -> Particle:
@@ -60,12 +62,12 @@ class TestAssignHalfSet:
 
     def test_assign_half_sets_rejects_empty_list(self) -> None:
         '''An empty particle list should raise an error'''
-        with pytest.raises(ValueError, match='empty'):
+        with pytest.raises(StampPipelineError, match='empty'):
             assign_half_sets([], seed=0)
 
     def test_assign_half_sets_rejects_duplicate_ids(self) -> None:
         '''A particle list with duplicate ids should raise an error'''
-        with pytest.raises(ValueError, match='duplicates'):
+        with pytest.raises(StampPipelineError, match='duplicates'):
             assign_half_sets(['p001', 'p001'], seed=0)
 
     def test_split_keeps_tomograms_whole(self):
@@ -86,12 +88,12 @@ class TestValidateHalfSet:
     def test_validate_single_half_set_rejects_mixed_list(self) -> None:
         '''A list of particles in mixed half sets should raise an error'''
         particles = [_particle('p001', HalfSet.A), _particle('p002', HalfSet.B)]
-        with pytest.raises(ValueError, match='mixes half-sets'):
+        with pytest.raises(StampPipelineError, match='mixes half-sets'):
             validate_single_half_set(particles)
 
     def test_validate_single_half_set_rejects_empty_list(self) -> None:
         '''An empty particle list should raise an error'''
-        with pytest.raises(ValueError, match='empty'):
+        with pytest.raises(StampPipelineError, match='empty'):
             validate_single_half_set([])
 
 class TestSplitHalfSet:
@@ -160,3 +162,86 @@ class TestIo:
         parsed = ProvenanceSidecar.model_validate(tomllib.loads(path.read_text()))
         assert parsed.stamp_commit != 'unknown'
         assert parsed.input_checksums['particle_set']
+
+    @pytest.mark.parametrize('command', ['pick', 'decoy', 'classify', 'identify', 'refine'])
+    def test_expected_output_dir_resolved(self, tmp_path, command):
+        assert io_utils.resolve_output_dir(tmp_path, command) == tmp_path / 'stamp' / command
+
+class TestIoMatchByStem:
+    def test_exact_match(self) -> None:
+        raw = [Path('/raw/tomo000.mrc'), Path('/raw/tomo001.mrc')]
+        seg = [Path('/seg/tomo000.mrc')]
+        matched, unmatched = io_utils.match_by_stem(seg, raw)
+        assert matched == {seg[0]: raw[0]}
+        assert unmatched == []
+
+    def test_prefix_match_with_suffix(self) -> None:
+        raw = [Path('/raw/Position_1_stack_Vol.mrc')]
+        seg = [Path('/seg/Position_1_stack_Vol.denoised_segmented.mrc')]
+        matched, unmatched = io_utils.match_by_stem(seg, raw)
+        assert matched == {seg[0]: raw[0]}
+        assert unmatched == []
+
+    def test_prefix_match_is_not_ambiguous_across_similar_stems(self) -> None:
+        raw = [Path('/raw/Position_1.mrc'), Path('/raw/Position_10.mrc')]
+        seg = [Path('/seg/Position_10.denoised_segmented.mrc')]
+        matched, unmatched = io_utils.match_by_stem(seg, raw)
+        assert matched == {seg[0]: raw[1]}
+
+    def test_unmatched_when_no_prefix_found(self) -> None:
+        raw = [Path('/raw/tomo000.mrc')]
+        seg = [Path('/seg/orphan.mrc')]
+        matched, unmatched = io_utils.match_by_stem(seg, raw)
+        assert matched == {}
+        assert unmatched == seg
+
+class TestIoReadVoxelSizeAngstrom:
+    def test_reads_cubic_voxel_size(self, tmp_path: Path) -> None:
+        path = tmp_path / 'tomo.mrc'
+        with mrcfile.new(path, overwrite=True) as mrc:
+            mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
+            mrc.voxel_size = 13.48
+        assert io_utils.read_voxel_size_angstrom(path) == pytest.approx(13.48, abs=1e-2)
+
+    def test_zero_voxel_size_is_none(self, tmp_path: Path) -> None:
+        path = tmp_path / 'tomo.mrc'
+        with mrcfile.new(path, overwrite=True) as mrc:
+            mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
+        assert io_utils.read_voxel_size_angstrom(path) is None
+
+    def test_noncubic_voxel_size_warns_and_returns_x(self, tmp_path: Path, caplog) -> None:
+        path = tmp_path / 'tomo.mrc'
+        with mrcfile.new(path, overwrite=True) as mrc:
+            mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
+            mrc.voxel_size = (10.0, 10.0, 12.0)
+        assert io_utils.read_voxel_size_angstrom(path) == pytest.approx(10.0, abs=1e-2)
+
+class TestIoResolveDirectoryVoxelSizeAngstrom:
+    def test_uniform_voxel_size(self, tmp_path: Path, caplog) -> None:
+        paths = []
+        for name in ('a.mrc', 'b.mrc'):
+            path = tmp_path / name
+            with mrcfile.new(path, overwrite=True) as mrc:
+                mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
+                mrc.voxel_size = 10.0
+            paths.append(path)
+        assert io_utils.resolve_directory_voxel_size_angstrom(paths) == pytest.approx(10.0, abs=1e-2)
+        assert 'Multiple voxel sizes' not in caplog.text
+
+    def test_disagreeing_voxel_sizes_uses_most_common(self, tmp_path: Path, caplog) -> None:
+        sizes = [10.0, 10.0, 14.0]
+        paths = []
+        for index, size in enumerate(sizes):
+            path = tmp_path / f'{index}.mrc'
+            with mrcfile.new(path, overwrite=True) as mrc:
+                mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
+                mrc.voxel_size = size
+            paths.append(path)
+        assert io_utils.resolve_directory_voxel_size_angstrom(paths) == pytest.approx(10.0, abs=1e-2)
+        assert 'Multiple voxel sizes were found' in caplog.text
+
+    def test_no_headers_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / 'a.mrc'
+        with mrcfile.new(path, overwrite=True) as mrc:
+            mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
+        assert io_utils.resolve_directory_voxel_size_angstrom([path]) is None

@@ -54,21 +54,21 @@ uv sync --group dev
 Given a directory of membrane segmentations (`seg/`) and matching raw tomograms (`tomo/`):
 ```sh
 # 1. Pick candidate particles using STAMP's native picker
-stamp pick stamp-native -s seg/ -r tomo/ -o out/pick --voxel-size-a 5.38
+stamp pick stamp-native -s seg/ -r tomo/ --voxel-size-a 5.38
 
 # 2. Group picks and generate class averages
-stamp classify --particles out/pick/particle_set.json -r tomo/ -o out/classify --voxel-size-a 13.48
+stamp classify --particles stamp/pick/particle_set.json -r tomo/ --voxel-size-a 13.48
 
 # 3. Compare class averages to a candidate protein panel
-stamp identify --classes out/classify/class_averages --candidates candidates.yaml -o out/identify -r 25.0
+stamp identify --classes stamp/classify/class_averages --candidates candidates.yaml -r 25.0
 
 # 4. Refine an identified class with independent half-sets
-stamp refine --class-id all --identification out/identify/identification.json --particles out/pick/particle_set.json --class-assignments out/classify/class_assignments.json -r tomo/ -o out/refine
+stamp refine --class-id all --identification stamp/identify/identification.json --particles stamp/pick/particle_set.json --class-assignments stamp/classify/class_assignments.json -r tomo/
 ```
 
 Each step, including decoy control generation, can be run from a single configuration file:
 ```sh
-stamap run --config stamp_run.toml
+stamp run --config stamp_run.toml
 ```
 
 <br>

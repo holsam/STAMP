@@ -46,7 +46,7 @@ Argument/Option | Default | Use
 `pickers` (positional) | *n/a (required)* | Comma-separated names of pickers to use
 `-s, --seg-dir` | *n/a (required)* | Directory containing segmented MRC files
 `-r, --raw-dir` | *n/a (required)* | Directory of raw tomogram MRCs
-`-o, --out-dir` | `.` | Output directory
+`-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/pick`)
 `--voxel-size-a` | `None` *(read from MRC file header)* | Voxel size in Å
 `--picker-params` | `'{}'` | JSON of per-picker parameters, e.g. `'{"stamp-native": {"n_mad": 3.5}}'`
 `--consensus-rule` | `union` | Rule to use for reconciling picks (`union` or `intersection`)
@@ -71,8 +71,8 @@ stamp decoy -o OUT_DIR --voxel-size-a V [options]
 
 Option | Default | Use
 -- | -- | --
-`-o, --out-dir` | *n/a (required)* | Output directory
 `--voxel-size-a` | *n/a (required)* | Voxel size in Å
+`-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/decoy`)
 `--method` | `rejected-surface` | Decoy generation method to use (`rejected-surface` or `shifted` or `synthetic-noise`) *[(see below)](#stamp-decoy-methods)*
 `--real-particle-set` | *n/a (required unless `--method synthetic-noise`)* | Path to `particle_set.json` from `stamp pick`
 `-s, --seg-dir` | *n/a (required unless `--method synthetic-noise`)* | Directory containing segmented MRC files
@@ -113,9 +113,9 @@ Option | Default | Use
 -- | -- | --
 `--particles` | *n/a (required)* | Path to `particle_set.json` from `stamp pick`, or `decoy_particle_set.json` from `stamp decoy`
 `-r, --raw-dir` | *n/a (required)* | Directory of raw tomogram MRCs
-`-o, --out-dir` | *n/a (required)* | Output directory
 `--voxel-size-a` | *n/a (required)* | Voxel size in Å
 `-s, --seg-dir` | `None` | Directory containing segmented MRC files
+`-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/classify` or `<dir/stamp/classify_decoy>`)
 `--box-length-a` | `300.0` | Extraction box edge length in Å (roughly 2x the largest expected particle)
 `--n-bins` | `12` | Radial bins in the rotational average
 `--method` | `hbdscan` | Clustering method to use (`hbdscan` or `kmeans`)
@@ -146,8 +146,8 @@ Option | Default | Use
 -- | -- | --
 `--classes` | *n/a (required)* | Directory of class-average MRCs from `stamp classify`
 `--candidates` | *n/a (required)* | Path to YAML file containing candidates from proteomics
-`-o, --output-dir` | *n/a (required)* | Output directory
 `-r, --resolution` | *n/a (required)* | Class-average resolution in Å, used for low-pass filtering
+`-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/identify`)
 `--decoy-classes` | `None` | Directory containing decoy class averages from `stamp decoy`
 `--backend` | `local` | Backend to use for identification (`local` or `mock`)
 `--fitter` | `native` | Fitting tool to use
@@ -170,7 +170,7 @@ Option | Default | Use
 `--particles` | *n/a (required)* | Path to `particle_set.json` from `stamp pick`
 `--class-assignments` | *n/a (required)* | Path to `class_assignments.json` from `stamp classify`
 `-r, --raw-dir` | *n/a (required)* | Directory of raw tomogram MRCs
-`-o, --out-dir` | `.` | Output directory
+`-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/refine`)
 `--voxel-size-a` | `None` | Voxel size in Å
 `--tool` | `relion` | Refinement tool to use (`relion` or `m`)
 `--mask` | `None` | Path to MRC file to use as mask

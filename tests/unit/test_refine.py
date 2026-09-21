@@ -11,6 +11,7 @@ from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
 )
 from stamp.schemas.particles import ClassAssignment, HalfSet, Particle
+from stamp.utils.errors import StampValidationError
 
 # _particle: construct a Particle instance for tests
 def _particle(pid, half):
@@ -92,13 +93,13 @@ class TestRefineHalfsetGuard:
     def test_split_raises_on_empty_half(self):
         particles = [_particle('p0', HalfSet.A)]
         assignments = [ClassAssignment(particle_id='p0', cluster_id='c00', classifier='k')]
-        with pytest.raises(ValueError, match='both halves'):
+        with pytest.raises(StampValidationError, match='both halves'):
             split_class_by_half('c00', assignments, particles)
 
     def test_assert_distinct_references_rejects_shared_seed(self, tmp_path):
         reference = tmp_path / 'seed.mrc'
         reference.write_bytes(b'0')
-        with pytest.raises(ValueError, match='each half must start from its own class average'):
+        with pytest.raises(StampValidationError, match='each half must start from its own class average'):
             assert_distinct_references(reference, reference)
 
     def test_output_tree_is_separate_per_half(self, tmp_path):

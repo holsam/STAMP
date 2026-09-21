@@ -24,7 +24,8 @@ from stamp.decoy.validate import is_decoy_particle_set
 from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
-from stamp.utils.io import write_sidecar
+from stamp.utils.errors import StampPipelineError
+from stamp.utils.io import resolve_directory_voxel_size_angstrom, resolve_output_dir, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
@@ -53,6 +54,10 @@ def run_classify(
     make_plots: bool = True,
     plot_format: str = 'tiff',
 ) -> None:
+    if voxel_size_angstrom is None:
+        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(raw_tomogram_dir.glob('*.mrc')))
+        if voxel_size_angstrom is None:
+            raise StampPipelineError('Voxel size not given and not found in any MRC header in --raw-dir.')
     log.progress('Classifying particle set')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
@@ -73,8 +78,7 @@ def run_classify(
     if skipped:
         log.warning(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
     if not kept:
-        log.error('No particles could be extracted. Check --raw-dir and --box-length-a')
-        raise SystemExit(1)
+        raise StampPipelineError('No particles could be extracted. Check --raw-dir and --box-length-a')
     log.info(f'Extracted {len(kept)} subvolumes at box {box_voxels}{" (membrane subtracted)" if segmentation_paths else ""}')
 
     features = build_feature_matrix(
@@ -93,8 +97,7 @@ def run_classify(
         subvolumes = subvolumes[~degenerate]
         kept = [particle for particle, bad in zip(kept, degenerate) if not bad]
     if not kept:
-        log.error('No particles left after dropping degenerate subvolumes')
-        raise SystemExit(1)
+        raise StampPipelineError('No particles left after dropping degenerate subvolumes')
 
     config = ClusteringConfig(
         method=method,
@@ -104,6 +107,7 @@ def run_classify(
         random_state=random_state,
     )
 
+    output_dir = resolve_output_dir(output_dir, 'classify', 'decoy' if is_decoy else None)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     align_settings = dict(
@@ -273,8 +277,7 @@ def _classify_strict(
     indices_a = np.array([index_of[p.particle_id] for p in half_a])
     indices_b = np.array([index_of[p.particle_id] for p in half_b])
     if indices_a.size == 0 or indices_b.size == 0:
-        log.error('Strict mode needs particles in both half-sets')
-        raise SystemExit(1)
+        raise StampPipelineError('Strict mode needs particles in both half-sets')
 
     results = reduce_and_cluster_shared(features, {'A': indices_a, 'B': indices_b}, config)
     result_a, result_b = results['A'], results['B']

@@ -23,6 +23,7 @@ from stamp.picking.geometry import (
 )
 from stamp.picking.vesicles import load_vesicle_labels, vesicle_ids_at
 from stamp.schemas.picks import RawPick
+from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.log import log
 
 # PICKER_NAME: name for picker tool
@@ -71,24 +72,24 @@ class NativePickerConfig:
 
     def __post_init__(self) -> None:
         if self.voxel_size_angstrom <= 0:
-            raise ValueError('voxel_size_angstrom must be positive.')
+            raise StampPipelineError('voxel_size_angstrom must be positive.')
         if self.density_sign not in (1, -1):
-            raise ValueError('density_sign must be +1 or -1.')
+            raise StampPipelineError('density_sign must be +1 or -1.')
         if len(self.offset_windows_angstrom) == 0:
-            raise ValueError('offset_windows_angstrom must contain at least one window.')
+            raise StampPipelineError('offset_windows_angstrom must contain at least one window.')
         for offset_min, offset_max in self.offset_windows_angstrom:
             if offset_max < offset_min:
-                raise ValueError('each offset window must have offset_max >= offset_min.')
+                raise StampPipelineError('each offset window must have offset_max >= offset_min.')
         if self.local_radius_angstrom <= 0:
-            raise ValueError('local_radius_angstrom must be positive.')
+            raise StampPipelineError('local_radius_angstrom must be positive.')
         if self.min_local_neighbours < 1:
-            raise ValueError('min_local_neighbours must be at least 1.')
+            raise StampPipelineError('min_local_neighbours must be at least 1.')
         if self.scoring_mode not in ('mean', 'profile'):
-            raise ValueError('scoring_mode must be "mean" or "profile".')
+            raise StampPipelineError('scoring_mode must be "mean" or "profile".')
         if self.profile_width_angstrom is not None and self.profile_width_angstrom <= 0:
-            raise ValueError('profile_width_angstrom must be positive.')
+            raise StampPipelineError('profile_width_angstrom must be positive.')
         if self.normalise_per_vesicle and self.vesicle_labels_mrc is None:
-            raise ValueError('normalise_per_vesicle requires vesicle_labels_mrc.')
+            raise StampPipelineError('normalise_per_vesicle requires vesicle_labels_mrc.')
 
     def to_voxels(self, angstrom: float) -> float:
         return angstrom / self.voxel_size_angstrom
@@ -116,8 +117,7 @@ def pick_tomogram(
         tomogram = np.asarray(mrc.data)
 
     if segmentation.shape != tomogram.shape:
-        log.error(f'Segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id}')
-        raise ValueError(f'Segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id}; they must be the same volume at the same binning')
+        raise StampValidationError(f'Segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id}; they must be the same volume at the same binning')
 
     # Blank membrane signal so offset shell only scores densities off membrane surface
     tomogram = tomogram.astype(np.float32).copy()
@@ -130,6 +130,7 @@ def pick_tomogram(
     inside = exclude_near_boundary(vertices, segmentation.shape, config.to_voxels(margin_angstrom))
     vertices, normals = vertices[inside], normals[inside]
     if vertices.shape[0] == 0:
+        log.warning(f'{tomogram_id}: no surface points survived boundary exclusion, skipping')
         return []
 
     if config.vesicle_labels_mrc is not None:
@@ -169,6 +170,7 @@ def pick_tomogram(
     )
     log.debug(f'{tomogram_id}: {n_candidates} candidates before filtering, {points.shape[0]} kept')
     if points.shape[0] == 0:
+        log.warning(f'{tomogram_id}: no candidates survived score threshold {config.effective_n_mad:.2f}, skipping')
         return []
     if config.normalisation == 'local' and used_fallback.any():
         log.debug(f'{tomogram_id}: {int(used_fallback.sum())}/{points.shape[0]} kept points used global fallback (too few neighbours within local_radius_angstrom)')

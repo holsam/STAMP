@@ -21,7 +21,7 @@ class LocalRunner:
             text=True,
         )
         if completed.returncode != 0:
-            log.warning(f'{command.tool} exited {completed.returncode}')
+            log.error(f'{command.tool} exited {completed.returncode}')
         return RunResult(
             tool=command.tool,
             exit_code=completed.returncode,

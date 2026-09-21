@@ -5,7 +5,7 @@ STAMP: integration tests for `stamp run` command
 # Import external dependencies
 import json, tomllib
 from typer.testing import CliRunner
-from stamp.cli.cli import stamp
+from stamp.cli.cli import stamp_app
 
 # Initialise runner
 runner = CliRunner()
@@ -14,9 +14,9 @@ runner = CliRunner()
 class TestRunCommand:
     def test_run_produces_both_tracks_and_report(self, tmp_path, run_mock_pipeline):
         out = run_mock_pipeline(tmp_path)
-        assert (out / 'real' / 'stage_pick' / 'particle_set.json').is_file()
-        assert (out / 'decoy' / 'stage_pick' / 'decoy_particle_set.json').is_file()
-        assert (out / 'real' / 'stage_classify').is_dir()
+        assert (out / 'pick' / 'particle_set.json').is_file()
+        assert (out / 'decoy' / 'decoy_particle_set.json').is_file()
+        assert (out / 'classify_real').is_dir()
 
         sidecars = list(out.rglob('params.toml'))
         assert len(sidecars) >= 4
@@ -31,12 +31,12 @@ class TestRunCommand:
     def test_second_invocation_skips_completed_stages(self, tmp_path, make_dataset, write_config):
         make_dataset(tmp_path)
         config = write_config(tmp_path)
-        first = runner.invoke(stamp, ['run', '--config', str(config)])
+        first = runner.invoke(stamp_app, ['run', '--config', str(config)])
         assert first.exit_code == 0
-        state = json.loads((tmp_path / 'out' / 'run_state.json').read_text())
+        state = json.loads((tmp_path / 'stamp' / 'run_state.json').read_text())
         assert state['real']['pick'] is True
 
-        second = runner.invoke(stamp, ['run', '--config', str(config)])
+        second = runner.invoke(stamp_app, ['run', '--config', str(config)])
         assert second.exit_code == 0
         assert 'pick' not in second.output.lower() or 'skip' in second.output.lower()
 

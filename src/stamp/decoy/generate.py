@@ -22,6 +22,7 @@ from stamp.picking.native import NativePickerConfig
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
+from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
 
 # Define constants
@@ -49,7 +50,11 @@ def generate_rejected_surface_decoys(
     raw_picks: list[RawPick] = []
 
     for manifest in manifests:
-        points_zyx, normals_zyx, scores, winning_window, mean_scores, profile_scores = _score_surface(manifest, config)
+        try:
+            points_zyx, normals_zyx, scores, winning_window, mean_scores, profile_scores = _score_surface(manifest, config)
+        except StampValidationError as exc:
+            log.warning(f'{manifest.tomogram_id}: skipped ({exc})')
+            continue
         if points_zyx.shape[0] == 0:
             continue
 
@@ -176,6 +181,8 @@ def generate_shifted_decoys(
                     )
                 )
                 break
+            else:
+                log.debug(f'{tomogram_id}: exhausted {max_attempts_per_particle} attempts placing a shifted decoy, skipping one particle')
 
     decoys = _finalise(raw_picks, seed, METHOD_SHIFTED)
     log.info(f'Generated {len(raw_picks)} decoy particles')
@@ -263,8 +270,7 @@ def _score_surface(
         tomogram = np.asarray(mrc.data)
 
     if segmentation.shape != tomogram.shape:
-        log.error(f'Segmentation and tomogram shapes disagree for {manifest.tomogram_id}')
-        raise ValueError(f'Segmentation and tomogram shapes disagree for {manifest.tomogram_id}')
+        raise StampValidationError(f'Segmentation and tomogram shapes disagree for {manifest.tomogram_id}')
 
     try:
         vertices, normals = extract_surface(segmentation)

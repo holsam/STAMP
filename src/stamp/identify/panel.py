@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Import internal STAMP objects
+from stamp.utils.errors import StampPipelineError
 from stamp.utils.log import log
 
 # AFDB_URL: AlphaFold-DB predicted-model URL, keyed by UniProt accession
@@ -84,5 +85,5 @@ def _fetch_afdb_model(uniprot: str, cache_dir: Path) -> Path:
             destination.write_bytes(response.read())
     except Exception as error:
         log.warning(f'AlphaFold fetch failed for {uniprot}: {error}')
-        raise ValueError(f'could not fetch AlphaFold model for {uniprot} from {url}: {error}')
+        raise StampPipelineError(f'could not fetch AlphaFold model for {uniprot} from {url}: {error}')
     return destination

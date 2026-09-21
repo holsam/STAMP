@@ -13,6 +13,7 @@ from stamp.backends.cluster import ClusterRunner
 from stamp.backends.factory import select_runner
 from stamp.backends.local import LocalRunner
 from stamp.backends.mock import MockRunner
+from stamp.utils.errors import StampPipelineError
 from stamp.backends.slurm import job_state, render_job_script, submit
 from stamp.schemas.cluster_profile import ClusterProfile
 
@@ -140,8 +141,5 @@ class TestClusterBackend:
 
     def test_missing_sbatch_raises(self, monkeypatch):
         monkeypatch.setattr('shutil.which', lambda _name: None)
-        messages: list[str] = []
-        monkeypatch.setattr('stamp.backends.factory.log.error', messages.append)
-        with pytest.raises(SystemExit):
+        with pytest.raises(StampPipelineError, match='sbatch'):
              select_runner('cluster')
-        assert any('sbatch' in message for message in messages)

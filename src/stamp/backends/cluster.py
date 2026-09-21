@@ -42,7 +42,7 @@ class ClusterRunner:
             if state == 'COMPLETED':
                 log.info(f"Job {record['job_id']} finished: {state}")
             else:
-                log.warning(f"Job {record['job_id']} ended in state {state}")
+                log.error(f"Job {record['job_id']} ended in state {state}")
             stdout = self._slurm_stream(workdir, record['job_id'], 'out')
             stderr = self._slurm_stream(workdir, record['job_id'], 'err')
             return RunResult(

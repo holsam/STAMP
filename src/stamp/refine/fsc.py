@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Import internal STAMP objects
+from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
 
 # FSCResult: both curves plus the resolution read at the threshold
@@ -87,8 +88,7 @@ def compute_fsc(
     seed: int = 0,
 ) -> FSCResult:
     if half_map_a.shape != half_map_b.shape:
-        log.error('Half maps must have the same shape')
-        raise ValueError('half maps must have the same shape')
+        raise StampValidationError('half maps must have the same shape')
     if mask is None:
         mask = soft_sphere_mask(half_map_a.shape)
 

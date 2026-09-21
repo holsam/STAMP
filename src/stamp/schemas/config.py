@@ -8,6 +8,10 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, model_validator
 from typing import Literal
 
+# Import internal STAMP objects
+from stamp.utils.errors import StampPipelineError
+from stamp.utils.log import log
+
 # _Strict: reject unknown keys
 class _Strict(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -94,9 +98,9 @@ class RunConfig(_Strict):
         stop = self.run.stop_after
         needs_identify = stop in (None, 'identify', 'refine')
         if needs_identify and not self.stage.identify.candidates:
-            raise ValueError('[stage.identify].candidates is required unless stop_after is "pick" or "classify"')
+            raise StampPipelineError('[stage.identify].candidates is required unless stop_after is "pick" or "classify"')
         if needs_identify and self.stage.identify.resolution is None:
-            raise ValueError('[stage.identify].resolution is required (Å) unless stop_after is "pick" or "classify"')
+            raise StampPipelineError('[stage.identify].resolution is required (Å) unless stop_after is "pick" or "classify"')
         return self
 
 # load_run_config: parse and validate stamp_run.toml, resolving paths relative to the file
@@ -111,9 +115,12 @@ def load_run_config(path: Path) -> RunConfig:
     if config.stage.refine.mask is not None:
         config.stage.refine.mask = (base / config.stage.refine.mask).resolve()
     if config.stage.pick.backend is None:
+        log.debug(f'stage.pick.backend not set, inheriting run.backend={config.run.backend!r}')
         config.stage.pick.backend = config.run.backend
     if config.stage.identify.backend is None:
+        log.debug(f'stage.identify.backend not set, inheriting run.backend={config.run.backend!r}')
         config.stage.identify.backend = config.run.backend
     if config.stage.refine.backend is None:
+        log.debug(f'stage.refine.backend not set, inheriting run.backend={config.run.backend!r}')
         config.stage.refine.backend = config.run.backend
     return config
