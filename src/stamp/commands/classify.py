@@ -88,6 +88,7 @@ def run_classify(
         max_azimuthal_mode=azimuthal_modes,
         n_azimuthal_samples=n_azimuthal_samples,
         min_radius_fraction=min_radius_fraction,
+        n_workers=n_workers,
     )
     log.debug(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
 

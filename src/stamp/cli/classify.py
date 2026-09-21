@@ -97,7 +97,7 @@ def classify(
     ] = 64,
     n_workers: Annotated[
         int,
-        typer.Option('-n', '--n-processes', help='Number of processes to use for per-cluster in-plane alignment (1 = sequential).', rich_help_panel = 'In-plane alignment'),
+        typer.Option('-n', '--n-processes', help='Number of processes to use for per-cluster in-plane alignment (1 = sequential).'),
     ] = 1,
     make_plots: Annotated[
         bool,
