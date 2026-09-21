@@ -202,13 +202,13 @@ def _zstack_movie_for_background(
         try:
             animation.save(path, writer=FFMpegWriter(fps=fps))
         except Exception as exc:
-            log.warning(f'ffmpeg failed writing {path.name} ({exc}), falling back to .gif')
+            log.debug(f'ffmpeg failed writing {path.name} ({exc}), falling back to .gif')
             have_ffmpeg = False
     if not have_ffmpeg:
         path = path.with_suffix('.gif')
         animation.save(path, writer=PillowWriter(fps=fps))
     plt.close(fig)
-    log.info(f'Wrote Z-stack movie: {path}')
+    log.debug(f'Wrote Z-stack movie: {path}')
 
 # _render_segmentation_plane: segmentation background renderer for _zstack_movie_for_background
 def _render_segmentation_plane(
