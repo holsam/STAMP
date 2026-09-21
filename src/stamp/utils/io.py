@@ -79,9 +79,10 @@ def _save_cache(cache_dir: Path | None, cache: dict) -> None:
         (cache_dir / _CACHE_NAME).write_text(json.dumps(cache, indent=2))
 
 # checksum_file: SHA-256 of contents, cached on (path, size, mtime) when cache_dir is given
-def checksum_file(path: Path, cache_dir: Path | None = None) -> str:
+def checksum_file(path: Path, cache_dir: Path | None = None, *, _cache: dict | None = None) -> str:
     from stamp.utils.log import log
-    cache = _load_cache(cache_dir)
+    owns_cache = _cache is None
+    cache = _load_cache(cache_dir) if owns_cache else _cache
     stat = path.stat()
     key = str(path.resolve())
     entry = cache.get(key)
@@ -97,13 +98,14 @@ def checksum_file(path: Path, cache_dir: Path | None = None) -> str:
     hexdigest = digest.hexdigest()
 
     cache[key] = {'size': stat.st_size, 'mtime': stat.st_mtime, 'sha256': hexdigest}
-    _save_cache(cache_dir, cache)
+    if owns_cache:
+        _save_cache(cache_dir, cache)
     return hexdigest
 
 # _digest_directory: digest of a directory's sorted (relative path, sha256) pairs, recursively
-def _digest_directory(directory: Path, cache_dir: Path | None) -> str:
+def _digest_directory(directory: Path, cache_dir: Path | None, cache: dict) -> str:
     parts = [
-        f'{child.relative_to(directory).as_posix()}:{checksum_file(child, cache_dir)}'
+        f'{child.relative_to(directory).as_posix()}:{checksum_file(child, cache_dir, _cache=cache)}'
         for child in sorted(directory.rglob('*'))
         if child.is_file() and child.name != _CACHE_NAME
     ]
@@ -111,15 +113,15 @@ def _digest_directory(directory: Path, cache_dir: Path | None) -> str:
 
 # checksum_inputs: role -> hash; a directory role gets the recursive digest; a missing input is recorded as 'absent'
 def checksum_inputs(inputs: list[tuple[str, Path]], cache_dir: Path | None = None) -> dict[str, str]:
+    cache = _load_cache(cache_dir)
     checksums: dict[str, str] = {}
     for role, path in inputs:
         path = Path(path)
         if not path.exists():
             checksums[role] = 'absent'
             continue
-        checksums[role] = (
-            _digest_directory(path, cache_dir) if path.is_dir() else checksum_file(path, cache_dir)
-        )
+        checksums[role] = (_digest_directory(path, cache_dir, cache) if path.is_dir() else checksum_file(path, cache_dir, _cache=cache))
+    _save_cache(cache_dir, cache)
     return checksums
 
 # write_sidecar: build a ProvenanceSidecar, resolve the commit, hash inputs, write params.toml
