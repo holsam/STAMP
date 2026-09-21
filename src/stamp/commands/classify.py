@@ -74,7 +74,7 @@ def run_classify(
         box_voxels += 1  # odd box keeps the particle exactly centred
 
     subvolumes, kept, skipped = extract_particle_set(
-        particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels, segmentation_paths=segmentation_paths,
+        particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels, segmentation_paths=segmentation_paths, n_workers=n_workers,
     )
     if skipped:
         log.warning(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
