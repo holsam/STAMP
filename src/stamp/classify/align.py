@@ -4,7 +4,11 @@ STAMP: reference-based in-plane (azimuthal) alignment of subvolumes
 
 # Import external dependencies
 import numpy as np
+from dataclasses import dataclass
 from scipy.ndimage import rotate
+
+# Import internal STAMP objects
+from stamp.utils.parallel import run_parallel
 
 # _ROLL_AXES: box axes spanning the plane perpendicular to the membrane normal
 _ROLL_AXES = (0, 1)
@@ -40,6 +44,25 @@ def _best_angle(
             best_angle, best_score = float(angle), score
     return best_angle
 
+# _AlignClusterJob: one cluster's subvolumes
+@dataclass(frozen=True)
+class _AlignClusterJob:
+    member_indices: list[int]
+    member_subvolumes: np.ndarray
+    mask: np.ndarray
+    angles: np.ndarray
+    iterations: int
+
+# _align_one_cluster: multiprocessing worker entry point
+def _align_one_cluster(job: _AlignClusterJob) -> dict[int, float]:
+    current = {local: 0.0 for local in range(len(job.member_indices))}
+    for _ in range(max(job.iterations, 1)):
+        reference = np.mean([roll_about_normal(job.member_subvolumes[local], angle) for local, angle in current.items()], axis=0)
+        reference_masked = reference[job.mask]
+        reference_masked = reference_masked - reference_masked.mean()
+        current = {local: _best_angle(job.member_subvolumes[local], reference_masked, job.mask, job.angles) for local in current}
+    return {job.member_indices[local]: angle for local, angle in current.items()}
+
 # align_inplace: per-cluster iterative azimuthal alignment; returns {subvolume_row_index: angle_degrees}
 def align_inplane(
     subvolumes: np.ndarray,
@@ -47,22 +70,20 @@ def align_inplane(
     *,
     angular_step_degrees: float = 10.0,
     iterations: int = 3,
+    n_workers: int = 1,
 ) -> dict[int, float]:
     if subvolumes.shape[0] == 0:
         return {}
     box_voxels = subvolumes.shape[-1]
     mask = _annulus_mask(box_voxels)
     angles = np.arange(0.0, 360.0, angular_step_degrees)
-    resolved: dict[int, float] = {}
+    jobs = []
     for cluster_id in sorted(set(cluster_ids)):
         if cluster_id == 'noise':
             continue
         members = [index for index, cid in enumerate(cluster_ids) if cid == cluster_id]
-        current = {index: 0.0 for index in members}
-        for _ in range(max(iterations, 1)):
-            reference = np.mean([roll_about_normal(subvolumes[index], current[index]) for index in members], axis=0)
-            reference_masked = reference[mask]
-            reference_masked = reference_masked - reference_masked.mean()
-            current = {index: _best_angle(subvolumes[index], reference_masked, mask, angles) for index in members}
-        resolved.update(current)
+        jobs.append(_AlignClusterJob(members, subvolumes[members], mask, angles, iterations))
+    resolved: dict[int, float] = {}
+    for cluster_result in run_parallel(jobs, _align_one_cluster, max_workers=n_workers, label='inplane-align'):
+        resolved.update(cluster_result)
     return resolved

@@ -25,6 +25,7 @@ min_shift_angstrom = 200.0
 max_shift_angstrom = 600.0
 n_synthetic_tomograms = 3
 # synthetic_shape_voxels = [200, 200, 200]      # omit to match the first real tomogram
+n_workers = 1
 
 [plots]
 enabled = true
@@ -38,6 +39,7 @@ consensus_rule = "intersection"                 # union | intersection
 distance_threshold = 15.0
 half_set_seed = 0
 # backend = "local"                             # omit to inherit [run].backend
+n_workers = 1
 
 [stage.classify]
 method = "hdbscan"                              # hdbscan | kmeans
@@ -51,6 +53,7 @@ inplane_alignment = true
 inplane_angular_step_degrees = 10.0
 inplane_iterations = 3
 random_state = 0
+n_workers = 1
 # backend = "local"                             # omit to inherit [run].backend
 
 [stage.identify]
@@ -58,6 +61,7 @@ candidates = "candidates.yaml"                  # required unless stop_after is 
 resolution = 25.0                               # required unless stop_after is pick/classify
 fitter = "native"
 fetch_missing = false
+n_workers = 1
 # backend = "local"                             # omit to inherit [run].backend
 
 [stage.refine]
@@ -98,6 +102,7 @@ Key | Type | Default
 `max_shift_angstrom` | float | `600.0`
 `n_synthetic_tomograms` | int | `3`
 `synthetic_shape_voxels` | `(int,int,int)`\|`None` | `None` *(matches the first real tomogram found under `raw_tomogram_dir`, or `(200,200,200)` if none exist)*
+`n_workers` | int | `1`
 
 ### `[plots]` — `PlotSettings`
 
@@ -117,6 +122,7 @@ Key | Type | Default
 `distance_threshold` | float | `15.0`
 `half_set_seed` | int | `0`
 `backend` | `local`\|`mock`\|`cluster`\|`None` | `None` (inherits `[run].backend`)
+`n_workers` | int | `1`
 
 ### `[stage.classify]`
 
@@ -133,6 +139,7 @@ Key | Type | Default
 `inplane_angular_step_degrees` | float | `10.0`
 `inplane_iterations` | int | `3`
 `random_state` | int | `0`
+`n_workers` | int | `1`
 `backend` | `local`\|`mock`\|`cluster`\|`None` | `None` *(inherit from `[run].backend`)*
 
 ### `[stage.identify]`
@@ -143,6 +150,7 @@ Key | Type | Default
 `resolution` | float\|`None` | *n/a (required unless `[run].stop_after` is `pick` or `classify`)*
 `fitter` | `native` | `native`
 `fetch_missing` | bool | `False`
+`n_workers` | int | `1`
 `backend` | `local`\|`mock`\|`cluster`\|`None` | `None` *(inherit from `[run].backend`)*
 
 ### `[stage.refine]`

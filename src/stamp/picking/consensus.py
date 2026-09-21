@@ -4,6 +4,7 @@ STAMP: combines raw picks from multiple pickers into one half-set-tagged Particl
 
 # Import external dependencies
 import numpy as np
+from dataclasses import dataclass
 from sklearn.cluster import AgglomerativeClustering
 from typing import Literal
 
@@ -12,6 +13,7 @@ from stamp.utils.halfset import assign_half_sets
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.utils.log import log
+from stamp.utils.parallel import run_parallel_ordered
 
 # _components: complete-linkage groups of pick indices, each with diameter <= distance_threshold
 def _components(positions: np.ndarray, distance_threshold: float) -> dict[int, list[int]]:
@@ -82,6 +84,40 @@ def reconcile_picks(
         )
     return reconciled
 
+
+# _ReconcileJob: one tomogram's picks, pre-filtered per picker
+@dataclass(frozen=True)
+class _ReconcileJob:
+    picks_by_picker: dict[str, list[RawPick]]
+    consensus_rule: Literal['intersection', 'union']
+    distance_threshold: float
+    tomogram_id: str
+
+# _reconcile_one_tomogram: multiprocessing worker entry point
+def _reconcile_one_tomogram(job: _ReconcileJob) -> list[RawPick]:
+    return reconcile_picks(job.picks_by_picker, job.consensus_rule, job.distance_threshold, job.tomogram_id)
+
+# reconcile_picks_for_tomograms: reconcile raw picks across multiple tomograms, optionally in parallel
+def reconcile_picks_for_tomograms(
+    picks_by_picker: dict[str, list[RawPick]],
+    consensus_rule: Literal['intersection', 'union'],
+    distance_threshold: float,
+    tomogram_ids: list[str],
+    n_workers: int = 1,
+) -> list[RawPick]:
+    jobs = [
+        _ReconcileJob(
+            {picker_name: [p for p in picks if p.tomogram_id == tomogram_id] for picker_name, picks in picks_by_picker.items()},
+            consensus_rule, distance_threshold, tomogram_id,
+        )
+        for tomogram_id in tomogram_ids
+    ]
+    per_tomogram = run_parallel_ordered(jobs, _reconcile_one_tomogram, max_workers=n_workers, label='reconcile-picks')
+    all_reconciled: list[RawPick] = []
+    for tomogram_id, reconciled in zip(tomogram_ids, per_tomogram):
+        log.debug(f'{tomogram_id}: {len(reconciled)} reconciled picks')
+        all_reconciled.extend(reconciled)
+    return all_reconciled
 
 # build_particle_set: turn reconciled picks into a half-set-tagged ParticleSet
 def build_particle_set(

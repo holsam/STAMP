@@ -60,6 +60,10 @@ def pick(
         Literal['local', 'mock'],
         typer.Option('--backend', help='Backend to use for processing.', rich_help_panel = 'Backend'),
     ] = 'local',
+    n_workers: Annotated[
+        int,
+        typer.Option('-n', '--n-processes', help='Processes to use for stamp-native picker (1 = sequential).', rich_help_panel = 'Backend'),
+    ] = 1,
     max_beam_angle_deviation: Annotated[
         float | None,
         typer.Option('--max-beam-angle-deviation', help='Normal deviation from beam-orthogonal plane to drop particles.', rich_help_panel = 'Filtering'),
@@ -116,6 +120,7 @@ def pick(
         distance_threshold=distance_threshold,
         half_set_seed=half_set_seed,
         backend=backend,
+        n_workers=n_workers,
         make_plots=make_plots,
         pick_plot_style=pick_plot_style,
         plot_format=plot_format,

@@ -49,6 +49,10 @@ def identify(
         bool,
         typer.Option('--fetch-missing', help='Fetch an AlphaFold model when a candidate has no local structure_path.', rich_help_panel = 'Backend'),
     ] = False,
+    n_workers: Annotated[
+        int,
+        typer.Option('-n', '--n-processes', help='Number of processes to use for candidate fitting (1 = sequential).', rich_help_panel = 'Backend'),
+    ] = 1,
     make_plots: Annotated[
         bool,
         typer.Option('--plots/--no-plots', help='Write fit-score heatmap and decoy-control histogram plots.', rich_help_panel = 'Plotting'),
@@ -68,6 +72,7 @@ def identify(
         backend=backend,
         fitter=fitter,
         fetch_missing=fetch_missing,
+        n_workers=n_workers,
         make_plots=make_plots,
         plot_format=plot_format,
     )
