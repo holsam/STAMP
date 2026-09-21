@@ -66,6 +66,7 @@ class ClassifyStage(_Strict):
     inplane_angular_step_degrees: float = 10.0
     inplane_iterations: int = 3
     random_state: int = 0
+    n_workers: int = 1
 
 class IdentifyStage(_Strict):
     candidates: Path

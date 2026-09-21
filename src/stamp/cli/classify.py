@@ -95,6 +95,10 @@ def classify(
         int,
         typer.Option(help='Azimuthal sampling points (must be at least 2*(modes+1)).', rich_help_panel = 'Subvolume extraction'),
     ] = 64,
+    n_workers: Annotated[
+        int,
+        typer.Option('-n', '--n-processes', help='Number of processes to use for per-cluster in-plane alignment (1 = sequential).', rich_help_panel = 'In-plane alignment'),
+    ] = 1,
     make_plots: Annotated[
         bool,
         typer.Option('--plots/--no-plots', help='Write embedding and class-average plots.', rich_help_panel = 'Plotting'),
@@ -122,6 +126,7 @@ def classify(
         inplane_alignment=inplane_alignment,
         inplane_angular_step_degrees=inplane_angular_step_degrees,
         inplane_iterations=inplane_iterations,
+        n_workers=n_workers,
         azimuthal_modes=azimuthal_modes,
         min_radius_fraction=min_radius_fraction,
         n_azimuthal_samples=n_azimuthal_samples,

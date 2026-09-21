@@ -103,6 +103,7 @@ def _classify_track(config: RunConfig, output_dir: Path, track: str, particles: 
         inplane_alignment=settings.inplane_alignment,
         inplane_angular_step_degrees=settings.inplane_angular_step_degrees,
         inplane_iterations=settings.inplane_iterations,
+        n_workers=settings.n_workers,
     )
     return target
 

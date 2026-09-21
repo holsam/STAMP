@@ -51,6 +51,7 @@ def run_classify(
     azimuthal_modes = 4,
     min_radius_fraction = 0.25,
     n_azimuthal_samples = 64,
+    n_workers: int = 1,
     make_plots: bool = True,
     plot_format: str = 'tiff',
 ) -> None:
@@ -114,6 +115,7 @@ def run_classify(
         enabled=inplane_alignment,
         angular_step_degrees=inplane_angular_step_degrees,
         iterations=inplane_iterations,
+        n_workers=n_workers,
     )
     if not inplane_alignment:
         log.warning('--no-inplane-alignment: class averages are a rotational average about the membrane normal (Cinf assumed). Downstream fit scores and half-map FSC will reflect the shared radial profile, not a 3D structure.')
@@ -149,6 +151,7 @@ def run_classify(
             'azimuthal_modes': azimuthal_modes,
             'n_azimuthal_samples': n_azimuthal_samples,
             'min_radius_fraction': min_radius_fraction,
+            'n_workers': n_workers,
             'is_decoy': is_decoy,
             'membrane_subtracted': bool(segmentation_paths),
             'n_extracted': len(kept),
@@ -200,6 +203,7 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
         '--seed', str(settings.random_state),
         '--inplane-step-deg', str(settings.inplane_angular_step_degrees),
         '--inplane-iterations', str(settings.inplane_iterations),
+        '-n', str(settings.n_workers),
     ]
     if not settings.strict_halfset_independence:
         argv.append('--no-strict-halfset-independence')
@@ -220,6 +224,7 @@ def _resolve_and_apply_inplane(
         cluster_ids,
         angular_step_degrees=align_settings['angular_step_degrees'],
         iterations=align_settings['iterations'],
+        n_workers=align_settings['n_workers'],
     )
     rolled = np.stack([roll_about_normal(volume, angles.get(index, 0.0)) for index, volume in enumerate(subvolumes)])
     return rolled, angles
