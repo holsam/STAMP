@@ -29,8 +29,9 @@ class RunSettings(_Strict):
 class PlotSettings(_Strict):
     enabled: bool = True
     format: Literal['png', 'jpg', 'tiff', 'svg'] = 'tiff'
-    pick_style: Literal['scatter', 'segmented', 'both'] = 'both'
+    pick_style: Literal['segmented', 'none'] = 'segmented'
     pick_zstack_movie: bool = False
+    pick_plot_3d: bool = False
 
 # DecoySettings: the [decoy] table
 class DecoySettings(_Strict):
@@ -53,6 +54,7 @@ class PickStage(_Strict):
     half_set_seed: int = 0
     backend: Literal['local', 'mock', 'cluster'] | None = None
     n_workers: int = 1
+    keep_raw: bool = False
 
 class ClassifyStage(_Strict):
     method: Literal['hdbscan', 'kmeans'] = 'hdbscan'

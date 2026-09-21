@@ -178,6 +178,20 @@ class TestIo:
     def test_expected_output_dir_resolved(self, tmp_path, command):
         assert io_utils.resolve_output_dir(tmp_path, command) == tmp_path / 'stamp' / command
 
+    def test_archive_and_remove_directory(self, tmp_path):
+        directory = tmp_path / 'raw'
+        directory.mkdir()
+        (directory / 'a.txt').write_text('one')
+        (directory / 'b.txt').write_text('two')
+        archive_path = io_utils.archive_and_remove_directory(directory)
+        assert archive_path == tmp_path / 'raw.tar.gz'
+        assert archive_path.is_file()
+        assert not directory.exists()
+        import tarfile
+        with tarfile.open(archive_path) as tar:
+            names = set(tar.getnames())
+        assert names == {'raw', 'raw/a.txt', 'raw/b.txt'}
+
 class TestIoMatchByStem:
     def test_exact_match(self) -> None:
         raw = [Path('/raw/tomo000.mrc'), Path('/raw/tomo001.mrc')]

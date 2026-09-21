@@ -1,20 +1,20 @@
 '''
-STAMP: pick/decoy position plots — xy scatter, segmentation overlay, Z-stack QC movie
+STAMP: pick/decoy position plots — segmentation/raw overlay, Z-stack QC movie, 3D view
 '''
 
 # Import external dependencies
 import matplotlib.pyplot as plt, mrcfile, numpy as np
 from dataclasses import dataclass
 from matplotlib.animation import FFMpegWriter, FuncAnimation, PillowWriter
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from pathlib import Path
+from skimage import measure
 from typing import Literal
 
 # Import internal STAMP objects
-from stamp.utils.plotting.core import GREEN, PlotFormat, central_slice, finish, plot_path, scatter_groups, show_segmentation
+from stamp.utils.plotting.core import GREEN, GREY, PlotFormat, central_slice, finish, plot_path, show_segmentation
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
-
-_HALF_COLOUR = {'A': '#4da6ff', 'B': '#ff9d4d'}
 
 # _group_by_tomogram: {tomogram_id: [particle, ...]}
 def _group_by_tomogram(particles) -> dict[str, list]:
@@ -23,27 +23,14 @@ def _group_by_tomogram(particles) -> dict[str, list]:
         by_tomogram.setdefault(particle.tomogram_id, []).append(particle)
     return by_tomogram
 
-# _scatter_panel: xy scatter of one tomogram's picks, coloured by half-set
-def _scatter_panel(ax, particles, title: str) -> None:
-    xy = np.array([[p.position[0], p.position[1]] for p in particles])
-    half = np.array([p.half_set.value for p in particles])
-    groups = [(half == letter, colour, f'half {letter} (n={int((half == letter).sum())})') for letter, colour in _HALF_COLOUR.items()]
-    scatter_groups(ax, xy, groups, title)
-    ax.invert_yaxis()
-    ax.set_aspect('equal')
-
-# plot_scatter: xy-scatter panel per tomogram
-def plot_scatter(particles, output_dir: Path, fmt: PlotFormat, stem: str = 'consensus_picks') -> None:
-    by_tomogram = _group_by_tomogram(particles)
-    fig, axes = plt.subplots(1, len(by_tomogram), figsize=(4.2 * len(by_tomogram), 4), squeeze=False)
-    for ax, (tomogram_id, members) in zip(axes[0], sorted(by_tomogram.items())):
-        _scatter_panel(ax, members, tomogram_id)
-    finish(fig, plot_path(output_dir, stem, fmt))
+# _ensure_agg_backend: subprocess-safe headless backend, called at the top of each multiprocessing worker
+def _ensure_agg_backend() -> None:
+    import matplotlib
+    matplotlib.use('Agg', force=True)
 
 # _render_movie_job: multiprocessing worker entry point
 def _render_movie_job(job: _ZstackJob) -> None:
-    import matplotlib
-    matplotlib.use('Agg', force=True)  # subprocess-safe headless backend
+    _ensure_agg_backend()
     with mrcfile.open(str(job.volume_path), permissive=True) as mrc:
         volume = np.asarray(mrc.data)
     _zstack_movie_for_background(
@@ -51,13 +38,33 @@ def _render_movie_job(job: _ZstackJob) -> None:
         job.stem_suffix, _RENDER_PLANE_BY_KIND[job.render_kind], job.fps, job.slab_voxels,
     )
 
-# plot_segmented: segmentation-slice-plus-picks panel per tomogram
+# _SegmentedJob: one tomogram's segmentation-slice-plus-picks plot inputs
+@dataclass(frozen=True)
+class _SegmentedJob:
+    tomogram_id: str
+    picks: np.ndarray
+    segmentation_path: Path
+    output_path: Path
+
+# _render_segmented_job: multiprocessing worker entry point for plot_segmented
+def _render_segmented_job(job: _SegmentedJob) -> None:
+    _ensure_agg_backend()
+    with mrcfile.open(str(job.segmentation_path), permissive=True) as mrc:
+        segmentation = central_slice(np.asarray(mrc.data))
+    fig, ax = plt.subplots(figsize=(4.2, 4))
+    show_segmentation(ax, segmentation, field_px=segmentation.shape[-1], picks=job.picks)
+    ax.set_title(job.tomogram_id, fontsize=9)
+    finish(fig, job.output_path)
+
+# plot_segmented: segmentation-slice-plus-picks plot per tomogram
 def plot_segmented(
     particles,
     segmentation_path_by_tomogram: dict[str, Path],
     output_dir: Path,
     fmt: PlotFormat,
-    stem: str = 'consensus_picks_segmented'
+    stem: str = 'consensus_picks_segmented',
+    *,
+    max_workers: int = 1,
 ) -> None:
     by_tomogram = _group_by_tomogram(particles)
     usable = {tid: members for tid, members in by_tomogram.items() if tid in segmentation_path_by_tomogram}
@@ -67,22 +74,49 @@ def plot_segmented(
     if not usable:
         log.warning('No tomogram has a matching segmentation path, skipping segmented plot')
         return
-    fig, axes = plt.subplots(1, len(usable), figsize=(4.2 * len(usable), 4), squeeze=False)
-    for ax, (tomogram_id, members) in zip(axes[0], sorted(usable.items())):
-        with mrcfile.open(str(segmentation_path_by_tomogram[tomogram_id]), permissive=True) as mrc:
-            segmentation = central_slice(np.asarray(mrc.data))
-        picks = np.array([[p.position[0], p.position[1]] for p in members])
-        show_segmentation(ax, segmentation, field_px=segmentation.shape[-1], picks=picks)
-        ax.set_title(tomogram_id, fontsize=9)
-    finish(fig, plot_path(output_dir, stem, fmt))
+    jobs = [
+        _SegmentedJob(
+            tomogram_id,
+            np.array([[p.position[0], p.position[1]] for p in members]),
+            segmentation_path_by_tomogram[tomogram_id],
+            plot_path(output_dir, f'{stem}_{tomogram_id}', fmt),
+        )
+        for tomogram_id, members in sorted(usable.items())
+    ]
+    run_parallel(jobs, _render_segmented_job, max_workers=max_workers, label='segmented plots')
 
-# plot_raw: raw-tomogram-slice-plus-picks panel per tomogram
+# _RawJob: one tomogram's raw-tomogram-slice-plus-picks plot inputs
+@dataclass(frozen=True)
+class _RawJob:
+    tomogram_id: str
+    picks: np.ndarray
+    raw_path: Path
+    output_path: Path
+
+# _render_raw_job: multiprocessing worker entry point for plot_raw
+def _render_raw_job(job: _RawJob) -> None:
+    _ensure_agg_backend()
+    with mrcfile.open(str(job.raw_path), permissive=True) as mrc:
+        raw_slice = central_slice(np.asarray(mrc.data))
+    fig, ax = plt.subplots(figsize=(4.2, 4))
+    ax.imshow(raw_slice, cmap='Greys_r')
+    if len(job.picks):
+        ax.scatter(job.picks[:, 0], job.picks[:, 1], s=6, c=GREEN)
+    ax.set_xlim(0, raw_slice.shape[-1])
+    ax.set_ylim(raw_slice.shape[-2], 0)
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.set_title(job.tomogram_id, fontsize=9)
+    finish(fig, job.output_path)
+
+# plot_raw: raw-tomogram-slice-plus-picks plot per tomogram
 def plot_raw(
     particles,
     raw_tomogram_path_by_tomogram: dict[str, Path],
     output_dir: Path,
     fmt: PlotFormat,
-    stem: str = 'consensus_picks_raw'
+    stem: str = 'consensus_picks_raw',
+    *,
+    max_workers: int = 1,
 ) -> None:
     by_tomogram = _group_by_tomogram(particles)
     usable = {tid: members for tid, members in by_tomogram.items() if tid in raw_tomogram_path_by_tomogram}
@@ -92,19 +126,16 @@ def plot_raw(
     if not usable:
         log.warning('No tomogram has a matching raw tomogram path, skipping raw plot')
         return
-    fig, axes = plt.subplots(1, len(usable), figsize=(4.2 * len(usable), 4), squeeze=False)
-    for ax, (tomogram_id, members) in zip(axes[0], sorted(usable.items())):
-        with mrcfile.open(str(raw_tomogram_path_by_tomogram[tomogram_id]), permissive=True) as mrc:
-            raw_slice = central_slice(np.asarray(mrc.data))
-        picks = np.array([[p.position[0], p.position[1]] for p in members])
-        ax.imshow(raw_slice, cmap='Greys_r')
-        if len(picks):
-            ax.scatter(picks[:, 0], picks[:, 1], s=18, c=GREEN)
-        ax.set_xlim(0, raw_slice.shape[-1])
-        ax.set_ylim(raw_slice.shape[-2], 0)
-        ax.set_xticks([]); ax.set_yticks([])
-        ax.set_title(tomogram_id, fontsize=9)
-    finish(fig, plot_path(output_dir, stem, fmt))
+    jobs = [
+        _RawJob(
+            tomogram_id,
+            np.array([[p.position[0], p.position[1]] for p in members]),
+            raw_tomogram_path_by_tomogram[tomogram_id],
+            plot_path(output_dir, f'{stem}_{tomogram_id}', fmt),
+        )
+        for tomogram_id, members in sorted(usable.items())
+    ]
+    run_parallel(jobs, _render_raw_job, max_workers=max_workers, label='raw plots')
 
 # _zstack_movie_for_background: one movie, given a Z-stack volume and how to render each plane
 def _zstack_movie_for_background(
@@ -120,7 +151,7 @@ def _zstack_movie_for_background(
     have_ffmpeg = FFMpegWriter.isAvailable()
     fig, ax = plt.subplots(figsize=(5, 5))
     images = render_plane(ax, volume, 0)
-    scatter = ax.scatter([], [], s=18, c=GREEN)
+    scatter = ax.scatter([], [], s=6, c=GREEN)
     ax.set_xlim(0, volume.shape[-1])
     ax.set_ylim(volume.shape[-2], 0)
     ax.set_title(f'{tomogram_id}: z=0/{volume.shape[0] - 1}', fontsize=9)
@@ -139,13 +170,13 @@ def _zstack_movie_for_background(
         try:
             animation.save(path, writer=FFMpegWriter(fps=fps))
         except Exception as exc:
-            log.warning(f'ffmpeg failed writing {path.name} ({exc}), falling back to .gif')
+            log.debug(f'ffmpeg failed writing {path.name} ({exc}), falling back to .gif')
             have_ffmpeg = False
     if not have_ffmpeg:
         path = path.with_suffix('.gif')
         animation.save(path, writer=PillowWriter(fps=fps))
     plt.close(fig)
-    log.info(f'Wrote Z-stack movie: {path}')
+    log.debug(f'Wrote Z-stack movie: {path}')
 
 # _render_segmentation_plane: segmentation background renderer for _zstack_movie_for_background
 def _render_segmentation_plane(
@@ -219,29 +250,87 @@ def plot_zstack_movie(
         log.warning(f'{job.tomogram_id}: Z-stack movie render failed ({exc})')
     run_parallel(jobs, _render_movie_job, max_workers=max_workers, label='zstack movies', on_error=_on_error)
 
-# plot_positions: segmented/movie degrades to scatter-only when no segmentation paths are given
+# _Scatter3DJob: one tomogram's 3D visualisation inputs
+@dataclass(frozen=True)
+class _Scatter3DJob:
+    tomogram_id: str
+    positions: np.ndarray  # (n, 3): x, y, z
+    segmentation_path: Path | None
+    output_path: Path
+
+# _render_3d_job: multiprocessing worker entry point for plot_3d
+def _render_3d_job(job: _Scatter3DJob) -> None:
+    _ensure_agg_backend()
+    fig = plt.figure(figsize=(6, 6))
+    ax = fig.add_subplot(projection='3d')
+    if job.segmentation_path is not None:
+        with mrcfile.open(str(job.segmentation_path), permissive=True) as mrc:
+            segmentation = np.asarray(mrc.data)
+        # downsample so marching_cubes/rendering stays fast on full-size tomograms
+        step = max(1, max(segmentation.shape) // 128)
+        membrane = (segmentation[::step, ::step, ::step] == 1).astype(np.float32)
+        if membrane.any() and membrane.min() != membrane.max():
+            verts, faces, _normals, _values = measure.marching_cubes(membrane, level=0.5)
+            verts *= step
+            mesh = Poly3DCollection(verts[faces], alpha=0.15, facecolor=GREY, edgecolor='none')
+            ax.add_collection3d(mesh)
+        ax.set_xlim(0, segmentation.shape[2])
+        ax.set_ylim(0, segmentation.shape[1])
+        ax.set_zlim(0, segmentation.shape[0])
+    if len(job.positions):
+        ax.scatter(job.positions[:, 0], job.positions[:, 1], job.positions[:, 2], s=6, c=GREEN, depthshade=True)
+    ax.set_title(job.tomogram_id, fontsize=9)
+    ax.set_xlabel('x'); ax.set_ylabel('y'); ax.set_zlabel('z')
+    finish(fig, job.output_path)
+
+# plot_3d: 3D scatter of picks, with a coarse membrane surface when a segmentation is available
+def plot_3d(
+    particles,
+    output_dir: Path,
+    fmt: PlotFormat,
+    segmentation_path_by_tomogram: dict[str, Path] | None = None,
+    stem: str = 'consensus_picks_3d',
+    *,
+    max_workers: int = 1,
+) -> None:
+    by_tomogram = _group_by_tomogram(particles)
+    jobs = [
+        _Scatter3DJob(
+            tomogram_id,
+            np.array([p.position for p in members]),
+            (segmentation_path_by_tomogram or {}).get(tomogram_id),
+            plot_path(output_dir, f'{stem}_{tomogram_id}', fmt),
+        )
+        for tomogram_id, members in sorted(by_tomogram.items())
+    ]
+    run_parallel(jobs, _render_3d_job, max_workers=max_workers, label='3D plots')
+
+# plot_positions: raw/3D degrade to nothing when no matching path is given; segmented needs a segmentation path
 def plot_positions(
     particles,
     output_dir: Path,
-    style: str,  # 'scatter' | 'segmented' | 'both'
+    style: str,  # 'segmented' | 'none' — kept as a style knob for future plot kinds
     fmt: PlotFormat,
     segmentation_path_by_tomogram: dict[str, Path] | None = None,
     raw_tomogram_path_by_tomogram: dict[str, Path] | None = None,
     *,
     zstack_movie: bool = False,
+    plot_3d_view: bool = False,
     max_workers: int = 1,
 ) -> None:
-    if style in ('scatter', 'both'):
-        plot_scatter(particles, output_dir, fmt)
-    if style in ('segmented', 'both'):
+    plots_dir = output_dir / 'plots'
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    if style == 'segmented':
         if not segmentation_path_by_tomogram:
             log.warning(f'--pick-plot-style={style} but no segmentation found, skipping the segmented panel')
         else:
-            plot_segmented(particles, segmentation_path_by_tomogram, output_dir, fmt)
+            plot_segmented(particles, segmentation_path_by_tomogram, plots_dir, fmt, max_workers=max_workers)
     if raw_tomogram_path_by_tomogram:
-        plot_raw(particles, raw_tomogram_path_by_tomogram, output_dir, fmt)
+        plot_raw(particles, raw_tomogram_path_by_tomogram, plots_dir, fmt, max_workers=max_workers)
     if zstack_movie:
         if not segmentation_path_by_tomogram and not raw_tomogram_path_by_tomogram:
             log.warning('--pick-zstack-movie but no segmentation or raw tomogram found, skipping')
         else:
-            plot_zstack_movie(particles, segmentation_path_by_tomogram or {}, output_dir, raw_tomogram_path_by_tomogram, max_workers=max_workers)
+            plot_zstack_movie(particles, segmentation_path_by_tomogram or {}, plots_dir, raw_tomogram_path_by_tomogram, max_workers=max_workers)
+    if plot_3d_view:
+        plot_3d(particles, plots_dir, fmt, segmentation_path_by_tomogram, max_workers=max_workers)

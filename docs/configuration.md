@@ -30,8 +30,9 @@ n_workers = 1
 [plots]
 enabled = true
 format = "tiff"                                 # png | jpg | tiff | svg
-pick_style = "both"                             # scatter | segmented | both
+pick_style = "segmented"                        # segmented | none
 pick_zstack_movie = false
+pick_plot_3d = false
 
 [stage.pick]
 pickers = ["stamp-native"]
@@ -110,8 +111,9 @@ Key | Type | Default
 -- | -- | --
 `enabled` | bool | `True`
 `format` | `png`\|`jpg`\|`tiff`\|`svg` | `tiff`
-`pick_style` | `scatter`\|`segmented`\|`both` | `both`
+`pick_style` | `segmented`\|`none` | `segmented`
 `pick_zstack_movie` | bool | `False`
+`pick_plot_3d` | bool | `False`
 
 ### `[stage.pick]`
 

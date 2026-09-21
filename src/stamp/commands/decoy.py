@@ -48,9 +48,10 @@ def run_decoy(
     seed,
     n_workers: int = 1,
     make_plots: bool = True,
-    pick_plot_style: str = 'both',
+    pick_plot_style: str = 'segmented',
     plot_format: str = 'tiff',
     pick_zstack_movie: bool = True,
+    pick_plot_3d: bool = False,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data'''
     if voxel_size_angstrom is None:
@@ -146,8 +147,8 @@ def run_decoy(
     log.info(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
     if make_plots:
         segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests} if method != METHOD_SYNTHETIC_NOISE else {}
-        style = pick_plot_style if segmentation_paths else 'scatter'
-        plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths))
+        style = pick_plot_style if segmentation_paths else 'none'
+        plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths), plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
 
 # build_decoy_commands: create ToolCommand for `stamp decoy`
@@ -169,6 +170,8 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
     argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
     if config.plots.pick_zstack_movie:
         argv.append('--pick-zstack-movie')
+    if config.plots.pick_plot_3d:
+        argv.append('--pick-plot-3d')
     return [ToolCommand(tool='decoy', argv=argv, working_directory=target, output_paths=[target / 'decoy_particle_set.json'])]
 
 
