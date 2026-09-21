@@ -40,23 +40,6 @@ def plot_scatter(particles, output_dir: Path, fmt: PlotFormat, stem: str = 'cons
         _scatter_panel(ax, members, tomogram_id)
     finish(fig, plot_path(output_dir, stem, fmt))
 
-# _ZstackJob: one Z-stack movie's inputs
-@dataclass(frozen=True)
-class _ZstackJob:
-    tomogram_id: str
-    positions: np.ndarray
-    volume_path: Path
-    output_dir: Path
-    stem_suffix: str
-    render_kind: Literal['segmentation', 'raw']
-    fps: int
-    slab_voxels: float
-
-_RENDER_PLANE_BY_KIND = {
-    'segmentation': _render_segmentation_plane,
-    'raw': _render_raw_plane,
-}
-
 # _render_movie_job: multiprocessing worker entry point
 def _render_movie_job(job: _ZstackJob) -> None:
     import matplotlib
@@ -191,6 +174,23 @@ def _render_raw_plane(
         return (ax.imshow(volume[z], cmap='Greys_r'),)
     images[0].set_data(volume[z])
     return images
+
+# _ZstackJob: one Z-stack movie's inputs
+@dataclass(frozen=True)
+class _ZstackJob:
+    tomogram_id: str
+    positions: np.ndarray
+    volume_path: Path
+    output_dir: Path
+    stem_suffix: str
+    render_kind: Literal['segmentation', 'raw']
+    fps: int
+    slab_voxels: float
+
+_RENDER_PLANE_BY_KIND = {
+    'segmentation': _render_segmentation_plane,
+    'raw': _render_raw_plane,
+}
 
 # plot_zstack_movie: one movie per tomogram (segmentation background, plus raw background if given)
 def plot_zstack_movie(
