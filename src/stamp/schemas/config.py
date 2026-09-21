@@ -43,6 +43,7 @@ class DecoySettings(_Strict):
     max_shift_angstrom: float = 600.0
     n_synthetic_tomograms: int = 3
     synthetic_shape_voxels: tuple[int, int, int] | None = None  # None = match the first real tomogram
+    n_workers: int = 1
 
 # Per-stage tables mirror each command's options
 class PickStage(_Strict):

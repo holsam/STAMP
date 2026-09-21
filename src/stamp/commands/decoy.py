@@ -46,6 +46,7 @@ def run_decoy(
     n_synthetic_tomograms,
     synthetic_shape,
     seed,
+    n_workers: int = 1,
     make_plots: bool = True,
     pick_plot_style: str = 'both',
     plot_format: str = 'tiff',
@@ -76,6 +77,7 @@ def run_decoy(
             output_dir=output_dir,
             config=config,
             seed=seed,
+            n_workers=n_workers,
         )
         (output_dir / 'decoy_manifests.json').write_text(
             json.dumps([m.model_dump(mode='json') for m in decoy_manifests], indent=2)
@@ -94,6 +96,7 @@ def run_decoy(
                 n_decoys_per_tomogram=n_decoys_per_tomogram,
                 min_distance_from_real_angstrom=min_distance_from_real_angstrom,
                 seed=seed,
+                n_workers=n_workers,
             )
         else:
             decoy_set = generate_shifted_decoys(
@@ -105,6 +108,7 @@ def run_decoy(
                 min_distance_from_surface_angstrom=min_distance_from_real_angstrom,
                 min_pick_distance=min_distance_from_picks_angstrom,
                 seed=seed,
+                n_workers=n_workers,
             )
 
     if decoy_set is None or not decoy_set.particles:
@@ -159,6 +163,7 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--seg-dir', str(config.run.segmentation_dir),
         '--raw-dir', str(config.run.raw_tomogram_dir),
         '--seed', str(config.stage.pick.half_set_seed),
+        '--n-workers', str(config.decoy.n_workers),
     ]
     argv.append('--plots' if config.plots.enabled else '--no-plots')
     argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]

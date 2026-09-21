@@ -80,6 +80,10 @@ def decoy(
         int,
         typer.Option('--seed', help='Seed for sampling and half-set assignment.', rich_help_panel = 'Decoy placement'),
     ] = 0,
+    n_workers: Annotated[
+        int,
+        typer.Option('-n', '--n-processes', help='Number of processes to use for per-tomogram decoy generation (1 = sequential).', rich_help_panel = 'Decoy placement'),
+    ] = 1,
     make_plots: Annotated[
         bool,
         typer.Option('--plots/--no-plots', help='Write decoy position plots.', rich_help_panel = 'Plotting'),
@@ -129,6 +133,7 @@ def decoy(
         n_synthetic_tomograms=n_synthetic_tomograms,
         synthetic_shape=synthetic_shape,
         seed=seed,
+        n_workers=n_workers,
         make_plots=make_plots,
         pick_plot_style=pick_plot_style,
         plot_format=plot_format,

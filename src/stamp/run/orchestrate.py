@@ -78,6 +78,7 @@ def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) ->
         n_synthetic_tomograms=config.decoy.n_synthetic_tomograms,
         synthetic_shape=','.join(str(dimension) for dimension in shape),
         seed=config.stage.pick.half_set_seed,
+        n_workers=config.decoy.n_workers,
     )
     return target / 'decoy_particle_set.json'
 
