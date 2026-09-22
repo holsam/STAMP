@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import internal commands
-from stamp.cli import classify, decoy, identify, pick, refine, run, tools
+from stamp.cli import classify, config, decoy, identify, pick, refine, run, tools
 from stamp.utils.errors import StampError
 from stamp.utils.log import configure_logging, log
 
@@ -28,6 +28,12 @@ stamp_app.add_typer(classify.classifyCli)
 stamp_app.add_typer(identify.identifyCli)
 stamp_app.add_typer(refine.refineCli)
 stamp_app.add_typer(run.runCli)
+stamp_app.add_typer(
+    config.configCli,
+    name='config',
+    help='Manage stamp_run.toml config files.',
+    rich_help_panel='Utilities',
+)
 stamp_app.add_typer(
     tools.toolsCli,
     name='tools',
