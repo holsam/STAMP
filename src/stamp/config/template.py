@@ -12,9 +12,9 @@ TEMPLATE = '''\
 segmentation_dir = "data/seg"               # --seg-dir
 raw_tomogram_dir = "data/tomo"              # --raw-dir
 output_dir = "."                            # output directory for each stage
-voxel_size_angstrom = None                  # --voxel-size-a
+voxel_size_angstrom = ""                    # --voxel-size-a  (blank = auto-detect from tomogram headers)
 backend = "local"                           # --backend  (local|mock|cluster; per-stage backends below override)
-# stop_after = "identify"                   # optional; pick|classify|identify|refine
+stop_after = ""                             # optional; blank|pick|classify|identify|refine
 
 [decoy]
 enabled = true                              # --no-decoy
@@ -26,7 +26,7 @@ min_shift_angstrom = 200.0
 max_shift_angstrom = 600.0
 n_synthetic_tomograms = 3
 n_workers = 1
-# synthetic_shape_voxels = [128, 128, 128]  # default: match first real tomogram
+synthetic_shape_voxels = ""                 # blank = match first real tomogram, or e.g. [128, 128, 128]
 
 [plots]
 enabled = true
@@ -42,7 +42,7 @@ distance_threshold = 15.0                   # --distance-threshold
 half_set_seed = 0                           # --half-set-seed
 n_workers = 1
 keep_raw = false
-# backend = "local"                         # defaults to [run].backend
+backend = ""                                # blank = defaults to [run].backend
 
 [stage.classify]
 method = "hdbscan"                          # --method  (hdbscan|kmeans)
@@ -64,12 +64,12 @@ resolution = 25.0                           # --resolution  (required unless sto
 fitter = "native"                           # --fitter
 fetch_missing = false                       # --fetch-missing
 n_workers = 1
-# backend = "local"                         # defaults to [run].backend
+backend = ""                                # blank = defaults to [run].backend
 
 [stage.refine]
 tool = "relion"                             # --tool  (relion|m)
 class_id = "all"                            # --class-id  (or a single class N)
 iterations = 5                              # --iterations
-# mask = "data/mask.mrc"                    # --mask  (else soft sphere)
-# backend = "local"                         # defaults to [run].backend
+mask = ""                                   # --mask  (blank = soft sphere)
+backend = ""                                # blank = defaults to [run].backend
 '''
