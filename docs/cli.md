@@ -11,6 +11,9 @@ This document outlines the available command-line options for each STAMP command
 - [`stamp identify`](#stamp-identify)
 - [`stamp refine`](#stamp-refine)
 - [`stamp run`](#stamp-run)
+- [`stamp config`](#stamp-config)
+- [`stamp filter`](#stamp-filter)
+- [`stamp plot`](#stamp-plot)
 - [`stamp tools`](#stamp-tools)
     - [`stamp tools diagram`](#stamp-tools-diagram)
     - [`stamp tools completion`](#stamp-tools-completion)
@@ -199,6 +202,84 @@ Option | Default | Use
 `--backend` | `None` | Override configuration files's default backend
 
 See the [configuration documentation](./configuration.md) for information about `stamp_run.toml`.
+
+<br>
+
+## `stamp config`
+
+### `stamp config init`
+```
+stamp config init --path PATH [options]
+```
+
+Create an annotated, blank `stamp_run.toml` file.
+
+Argument/Option | Default | Use
+-- | -- | --
+`--path` | `.` | Directory to write `stamp_run.toml` into, or path to `stamp_run.toml`
+`-f, --force` | `False` | Overwrite an existing `stamp_run.toml`
+
+### `stamp config edit`
+```
+stamp config edit <path> [options]
+```
+
+Edit a `stamp_run.toml` file directly in terminal.
+
+Argument/Option | Default | Use
+-- | -- | --
+`path` (positional) | `.` | Directory containing `stamp_run.toml`, or path to `stamp_run.toml`
+`--editor` | `None` *(falls back to `$EDITOR`, then `vi`)* | Editor to use instead of `$EDITOR`
+
+### `stamp config show`
+```
+stamp config show <path>
+```
+
+Print the contents of a `stamp_run.toml` to the terminal.
+
+Argument/Option | Default | Use
+-- | -- | --
+`path` (positional) | `.` | Directory containing `stamp_run.toml`, or path to `stamp_run.toml`
+
+<br>
+
+## `stamp filter`
+```
+stamp filter filter <particle_set.json> -s SEG_DIR -r RAW_DIR
+```
+
+Argument/Option | Default | Use
+-- | -- | --
+`particle_set` (positional) | *n/a (required)* | `particle_set.json` from `stamp pick`
+`-s, --seg-dir` | `None` | Directory of segmentation MRCs, matched to particles by `tomogram_id`
+`-r, --raw-dir` | `None` | Directory of raw tomogram MRCs, matched to particles by `tomogram_id`
+
+<br>
+
+## `stamp plot`
+
+### `stamp plot pick`
+```
+stamp plot pick <particle_set.json> [options]
+```
+
+Renders position plots for an already-picked particle set, without re-running picking.
+
+Argument/Option | Default | Use
+-- | -- | --
+`particle_set` (positional) | *n/a (required)* | `particle_set.json` (from `stamp pick`) or `decoy_particle_set.json` (from `stamp decoy`)
+`-s, --seg-dir` | `None` | Directory of segmented MRC files
+`-r, --raw-dir` | `None` | Directory of raw tomogram MRCs
+`-o, --out-dir` | `.` | Directory to write plots to
+`--pick-plot-style` | `segmented` | Plot style to use (`segmented` or `none`)
+`--plot-format` | `tiff` | Image format for static plots (`png` or `jpg` or `tiff` or `svg`)
+`--pick-zstack-movie/--no-pick-zstack-movie` | `--pick-zstack-movie` | Write a per-tomogram movie through Z with picks highlighted
+`--pick-plot-3d/--no-pick-plot-3d` | `--no-pick-plot-3d` | Write a static 3D pick visualisation per tomogram
+`--tomogram-ids` | `None` | Comma-separated tomogram IDs to plot. Mutually exclusive with `--n-tomograms`
+`--n-tomograms` | `None` | Randomly select this many tomograms to plot. Mutually exclusive with `--tomogram-ids`
+`--seed` | `0` | Seed for random tomogram selection
+`-n, --n-processes` | `1` | Processes to use for plot rendering (1 = sequential)
 
 <br>
 
