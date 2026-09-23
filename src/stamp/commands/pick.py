@@ -218,7 +218,7 @@ def run_pick(
     half_set_seed,
     backend,
     n_workers: int = 1,
-    make_plots: bool = True,
+    make_plots: bool = False,
     pick_plot_style: str = 'segmented',
     plot_format: str = 'tiff',
     pick_zstack_movie: bool = True,

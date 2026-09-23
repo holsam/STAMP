@@ -86,8 +86,8 @@ def decoy(
     ] = 1,
     make_plots: Annotated[
         bool,
-        typer.Option('--plots/--no-plots', help='Write decoy position plots.', rich_help_panel = 'Plotting'),
-    ] = True,
+        typer.Option('--plots', help='Write decoy position plots.', rich_help_panel = 'Plotting'),
+    ] = False,
     pick_plot_style: Annotated[
         Literal['segmented', 'none'],
         typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel = 'Plotting'),
