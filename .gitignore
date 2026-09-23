@@ -17,7 +17,6 @@ stamp.log
 
 # Tool input/output files
 *.pdb
-*.png
 
 # Virtual environments
 .venv

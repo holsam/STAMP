@@ -1,0 +1,7 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="color:#E6E6E6">
+<mask id="reject-all-cutout">
+<rect x="0" y="0" width="24" height="24" fill="#fff"/>
+<path d="M8.4 8.4l7.2 7.2M15.6 8.4l-7.2 7.2" stroke="#000" stroke-width="1.8" stroke-linecap="round"/>
+</mask>
+<circle cx="12" cy="12" r="9.2" fill="currentColor" mask="url(#reject-all-cutout)"/>
+</svg>
