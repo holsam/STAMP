@@ -8,7 +8,6 @@ from typing import Annotated
 import typer
 
 # Import internal STAMP objects
-from stamp.filter.app import run_filter_gui
 from stamp.filter.state import load_filter_state
 
 # Initialise Typer app
@@ -33,6 +32,11 @@ def filter_picks(
     '''Open an interactive GUI to review consensus picks against their segmentation/raw tomogram.'''
     if segmentation_dir is None and raw_tomogram_dir is None:
         raise typer.BadParameter('At least one of --seg-dir or --raw-dir is required.')
+    # If tkinter absent (eg headless install), keep rest of CLI importable without it
+    try:
+        from stamp.filter.app import run_filter_gui
+    except ImportError as exc:
+        raise typer.BadParameter('tkinter not available, stamp filter command unsupported on headless installs.') from exc
     output_dir = particle_set.parent
     state = load_filter_state(particle_set, segmentation_dir, raw_tomogram_dir, output_dir=output_dir)
     run_filter_gui(state, output_dir)
