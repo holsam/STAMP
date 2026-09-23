@@ -12,16 +12,23 @@ from typing import Literal
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.log import log
 
-# _Strict: reject unknown keys
+# _Strict: reject unknown keys, treat "" as unset
 class _Strict(BaseModel):
     model_config = ConfigDict(extra='forbid')
+
+    @model_validator(mode='before')
+    @classmethod
+    def _blank_to_none(cls, data: object) -> object:
+        if isinstance(data, dict):
+            return {key: (None if value == '' else value) for key, value in data.items()}
+        return data
 
 # RunSettings: the [run] table
 class RunSettings(_Strict):
     segmentation_dir: Path
     raw_tomogram_dir: Path
     output_dir: Path
-    voxel_size_angstrom: float
+    voxel_size_angstrom: float | None = None
     backend: Literal['local', 'mock', 'cluster'] = 'local'
     stop_after: Literal['pick', 'classify', 'identify', 'refine'] | None = None
 

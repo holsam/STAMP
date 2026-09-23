@@ -47,6 +47,7 @@ File | Covers
 `test_decoy_command.py` | `stamp decoy` command (including each decoy method)
 `test_identify_command.py` | `stamp identify` command (including decoy-control comparison)
 `test_pick_command.py` | `stamp pick` command
+`test_plot_command.py` | `stamp plot` command group
 `test_refine_command.py` | `stamp refine` command (including half-set tree layout)
 `test_run_command.py` | `stamp run` STAMP pipeline from a `stamp_run.toml` configuration file (including resume/`--from` behaviour and `--no-decoy`)
 
@@ -59,7 +60,9 @@ File | Covers
 `test_backends.py` | `select_runner`, `check_backend_supports`, `LocalRunner`/`ClusterRunner`/`MockRunner`
 `test_classify.py` |  Extraction, coordinate-convention correctness, rotational/azimuthal features, clustering, class averages
 `test_cli.py` | Typer app wiring
+`test_config.py` | Configuration management functions (`init_config`, `edit_config`, `show_config`), `_resolve_config_path`
 `test_decoy.py` | Decoy generation methods (`rejected-surface`, `shifted`, `synthetic-noise`), `assert_comparable`
+`test_filter.py` | Particle set filter state functions
 `test_identify.py` | Candidate panel loading, fitting, ranking, decoy-control evaluation
 `test_picking.py` | Native picker geometry: surface extraction, ray sampling, scoring, normalisation, NMS, quaternion orientation, coordinate-order correctness
 `test_refine.py` | Half-set splitting/guards, FSC computation, refine output tree
