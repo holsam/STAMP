@@ -19,10 +19,9 @@ from stamp.decoy.generate import (
 from stamp.decoy.validate import assert_comparable
 from stamp.picking.native import NativePickerConfig
 from stamp.run.state import stage_dir
-from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 
@@ -85,7 +84,7 @@ def run_decoy(
         )
     else:
         real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
-        manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
+        manifests = load_tomogram_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
         if not manifests:
             raise StampPipelineError('No matched segmentation/tomogram pairs found')
 
@@ -173,23 +172,3 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
     if config.plots.pick_plot_3d:
         argv.append('--pick-plot-3d')
     return [ToolCommand(tool='decoy', argv=argv, working_directory=target, output_paths=[target / 'decoy_particle_set.json'])]
-
-
-# _load_manifests: match segmentations to raw tomograms by filename stem
-def _load_manifests(
-    segmentation_dir: Path, raw_tomogram_dir: Path, voxel_size_angstrom: float
-) -> list[TomogramManifest]:
-    raw_by_stem = {path.stem: path for path in sorted(raw_tomogram_dir.glob('*.mrc'))}
-    segmentation_paths = sorted(segmentation_dir.glob('*.mrc'))
-    manifests = [
-        TomogramManifest(
-            tomogram_id=segmentation_path.stem,
-            segmentation_path=segmentation_path,
-            raw_tomogram_path=raw_by_stem[segmentation_path.stem],
-            voxel_size_angstrom=voxel_size_angstrom,
-        )
-        for segmentation_path in segmentation_paths
-        if segmentation_path.stem in raw_by_stem
-    ]
-    log.debug(f'{len(manifests)} matched of {len(segmentation_paths)} segmentation files')
-    return manifests
