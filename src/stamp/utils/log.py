@@ -95,21 +95,6 @@ def resolve_log_directory(specified_dir: Path | None):
     # If all options exhausted, raise an error
     raise PermissionError('No writable directory found for log file')
 
-# -- resolve_log_path: returns a tuple of Path and bool, indicating the path to the final log file and whether the header needs to be written to it
-def resolve_log_path(
-    directory: Path,
-    mode: str
-) -> Path:
-    path = directory / DEFAULT_LOG_NAME
-    if mode == 'overwrite':
-        return path
-    if mode == 'new':
-        return _next_available_path(path)
-    if mode == 'append':
-        write_header = not path.exists()
-        return path
-    raise ValueError(f'Unknown mode {mode!r}, expected one of: overwrite, new, append')
-
 # _worker_log_config: (level_name, log_path) as configured by main STAMP process
 _worker_log_config: tuple[str, Path | None] | None = None
 
