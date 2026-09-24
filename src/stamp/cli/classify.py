@@ -109,6 +109,10 @@ def classify(
         Literal['png', 'jpg', 'tiff', 'svg'],
         typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
     ] = 'tiff',
+    keep_raw: Annotated[
+        bool,
+        typer.Option('--keep-raw', help='Keep the raw per-tomogram subvolume cache instead of archiving it to raw.tar.gz.'),
+    ] = False,
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
     is_decoy = is_decoy_particle_set(ParticleSet.model_validate(json.loads(particles.read_text())))
@@ -135,4 +139,5 @@ def classify(
         n_azimuthal_samples=n_azimuthal_samples,
         make_plots=make_plots,
         plot_format=plot_format,
+        keep_raw=keep_raw,
     )

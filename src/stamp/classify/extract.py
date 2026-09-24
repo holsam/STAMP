@@ -5,6 +5,7 @@ STAMP: subvolume extraction
 # Import external dependencies
 import mrcfile, numpy as np
 from dataclasses import dataclass
+from pathlib import Path
 from scipy.ndimage import map_coordinates
 
 # Import STAMP schema
@@ -69,6 +70,7 @@ class _ExtractTomogramJob:
     tomogram_path: str
     segmentation_path: str | None
     box_voxels: int
+    cache_dir: Path | None = None
 
 # _extract_one_tomogram: worker entry point — loads one tomogram and extracts subvolumes for its particles
 def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], list[Particle], list[np.ndarray]]:
@@ -92,6 +94,10 @@ def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], lis
             continue
         subvolumes.append(extract_subvolume(tomogram, particle.position, particle.orientation, job.box_voxels))
         kept.append(particle)
+    # cache to disk once tomogram finishes
+    if subvolumes and job.cache_dir is not None:
+        job.cache_dir.mkdir(parents=True, exist_ok=True)
+        np.save(job.cache_dir / f'{job.tomogram_id}.npy', np.stack(subvolumes))
     return kept, skipped, subvolumes
 
 # extract_particle_set: extract subvolumes for a list of particles
@@ -101,13 +107,13 @@ def extract_particle_set(
     box_voxels: int,
     segmentation_paths: dict[str, str] | None = None,
     n_workers: int = 1,
+    cache_dir: Path | None = None,
 ) -> tuple[np.ndarray, list[Particle], list[Particle]]:
     by_tomogram: dict[str, list[Particle]] = {}
     for particle in particles:
         by_tomogram.setdefault(particle.tomogram_id, []).append(particle)
 
     segmentation_paths = segmentation_paths or {}
-    subvolumes: list[np.ndarray] = []
     kept: list[Particle] = []
     skipped: list[Particle] = []
 
@@ -118,13 +124,13 @@ def extract_particle_set(
             log.warning(f'{tomogram_id}: no matching raw tomogram path, skipping {len(group)} particle(s)')
             skipped.extend(group)
             continue
-        jobs.append(_ExtractTomogramJob(tomogram_id, group, path, segmentation_paths.get(tomogram_id), box_voxels))
+        jobs.append(_ExtractTomogramJob(tomogram_id, group, path, segmentation_paths.get(tomogram_id), box_voxels, cache_dir))
 
-    # keep results ordered by input tomogram order so kept/subvolumes stay aligned deterministically
-    result_by_tomogram: dict[str, tuple[list[Particle], list[Particle], list[np.ndarray]]] = {}
+    result_by_tomogram: dict[str, tuple[list[Particle], list[Particle]]] = {}
 
     def _on_success(job: _ExtractTomogramJob, result: tuple[list[Particle], list[Particle], list[np.ndarray]]) -> None:
-        result_by_tomogram[job.tomogram_id] = result
+        tomogram_kept, tomogram_skipped, _subvolumes = result
+        result_by_tomogram[job.tomogram_id] = (tomogram_kept, tomogram_skipped)
 
     def _on_error(job: _ExtractTomogramJob, exc: Exception) -> None:
         if isinstance(exc, StampValidationError):
@@ -135,16 +141,19 @@ def extract_particle_set(
 
     run_parallel(jobs, _extract_one_tomogram, max_workers=n_workers, label='subvolume-extraction', on_success=_on_success, on_error=_on_error)
 
+    parts: list[np.ndarray] = []
     for job in jobs:
         result = result_by_tomogram.get(job.tomogram_id)
         if result is None:
             continue
-        tomogram_kept, tomogram_skipped, tomogram_subvolumes = result
+        tomogram_kept, tomogram_skipped = result
         kept.extend(tomogram_kept)
         skipped.extend(tomogram_skipped)
-        subvolumes.extend(tomogram_subvolumes)
+        cache_path = job.cache_dir / f'{job.tomogram_id}.npy' if job.cache_dir is not None else None
+        if cache_path is not None and cache_path.exists():
+            parts.append(np.load(cache_path, mmap_mode='r'))
 
     log.debug(f'extract_particle_set: {len(kept)} kept, {len(skipped)} skipped')
-    if not subvolumes:
+    if not parts:
         return np.empty((0, box_voxels, box_voxels, box_voxels)), kept, skipped
-    return np.stack(subvolumes), kept, skipped
+    return np.concatenate(parts, axis=0), kept, skipped

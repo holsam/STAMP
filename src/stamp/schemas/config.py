@@ -76,6 +76,7 @@ class ClassifyStage(_Strict):
     inplane_iterations: int = 3
     random_state: int = 0
     n_workers: int = 1
+    keep_raw: bool = False
 
 class IdentifyStage(_Strict):
     candidates: Path
