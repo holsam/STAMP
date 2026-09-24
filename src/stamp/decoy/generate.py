@@ -42,6 +42,10 @@ class _RejectedSurfaceJob:
 # _ScoreSurfaceResult: type alias for _score_surface's return shape
 _ScoreSurfaceResult = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
+# _adaptive_decoy_count: target decoy count derived from a tomogram's real pick count
+def _adaptive_decoy_count(n_real_picks: int, *, target_ratio: float = 1.0) -> int:
+    return max(1, round(n_real_picks * target_ratio))
+
 # _score_one_tomogram: worker entry point, isolates StampValidationError per tomogram for on_error
 def _score_one_tomogram(job: _RejectedSurfaceJob) -> _ScoreSurfaceResult:
     return _score_surface(job.manifest, job.config)
@@ -51,14 +55,14 @@ def generate_rejected_surface_decoys(
     real_particle_set: ParticleSet,
     manifests: list[TomogramManifest],
     config: NativePickerConfig,
-    n_decoys_per_tomogram: int,
+    n_decoys_per_tomogram: int | None,
     min_distance_from_real_angstrom: float,
     seed: int,
     *,
     n_workers: int = 1,
     output_dir: Path | None = None,
 ) -> ParticleSet | None:
-    log.progress(f'Generating rejected-surface decoys ({n_decoys_per_tomogram}/tomogram)')
+    log.progress(f'Generating rejected-surface decoys ({n_decoys_per_tomogram or "adaptive n"}/tomogram)')
     rng = np.random.default_rng(seed)
     real_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
     for particle in real_particle_set.particles:
@@ -118,7 +122,8 @@ def generate_rejected_surface_decoys(
             continue
 
         # prefer the most confidently empty positions, but jitter the choice so decoys aren't all clustered in one flat region
-        n_to_take = min(n_decoys_per_tomogram, points_xyz.shape[0])
+        target = n_decoys_per_tomogram if n_decoys_per_tomogram is not None else _adaptive_decoy_count(len(real_positions))
+        n_to_take = min(target, points_xyz.shape[0])
         candidate_pool = min(points_xyz.shape[0], n_to_take * 5)
         lowest_first = np.argsort(scores)[:candidate_pool]
         chosen = rng.choice(lowest_first, size=n_to_take, replace=False)
@@ -314,13 +319,15 @@ def _generate_one_synthetic_noise_tomogram(job: _SyntheticNoiseJob) -> tuple[Tom
 def generate_synthetic_noise_decoys(
     tomogram_shape: tuple[int, int, int],
     n_tomograms: int,
-    n_decoys_per_tomogram: int,
+    n_decoys_per_tomogram: int | None,
     output_dir: Path,
     config: NativePickerConfig,
     seed: int,
     *,
     n_workers: int = 1,
 ) -> tuple[ParticleSet | None, list[TomogramManifest]]:
+    if n_decoys_per_tomogram is None:
+        raise StampValidationError('n_decoys_per_tomogram must be set explicitly for synthetic-noise decoys')
     log.progress(f'Generating synthetic-noise decoys ({n_tomograms} tomograms, {n_decoys_per_tomogram}/tomogram)')
     segmentation_dir = output_dir / 'segmentations'
     tomogram_dir = output_dir / 'tomograms'

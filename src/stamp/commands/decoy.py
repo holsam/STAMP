@@ -20,7 +20,7 @@ from stamp.decoy.validate import assert_comparable
 from stamp.picking.native import NativePickerConfig
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import ParticleSet
-from stamp.utils.errors import StampPipelineError
+from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
@@ -71,18 +71,21 @@ def run_decoy(
         shape = tuple(int(value) for value in synthetic_shape.split(','))
         if len(shape) != 3:
             raise StampPipelineError('--synthetic-shape must be three integers')
-        decoy_set, decoy_manifests = generate_synthetic_noise_decoys(
-            tomogram_shape=shape,
-            n_tomograms=n_synthetic_tomograms,
-            n_decoys_per_tomogram=n_decoys_per_tomogram,
-            output_dir=output_dir,
-            config=config,
-            seed=seed,
-            n_workers=n_workers,
-        )
-        (output_dir / 'decoy_manifests.json').write_text(
-            json.dumps([m.model_dump(mode='json') for m in decoy_manifests], indent=2)
-        )
+        try:
+            decoy_set, decoy_manifests = generate_synthetic_noise_decoys(
+                tomogram_shape=shape,
+                n_tomograms=n_synthetic_tomograms,
+                n_decoys_per_tomogram=n_decoys_per_tomogram,
+                output_dir=output_dir,
+                config=config,
+                seed=seed,
+                n_workers=n_workers,
+            )
+            (output_dir / 'decoy_manifests.json').write_text(
+                json.dumps([m.model_dump(mode='json') for m in decoy_manifests], indent=2)
+            )
+        except StampValidationError as exc:
+            raise StampPipelineError(str(exc)) from exc
     else:
         real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
         manifests = load_tomogram_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
