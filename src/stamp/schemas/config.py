@@ -44,7 +44,7 @@ class PlotSettings(_Strict):
 class DecoySettings(_Strict):
     enabled: bool = True
     method: Literal['rejected-surface', 'shifted', 'synthetic-noise'] = 'rejected-surface'
-    n_decoys_per_tomogram: int = 50
+    n_decoys_per_tomogram: int | None = None    # None = adaptive (target same N as real picks)
     min_distance_from_real_angstrom: float = 100.0
     min_distance_from_picks_angstrom: float = 60.0
     min_shift_angstrom: float = 200.0
