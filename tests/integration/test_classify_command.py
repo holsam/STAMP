@@ -67,6 +67,7 @@ class TestClassifyCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'classify',
                 '--particles', str(particle_set_path),
                 '--raw-dir', str(raw_dir),
@@ -97,6 +98,7 @@ class TestClassifyCommand:
             stamp_app,
             [
                 '-vv',
+                '-d', str(tmp_path),
                 'classify',
                 '--particles', str(particle_set_path),
                 '--raw-dir', str(raw_dir),

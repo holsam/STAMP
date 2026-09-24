@@ -62,6 +62,7 @@ def _fixture(tmp_path, mixed=False):
 
 def _invoke(tmp_path, stage_d):
     return runner.invoke(stamp_app, [
+        '-d', str(tmp_path),
         'refine',
         '--class-id', 'c00',
         '--identification', str(tmp_path / 'identification.json'),
