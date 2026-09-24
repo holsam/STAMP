@@ -229,7 +229,7 @@ def run_pick(
                 parameters.setdefault('normalise_per_vesicle', normalise_per_vesicle)
 
         log.progress(f'Running {picker_name}...')
-        picks_by_picker[picker_name] = (load_cached_picks(picker_output_dir, [m.tomogram_id for m in manifests]) if getattr(adapter, 'runs_in_process', False) and backend != 'mock' else _run_picker(adapter, manifests, picker_output_dir, parameters, runner, backend))
+        picks_by_picker[picker_name] = _run_picker(adapter, manifests, picker_output_dir, parameters, runner, backend)
         log.info(f'{picker_name}: {len(picks_by_picker[picker_name])} raw picks')
 
     log.progress(f'Reconciling picks...')
