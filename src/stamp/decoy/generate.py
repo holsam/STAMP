@@ -56,6 +56,7 @@ def generate_rejected_surface_decoys(
     seed: int,
     *,
     n_workers: int = 1,
+    output_dir: Path | None = None,
 ) -> ParticleSet | None:
     log.progress(f'Generating rejected-surface decoys ({n_decoys_per_tomogram}/tomogram)')
     rng = np.random.default_rng(seed)
@@ -65,6 +66,8 @@ def generate_rejected_surface_decoys(
 
     min_distance_voxels = config.to_voxels(min_distance_from_real_angstrom)
     raw_picks: list[RawPick] = []
+    cache_dir = output_dir / 'raw' / METHOD_REJECTED_SURFACE if output_dir is not None else None
+    tomogram_ids = []
 
     # run surface scoring in a pool but keep rng-driven sampling sequential and in manifest order so results stay reproducible for a given seed
     result_by_tomogram: dict[str, _ScoreSurfaceResult] = {}
@@ -120,21 +123,27 @@ def generate_rejected_surface_decoys(
         lowest_first = np.argsort(scores)[:candidate_pool]
         chosen = rng.choice(lowest_first, size=n_to_take, replace=False)
 
-        for index in chosen:
-            normal_xyz = normals_zyx[index][::-1]
-            raw_picks.append(
-                RawPick(
-                    tomogram_id=manifest.tomogram_id,
-                    position=tuple(float(c) for c in points_xyz[index]),
-                    orientation=quaternion_from_reference_to(np.asarray(normal_xyz)),
-                    confidence=float(scores[index]),
-                    source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_REJECTED_SURFACE}',
-                    offset_window_angstrom=config.offset_windows_angstrom[int(winning_window[index])],
-                    mean_score=float(mean_scores[index]),
-                    profile_score=float(profile_scores[index]),
-                )
+        tomogram_picks = [
+            RawPick(
+                tomogram_id=manifest.tomogram_id,
+                position=tuple(float(c) for c in points_xyz[index]),
+                orientation=quaternion_from_reference_to(np.asarray(normals_zyx[index][::-1])),
+                confidence=float(scores[index]),
+                source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_REJECTED_SURFACE}',
+                offset_window_angstrom=config.offset_windows_angstrom[int(winning_window[index])],
+                mean_score=float(mean_scores[index]),
+                profile_score=float(profile_scores[index]),
             )
+            for index in chosen
+        ]
+        if cache_dir is not None:
+            cache_tomogram_picks(cache_dir, manifest.tomogram_id, tomogram_picks)
+            tomogram_ids.append(manifest.tomogram_id)
+        else:
+            raw_picks.extend(tomogram_picks)
 
+    if cache_dir is not None:
+        raw_picks = load_cached_picks(cache_dir, tomogram_ids)
     decoys = _finalise(raw_picks, seed, METHOD_REJECTED_SURFACE)
     log.info(f'Generated {len(raw_picks)} decoy particles')
     return decoys
@@ -159,6 +168,7 @@ def generate_shifted_decoys(
     max_attempts_per_particle: int = 200,
     *,
     n_workers: int = 1,
+    output_dir: Path | None = None,
 ) -> ParticleSet | None:
     log.progress('Generating shifted decoys')
     rng = np.random.default_rng(seed)
@@ -188,6 +198,8 @@ def generate_shifted_decoys(
     min_pick_distance_voxels = config.to_voxels(min_pick_distance)
 
     raw_picks: list[RawPick] = []
+    cache_dir = output_dir / 'raw' / METHOD_SHIFTED if output_dir is not None else None
+    tomogram_ids: list[str] = []
     for tomogram_id, positions in real_by_tomogram.items():
         shape = shape_by_tomogram.get(tomogram_id)
         surface = surface_by_tomogram.get(tomogram_id)
@@ -197,6 +209,7 @@ def generate_shifted_decoys(
         pick_tree = cKDTree(np.array(positions))
         extent_xyz = np.array(shape)[::-1] - 1
 
+        tomogram_picks: list[RawPick] = []
         for position in positions:
             origin = np.array(position)
             for _attempt in range(max_attempts_per_particle):
@@ -213,7 +226,7 @@ def generate_shifted_decoys(
                 if pick_tree.query(candidate, k=1)[0] < min_pick_distance_voxels:
                     continue
 
-                raw_picks.append(
+                tomogram_picks.append(
                     RawPick(
                         tomogram_id=tomogram_id,
                         position=tuple(float(c) for c in candidate),
@@ -226,6 +239,14 @@ def generate_shifted_decoys(
             else:
                 log.debug(f'{tomogram_id}: exhausted {max_attempts_per_particle} attempts placing a shifted decoy, skipping one particle')
 
+        if cache_dir is not None:
+            cache_tomogram_picks(cache_dir, tomogram_id, tomogram_picks)
+            tomogram_ids.append(tomogram_id)
+        else:
+            raw_picks.extend(tomogram_picks)
+
+    if cache_dir is not None:
+        raw_picks = load_cached_picks(cache_dir, tomogram_ids)
     decoys = _finalise(raw_picks, seed, METHOD_SHIFTED)
     log.info(f'Generated {len(raw_picks)} decoy particles')
     return decoys
@@ -242,6 +263,7 @@ class _SyntheticNoiseJob:
     config: NativePickerConfig
     seed: int
     n_decoys_per_tomogram: int
+    cache_dir: Path | None = None
 
 # _generate_one_synthetic_noise_tomogram: multiprocessing worker entry point
 def _generate_one_synthetic_noise_tomogram(job: _SyntheticNoiseJob) -> tuple[TomogramManifest, list[RawPick]]:
@@ -284,6 +306,8 @@ def _generate_one_synthetic_noise_tomogram(job: _SyntheticNoiseJob) -> tuple[Tom
                 source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_SYNTHETIC_NOISE}',
             )
         )
+    if job.cache_dir is not None:
+        cache_tomogram_picks(job.cache_dir, tomogram_id, raw_picks)
     return manifest, raw_picks
 
 # generate_synthetic_noise_decoys: Gaussian-noise volumes with a membrane-like shell and shell-sampled decoys
@@ -310,12 +334,12 @@ def generate_synthetic_noise_decoys(
     )
     distance = np.linalg.norm(grid - centre, axis=-1)
     shell = ((distance > radius - 1.5) & (distance < radius + 1.5)).astype(np.float32)
-
-    jobs = [_SyntheticNoiseJob(index, tomogram_shape, shell, centre, segmentation_dir, tomogram_dir, config, seed, n_decoys_per_tomogram) for index in range(n_tomograms)]
+    cache_dir = output_dir / 'raw' / METHOD_SYNTHETIC_NOISE
+    jobs = [_SyntheticNoiseJob(index, tomogram_shape, shell, centre, segmentation_dir, tomogram_dir, config, seed, n_decoys_per_tomogram, cache_dir) for index in range(n_tomograms)]
     per_tomogram_results = run_parallel_ordered(jobs, _generate_one_synthetic_noise_tomogram, max_workers=n_workers, label='decoy-synthetic-noise')
 
     manifests = [manifest for manifest, _ in per_tomogram_results]
-    raw_picks = [pick for _, picks in per_tomogram_results for pick in picks]
+    raw_picks = load_cached_picks(cache_dir, [manifest.tomogram_id for manifest in manifests])
 
     decoys = _finalise(raw_picks, seed, METHOD_SYNTHETIC_NOISE)
     log.info(f'Generated {len(raw_picks)} decoy particles')
