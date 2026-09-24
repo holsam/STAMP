@@ -193,15 +193,15 @@ def load_tomogram_manifests(
     for segmentation_path in unmatched:
         log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
     if voxel_size_angstrom is None:
-        resolved_voxel_size = resolve_directory_voxel_size_angstrom(list(matched.values()))
-        if resolved_voxel_size is None:
+        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(matched.values()))
+        if voxel_size_angstrom is None:
             raise StampPipelineError(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
     return [
         TomogramManifest(
             tomogram_id=segmentation_path.stem,
             segmentation_path=segmentation_path,
             raw_tomogram_path=raw_path,
-            voxel_size_angstrom=voxel_size_angstrom or resolved_voxel_size,
+            voxel_size_angstrom=voxel_size_angstrom,
         )
         for segmentation_path, raw_path in matched.items()
     ]
