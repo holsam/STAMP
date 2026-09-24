@@ -22,7 +22,7 @@ from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import archive_and_remove_directory, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import archive_and_remove_directory, load_tomogram_manifests, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.picks import plot_positions
@@ -53,34 +53,6 @@ def _select_adapter(picker_name: str, backend: str) -> ToolAdapter:
         raise StampPipelineError(f'Unknown picker {picker_name!r}')
     check_backend_supports(adapter, backend)
     return adapter
-
-# _load_manifests: match segmentations to raw tomograms by filename stem
-def _load_manifests(
-    segmentation_dir: Path,
-    raw_tomogram_dir: Path,
-    voxel_size_angstrom: float | None,
-) -> list[TomogramManifest]:
-    '''Unmatched segmentations are skipped with a warning rather than failing the run. Voxel size is read from each raw tomogram's MRC header when not given explicitly.'''
-    segmentation_paths = sorted(segmentation_dir.glob('*.mrc'))
-    raw_paths = sorted(raw_tomogram_dir.glob('*.mrc'))
-    matched, unmatched = match_by_stem(segmentation_paths, raw_paths)
-    for segmentation_path in unmatched:
-        log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
-    manifests: list[TomogramManifest] = []
-    if voxel_size_angstrom is None:
-        resolved_voxel_size = resolve_directory_voxel_size_angstrom(list(matched.values()))
-        if resolved_voxel_size is None:
-            raise StampPipelineError(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
-    for segmentation_path, raw_path in matched.items():
-        manifests.append(
-            TomogramManifest(
-                tomogram_id=segmentation_path.stem,
-                segmentation_path=segmentation_path,
-                raw_tomogram_path=raw_path,
-                voxel_size_angstrom=voxel_size_angstrom or resolved_voxel_size,
-            )
-        )
-    return manifests
 
 # _run_picker: dispatch to the in-process, batched, or per-tomogram path
 def _run_picker(
@@ -229,7 +201,7 @@ def run_pick(
     keep_raw: bool = False,
 ) -> None:
     # Load manifests to check for matching files
-    manifests = _load_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
+    manifests = load_tomogram_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
     if not manifests:
         raise StampPipelineError(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
     log.info(f'Matched {len(manifests)} tomograms/segmentations')

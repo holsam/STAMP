@@ -13,6 +13,7 @@ from rich.tree import Tree
 from typing import Any
 
 # Import STAMP objects
+from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.provenance import ProvenanceSidecar
 
 # _CACHE_NAME: per-directory checksum cache keyed on (path, size, mtime)
@@ -176,6 +177,33 @@ def match_by_stem(
         else:
             matched[segmentation_path] = raw_path
     return matched, unmatched
+
+# load_tomogram_manifests: match segmentations to raw tomograms by filename stem, unmatched segmentations skipped with a warning
+def load_tomogram_manifests(
+    segmentation_dir: Path,
+    raw_tomogram_dir: Path,
+    voxel_size_angstrom: float | None,
+) -> list[TomogramManifest]:
+    from stamp.utils.errors import StampPipelineError
+    from stamp.utils.log import log
+    segmentation_paths = sorted(segmentation_dir.glob('*.mrc'))
+    raw_paths = sorted(raw_tomogram_dir.glob('*.mrc'))
+    matched, unmatched = match_by_stem(segmentation_paths, raw_paths)
+    for segmentation_path in unmatched:
+        log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
+    if voxel_size_angstrom is None:
+        resolved_voxel_size = resolve_directory_voxel_size_angstrom(list(matched.values()))
+        if resolved_voxel_size is None:
+            raise StampPipelineError(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
+    return [
+        TomogramManifest(
+            tomogram_id=segmentation_path.stem,
+            segmentation_path=segmentation_path,
+            raw_tomogram_path=raw_path,
+            voxel_size_angstrom=voxel_size_angstrom or resolved_voxel_size,
+        )
+        for segmentation_path, raw_path in matched.items()
+    ]
 
 # read_voxel_size_angstrom: voxel size from an MRC header, Angstrom, or None if absent/zero/non-cubic
 def read_voxel_size_angstrom(path: Path) -> float | None:
