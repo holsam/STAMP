@@ -213,6 +213,7 @@ def run_pipeline(
             class_assignments=stage_dir(output_dir, 'real', 'classify') / 'class_assignments.json',
             raw_tomogram_dir=config.run.raw_tomogram_dir,
             output_dir=refine_dir,
+            threshold=config.stage.refine.threshold,
             tool=config.stage.refine.tool,
             mask=config.stage.refine.mask,
             iterations=config.stage.refine.iterations,
