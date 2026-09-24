@@ -25,7 +25,7 @@ from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import archive_and_remove_directory, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
@@ -54,6 +54,7 @@ def run_classify(
     n_workers: int = 1,
     make_plots: bool = True,
     plot_format: str = 'tiff',
+    keep_raw: bool = False,
 ) -> None:
     if voxel_size_angstrom is None:
         voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(raw_tomogram_dir.glob('*.mrc')))
@@ -76,7 +77,8 @@ def run_classify(
         box_voxels += 1  # odd box keeps the particle exactly centred
 
     subvolumes, kept, skipped = extract_particle_set(
-        particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels, segmentation_paths=segmentation_paths, n_workers=n_workers,
+        particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels,
+        segmentation_paths=segmentation_paths, n_workers=n_workers, cache_dir=output_dir / 'raw' / 'subvolumes',
     )
     if skipped:
         log.warning(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
@@ -131,6 +133,12 @@ def run_classify(
 
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
+
+    if not keep_raw:
+        raw_dir = output_dir / 'raw'
+        if raw_dir.is_dir():
+            archive_path = archive_and_remove_directory(raw_dir)
+            log.info(f'Archived raw classify output to {archive_path}')
 
     write_sidecar(
         output_dir,
@@ -211,6 +219,7 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
         argv.append('--no-strict-halfset-independence')
     if not settings.inplane_alignment:
         argv.append('--no-inplane-alignment')
+    argv.append('--keep-raw' if settings.keep_raw else '--no-keep-raw')
     argv.append('--plots' if config.plots.enabled else '--no-plots')
     argv += ['--plot-format', config.plots.format]
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]

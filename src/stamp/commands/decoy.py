@@ -20,8 +20,8 @@ from stamp.decoy.validate import assert_comparable
 from stamp.picking.native import NativePickerConfig
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import ParticleSet
-from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.errors import StampPipelineError, StampValidationError
+from stamp.utils.io import archive_and_remove_directory, load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 
@@ -46,6 +46,7 @@ def run_decoy(
     synthetic_shape,
     seed,
     n_workers: int = 1,
+    keep_raw: bool = False,
     make_plots: bool = False,
     pick_plot_style: str = 'segmented',
     plot_format: str = 'tiff',
@@ -70,18 +71,21 @@ def run_decoy(
         shape = tuple(int(value) for value in synthetic_shape.split(','))
         if len(shape) != 3:
             raise StampPipelineError('--synthetic-shape must be three integers')
-        decoy_set, decoy_manifests = generate_synthetic_noise_decoys(
-            tomogram_shape=shape,
-            n_tomograms=n_synthetic_tomograms,
-            n_decoys_per_tomogram=n_decoys_per_tomogram,
-            output_dir=output_dir,
-            config=config,
-            seed=seed,
-            n_workers=n_workers,
-        )
-        (output_dir / 'decoy_manifests.json').write_text(
-            json.dumps([m.model_dump(mode='json') for m in decoy_manifests], indent=2)
-        )
+        try:
+            decoy_set, decoy_manifests = generate_synthetic_noise_decoys(
+                tomogram_shape=shape,
+                n_tomograms=n_synthetic_tomograms,
+                n_decoys_per_tomogram=n_decoys_per_tomogram,
+                output_dir=output_dir,
+                config=config,
+                seed=seed,
+                n_workers=n_workers,
+            )
+            (output_dir / 'decoy_manifests.json').write_text(
+                json.dumps([m.model_dump(mode='json') for m in decoy_manifests], indent=2)
+            )
+        except StampValidationError as exc:
+            raise StampPipelineError(str(exc)) from exc
     else:
         real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
         manifests = load_tomogram_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
@@ -97,6 +101,7 @@ def run_decoy(
                 min_distance_from_real_angstrom=min_distance_from_real_angstrom,
                 seed=seed,
                 n_workers=n_workers,
+                output_dir=output_dir,
             )
         else:
             decoy_set = generate_shifted_decoys(
@@ -109,6 +114,7 @@ def run_decoy(
                 min_pick_distance=min_distance_from_picks_angstrom,
                 seed=seed,
                 n_workers=n_workers,
+                output_dir=output_dir,
             )
 
     if decoy_set is None or not decoy_set.particles:
@@ -119,6 +125,12 @@ def run_decoy(
 
     decoy_path = output_dir / 'decoy_particle_set.json'
     decoy_path.write_text(decoy_set.model_dump_json(indent=2))
+
+    if not keep_raw:
+        raw_dir = output_dir / 'raw'
+        if raw_dir.is_dir():
+            archive_path = archive_and_remove_directory(raw_dir)
+            log.info(f'Archived raw decoy output to {archive_path}')
 
     write_sidecar(
         output_dir,
@@ -156,17 +168,20 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
     real_particles = stage_dir(output_dir, 'real', 'pick') / 'particle_set.json'
     argv = [
         'stamp', 'decoy',
-        '--out-dir', str(target),
+        '--out-dir', str(output_dir),
         '--voxel-size-a', str(config.run.voxel_size_angstrom),
         '--method', config.decoy.method,
         '--real-particle-set', str(real_particles),
         '--seg-dir', str(config.run.segmentation_dir),
         '--raw-dir', str(config.run.raw_tomogram_dir),
         '--seed', str(config.stage.pick.half_set_seed),
-        '--n-workers', str(config.decoy.n_workers),
+        '--n-processes', str(config.decoy.n_workers),
     ]
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
+    if config.decoy.keep_raw:
+        argv.append('--keep-raw')
+    if config.plots.enabled:
+        argv.append('--plots')
+        argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
     if config.plots.pick_zstack_movie:
         argv.append('--pick-zstack-movie')
     if config.plots.pick_plot_3d:

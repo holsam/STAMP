@@ -31,12 +31,12 @@ class TestRunCommand:
     def test_second_invocation_skips_completed_stages(self, tmp_path, make_dataset, write_config):
         make_dataset(tmp_path)
         config = write_config(tmp_path)
-        first = runner.invoke(stamp_app, ['run', '--config', str(config)])
+        first = runner.invoke(stamp_app, ['-d', str(tmp_path), 'run', '--config', str(config)])
         assert first.exit_code == 0
         state = json.loads((tmp_path / 'stamp' / 'run_state.json').read_text())
         assert state['real']['pick'] is True
 
-        second = runner.invoke(stamp_app, ['run', '--config', str(config)])
+        second = runner.invoke(stamp_app, ['-d', str(tmp_path), 'run', '--config', str(config)])
         assert second.exit_code == 0
         assert 'pick' not in second.output.lower() or 'skip' in second.output.lower()
 

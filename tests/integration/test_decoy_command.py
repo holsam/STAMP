@@ -40,6 +40,7 @@ def _run_pick(tmp_path: Path) -> tuple[Path, Path, Path]:
     result = runner.invoke(
         stamp_app,
         [
+            '-d', str(tmp_path),
             'pick',
             '--seg-dir', str(seg_dir),
             '--raw-dir', str(raw_dir),
@@ -63,6 +64,7 @@ class TestDecoyCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'decoy',
                 '--method', 'rejected-surface',
                 '--real-particle-set', str(particle_set_path),
@@ -89,6 +91,7 @@ class TestDecoyCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'decoy',
                 '--method', 'shifted',
                 '--real-particle-set', str(particle_set_path),
@@ -109,6 +112,7 @@ class TestDecoyCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'decoy',
                 '--method', 'synthetic-noise',
                 '--out-dir', tmp_path,
@@ -152,6 +156,7 @@ class TestDecoyCommand:
         pick_result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
@@ -171,6 +176,7 @@ class TestDecoyCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'decoy',
                 '--method', 'rejected-surface',
                 '--real-particle-set', str(particle_set_path),

@@ -45,6 +45,7 @@ class TestPickCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
@@ -79,6 +80,7 @@ class TestPickCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
@@ -112,6 +114,7 @@ class TestPickCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
@@ -132,6 +135,7 @@ class TestPickCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),
@@ -152,6 +156,7 @@ class TestPickCommand:
         result = runner.invoke(
             stamp_app,
             [
+                '-d', str(tmp_path),
                 'pick',
                 '--seg-dir', str(seg_dir),
                 '--raw-dir', str(raw_dir),

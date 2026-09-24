@@ -12,6 +12,7 @@ from stamp.schemas.particles import HalfSet, Particle
 from stamp.utils import io as io_utils
 from stamp.schemas.provenance import ProvenanceSidecar
 from stamp.utils.errors import StampPipelineError
+from stamp.utils.log import configure_logging
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
 # _particle: returns a valid Particle instance
@@ -270,6 +271,28 @@ class TestIoResolveDirectoryVoxelSizeAngstrom:
         with mrcfile.new(path, overwrite=True) as mrc:
             mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
         assert io_utils.resolve_directory_voxel_size_angstrom([path]) is None
+
+class TestLog:
+    def test_configure_logging_writes_to_the_given_directory(self, tmp_path) -> None:
+        '''Logging is configured to the specified directory.'''
+        log_path, level_name = configure_logging(directory=tmp_path, mode='append', quiet=0, verbosity=0)
+        assert log_path == tmp_path / 'stamp.log'
+        assert log_path.is_file()
+        assert level_name == 'INFO'
+
+    def test_configure_logging_append_mode_appends_to_existing_log(self, tmp_path) -> None:
+        '''Configuring logging with mode=append appends messages to existing files.'''
+        log_path = tmp_path / 'stamp.log'
+        log_path.write_text('existing content\n' * 100)
+        configure_logging(directory=tmp_path, mode='append', quiet=0, verbosity=0)
+        assert 'existing content' in log_path.read_text()
+
+    def test_configure_logging_overwrite_mode_truncates_existing_log(self, tmp_path) -> None:
+        '''Configuring logging with mode=overwrite overwrites existing files.'''
+        log_path = tmp_path / 'stamp.log'
+        log_path.write_text('existing content\n' * 100)
+        configure_logging(directory=tmp_path, mode='overwrite', quiet=0, verbosity=0)
+        assert 'existing content' not in log_path.read_text()
 
 class TestParallel:
     def test_sequential_default_matches_map(self):

@@ -40,7 +40,7 @@ class TestPlotPickCommand:
         _write_raw(raw_dir, 'tomo000')
         _write_raw(raw_dir, 'tomo001')
         out_dir = tmp_path / 'plots'
-        result = runner.invoke(stamp_app, ['plot', 'pick', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--pick-plot-style', 'none', '--no-pick-zstack-movie', '--plot-format', 'png'])
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path),'plot', 'pick', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--pick-plot-style', 'none', '--no-pick-zstack-movie', '--plot-format', 'png'])
         assert result.exit_code == 0, result.output
         assert list(out_dir.glob('*.png'))
 
@@ -52,7 +52,7 @@ class TestPlotPickCommand:
         _write_raw(raw_dir, 'tomo000')
         _write_raw(raw_dir, 'tomo001')
         out_dir = tmp_path / 'plots'
-        result = runner.invoke(stamp_app, ['plot', 'pick', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--pick-plot-style', 'none', '--no-pick-zstack-movie', '--plot-format', 'png', '--tomogram-ids', 'tomo000'])
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path),'plot', 'pick', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--pick-plot-style', 'none', '--no-pick-zstack-movie', '--plot-format', 'png', '--tomogram-ids', 'tomo000'])
         assert result.exit_code == 0, result.output
         assert 'Plotting 1 of 2 tomogram(s)' in result.output
 
@@ -63,7 +63,7 @@ class TestPlotPickCommand:
         raw_dir = tmp_path / 'raw'
         _write_raw(raw_dir, 'tomo000')
         _write_raw(raw_dir, 'tomo001')
-        result = runner.invoke(stamp_app, ['plot', 'pick', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--tomogram-ids', 'not-a-tomogram'])
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path),'plot', 'pick', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--tomogram-ids', 'not-a-tomogram'])
         assert result.exit_code != 0
 
     # check --tomogram-ids and --n-tomograms are mutually exclusive
@@ -72,5 +72,5 @@ class TestPlotPickCommand:
         _write_particle_set(particle_set_path)
         raw_dir = tmp_path / 'raw'
         _write_raw(raw_dir, 'tomo000')
-        result = runner.invoke(stamp_app, ['plot', 'pick', str(particle_set_path), '--raw-dir', str(raw_dir), '--tomogram-ids', 'tomo000', '--n-tomograms', '1'])
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path),'plot', 'pick', str(particle_set_path), '--raw-dir', str(raw_dir), '--tomogram-ids', 'tomo000', '--n-tomograms', '1'])
         assert result.exit_code != 0

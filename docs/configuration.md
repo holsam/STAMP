@@ -18,7 +18,7 @@ stop_after = "refine"                           # pick | classify | identify | r
 [decoy]
 enabled = true
 method = "rejected-surface"                     # rejected-surface | shifted | synthetic-noise
-n_decoys_per_tomogram = 50
+# n_decoys_per_tomogram = 50                    # omit for adaptive n
 min_distance_from_real_angstrom = 100.0
 min_distance_from_picks_angstrom = 60.0
 min_shift_angstrom = 200.0
@@ -96,7 +96,7 @@ Key | Type | Default
 -- | -- | --
 `enabled` | bool | `True`
 `method` | `rejected-surface`\|`shifted`\|`synthetic-noise` | `rejected-surface`
-`n_decoys_per_tomogram` | int | `50`
+`n_decoys_per_tomogram` | int\|`None` | `None`
 `min_distance_from_real_angstrom` | float | `100.0`
 `min_distance_from_picks_angstrom` | float | `60.0`
 `min_shift_angstrom` | float | `200.0`

@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 # Import decoy command functions/variables
 import stamp.commands.decoy as decoyfuncs
+from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import resolve_output_dir
 
 # Initialise Typer app
@@ -49,9 +50,9 @@ def decoy(
         typer.Option('--picker-params', help='JSON of native-picker parameters. Must match the values used for `stamp pick`, or decoys won\'t be drawn from the same candidate pool.', rich_help_panel = 'Inputs'),
     ] = '{}',
     n_decoys_per_tomogram: Annotated[
-        int,
-        typer.Option('--n-decoys-per-tomogram', help='Decoy positions per tomogram.', rich_help_panel = 'Decoy placement'),
-    ] = 50,
+        int | None,
+        typer.Option('--n-decoys-per-tomogram', help='Decoy positions per tomogram. Omit for adaptive targeting (matches real pick count per tomogram).', rich_help_panel = 'Decoy placement'),
+    ] = None,
     min_distance_from_real_angstrom: Annotated[
         float,
         typer.Option('--min-distance-from-real-a', help='Minimum separation from any real pick.', rich_help_panel = 'Rejected surface decoy'),
@@ -84,6 +85,10 @@ def decoy(
         int,
         typer.Option('-n', '--n-processes', help='Number of processes to use for per-tomogram decoy generation (1 = sequential).', rich_help_panel = 'Decoy placement'),
     ] = 1,
+    keep_raw: Annotated[
+        bool,
+        typer.Option('--keep-raw', help='Keep the raw per-picker output directory instead of archiving it to raw.tar.gz.'),
+    ] = False,
     make_plots: Annotated[
         bool,
         typer.Option('--plots', help='Write decoy position plots.', rich_help_panel = 'Plotting'),
@@ -138,6 +143,7 @@ def decoy(
         synthetic_shape=synthetic_shape,
         seed=seed,
         n_workers=n_workers,
+        keep_raw=keep_raw,
         make_plots=make_plots,
         pick_plot_style=pick_plot_style,
         plot_format=plot_format,

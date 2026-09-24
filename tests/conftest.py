@@ -104,7 +104,7 @@ iterations = 2
 def _run_mock_pipeline(root: Path, args: list[str] | None = None) -> Path:
     _make_dataset(root)
     config = _write_config(root)
-    result = _runner.invoke(stamp_app, ['run', '--config', str(config), *(args or [])])
+    result = _runner.invoke(stamp_app, ['-d', str(root), 'run', '--config', str(config), *(args or [])])
     assert result.exit_code == 0, result.output
     return root / 'stamp'
 

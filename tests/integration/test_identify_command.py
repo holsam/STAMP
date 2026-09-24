@@ -48,6 +48,7 @@ class TestIdentifyCommand:
         )
 
         result = runner.invoke(stamp_app, [
+            '-d', str(tmp_path),
             'identify',
             '--classes', str(classes),
             '--candidates', str(tmp_path / 'candidates.yaml'),

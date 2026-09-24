@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import internal commands
-from stamp.cli import classify, config, decoy, filter, identify, pick, plot, refine, run, tools
+from stamp.cli import classify, config, decoy, filter, identify, internal, pick, plot, refine, run, tools
 from stamp.utils.errors import StampError
 from stamp.utils.log import configure_logging, log
 
@@ -46,6 +46,12 @@ stamp_app.add_typer(
     name='tools',
     help='Misc STAMP tools.',
     rich_help_panel='Utilities'
+)
+stamp_app.add_typer(
+    internal.internalCli,
+    name='internal',
+    help='STAMP internal commands.',
+    hidden=True,
 )
 
 # logging_callback: provide logging options and configure logging
