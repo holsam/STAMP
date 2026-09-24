@@ -3,7 +3,6 @@ STAMP: in-process adapter for the stamp-native picker
 '''
 
 # Import external dependencies
-import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from stamp.backends.base import RunResult, ToolCommand
 from stamp.picking.native import PICKER_NAME, NativePickerConfig, pick_tomogram
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampPipelineError, StampValidationError
+from stamp.utils.io import cache_tomogram_picks, load_cached_picks
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 
@@ -81,17 +81,14 @@ class NativePickerAdapter:
                 tomogram_config = replace(config, normalise_per_vesicle=False, vesicle_labels_mrc=None)
             jobs.append(_PickJob(segmentation_path, tomogram_path, tomogram_id, tomogram_config))
     
-        picks: list[RawPick] = []
         def _on_success(job: _PickJob, result: tuple[str, list[RawPick]]) -> None:
             tomogram_id, tomogram_picks = result
             log.debug(f'{tomogram_id}: {len(tomogram_picks)} raw picks')
-            cache_path = inputs.output_directory / f'{tomogram_id}.json'
-            cache_path.write_text(json.dumps([pick.model_dump() for pick in tomogram_picks], indent=2))
-            picks.extend(tomogram_picks)
+            cache_tomogram_picks(inputs.output_directory, tomogram_id, tomogram_picks)
         def _on_error(job: _PickJob, exc: Exception) -> None:
             if isinstance(exc, StampValidationError):
                 log.error(f'{job.tomogram_id}: {exc}')
             else:
                 raise exc
         run_parallel(jobs, _pick_one, max_workers=n_workers, label='stamp-native', on_success=_on_success, on_error=_on_error)
-        return picks
+        return load_cached_picks(inputs.output_directory, inputs.tomogram_ids)

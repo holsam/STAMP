@@ -52,6 +52,7 @@ class DecoySettings(_Strict):
     n_synthetic_tomograms: int = 3
     synthetic_shape_voxels: tuple[int, int, int] | None = None  # None = match the first real tomogram
     n_workers: int = 1
+    keep_raw: bool = False
 
 # Per-stage tables mirror each command's options
 class PickStage(_Strict):
@@ -76,6 +77,7 @@ class ClassifyStage(_Strict):
     inplane_iterations: int = 3
     random_state: int = 0
     n_workers: int = 1
+    keep_raw: bool = False
 
 class IdentifyStage(_Strict):
     candidates: Path

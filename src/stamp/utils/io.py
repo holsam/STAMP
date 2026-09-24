@@ -14,6 +14,7 @@ from typing import Any
 
 # Import STAMP objects
 from stamp.schemas.manifest import TomogramManifest
+from stamp.schemas.picks import RawPick
 from stamp.schemas.provenance import ProvenanceSidecar
 
 # _CACHE_NAME: per-directory checksum cache keyed on (path, size, mtime)
@@ -322,3 +323,18 @@ def print_toml(path: Path) -> None:
     console.print()
     console.print(build_toml_tree(data, path.name))
     console.print()
+
+# cache_tomogram_picks: write one tomogram's picks to <cache_dir>/<tomogram_id>.json
+def cache_tomogram_picks(cache_dir: Path, tomogram_id: str, picks: list[RawPick]) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / f'{tomogram_id}.json').write_text(json.dumps([pick.model_dump() for pick in picks], indent=2))
+
+# load_cached_picks: read back per-tomogram JSON pick caches written by cache_tomogram_picks
+def load_cached_picks(cache_dir: Path, tomogram_ids: list[str]) -> list[RawPick]:
+    picks: list[RawPick] = []
+    for tomogram_id in tomogram_ids:
+        cache_path = cache_dir / f'{tomogram_id}.json'
+        if not cache_path.exists():
+            continue
+        picks.extend(RawPick(**raw) for raw in json.loads(cache_path.read_text()))
+    return picks

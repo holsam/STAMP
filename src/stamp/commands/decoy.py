@@ -46,6 +46,7 @@ def run_decoy(
     synthetic_shape,
     seed,
     n_workers: int = 1,
+    keep_raw: bool = False,
     make_plots: bool = False,
     pick_plot_style: str = 'segmented',
     plot_format: str = 'tiff',
@@ -97,6 +98,7 @@ def run_decoy(
                 min_distance_from_real_angstrom=min_distance_from_real_angstrom,
                 seed=seed,
                 n_workers=n_workers,
+                output_dir=output_dir,
             )
         else:
             decoy_set = generate_shifted_decoys(
@@ -109,6 +111,7 @@ def run_decoy(
                 min_pick_distance=min_distance_from_picks_angstrom,
                 seed=seed,
                 n_workers=n_workers,
+                output_dir=output_dir,
             )
 
     if decoy_set is None or not decoy_set.particles:
@@ -119,6 +122,12 @@ def run_decoy(
 
     decoy_path = output_dir / 'decoy_particle_set.json'
     decoy_path.write_text(decoy_set.model_dump_json(indent=2))
+
+    if not keep_raw:
+        raw_dir = output_dir / 'raw'
+        if raw_dir.is_dir():
+            archive_path = archive_and_remove_directory(raw_dir)
+            log.info(f'Archived raw decoy output to {archive_path}')
 
     write_sidecar(
         output_dir,
@@ -165,8 +174,10 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--seed', str(config.stage.pick.half_set_seed),
         '--n-workers', str(config.decoy.n_workers),
     ]
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
+    argv.append('--keep-raw' if config.decoy.keep_raw else '--no-keep-raw')
+    if config.plots_enabled:
+        argv.append('--plots')
+        argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
     if config.plots.pick_zstack_movie:
         argv.append('--pick-zstack-movie')
     if config.plots.pick_plot_3d:
