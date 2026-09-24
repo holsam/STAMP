@@ -304,7 +304,7 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
         'stamp', 'pick', ','.join(config.stage.pick.pickers),
         '--seg-dir', str(config.run.segmentation_dir),
         '--raw-dir', str(config.run.raw_tomogram_dir),
-        '--out-dir', str(target),
+        '--out-dir', str(output_dir),
         '--voxel-size-a', str(config.run.voxel_size_angstrom),
         '--consensus-rule', config.stage.pick.consensus_rule,
         '--distance-threshold', str(config.stage.pick.distance_threshold),
@@ -312,11 +312,13 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--backend', 'local',
         '--n-processes', str(config.stage.pick.n_workers),
     ]
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
+    if config.plots.enabled:
+        argv.append('--plots')
+        argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
     if config.plots.pick_zstack_movie:
         argv.append('--pick-zstack-movie')
     if config.plots.pick_plot_3d:
         argv.append('--pick-plot-3d')
-    argv.append('--keep-raw' if config.stage.pick.keep_raw else '--no-keep-raw')
+    if config.stage.pick.keep_raw:
+        argv.append('--keep-raw')
     return [ToolCommand(tool='pick', argv=argv, working_directory=target, output_paths=[target / 'particle_set.json'])]

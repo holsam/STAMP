@@ -168,17 +168,18 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
     real_particles = stage_dir(output_dir, 'real', 'pick') / 'particle_set.json'
     argv = [
         'stamp', 'decoy',
-        '--out-dir', str(target),
+        '--out-dir', str(output_dir),
         '--voxel-size-a', str(config.run.voxel_size_angstrom),
         '--method', config.decoy.method,
         '--real-particle-set', str(real_particles),
         '--seg-dir', str(config.run.segmentation_dir),
         '--raw-dir', str(config.run.raw_tomogram_dir),
         '--seed', str(config.stage.pick.half_set_seed),
-        '--n-workers', str(config.decoy.n_workers),
+        '--n-processes', str(config.decoy.n_workers),
     ]
-    argv.append('--keep-raw' if config.decoy.keep_raw else '--no-keep-raw')
-    if config.plots_enabled:
+    if config.decoy.keep_raw:
+        argv.append('--keep-raw')
+    if config.plots.enabled:
         argv.append('--plots')
         argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
     if config.plots.pick_zstack_movie:
