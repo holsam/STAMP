@@ -24,6 +24,7 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampValidationError
+from stamp.utils.io import cache_tomogram_picks, load_cached_picks
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
