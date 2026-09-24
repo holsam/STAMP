@@ -49,9 +49,9 @@ def decoy(
         typer.Option('--picker-params', help='JSON of native-picker parameters. Must match the values used for `stamp pick`, or decoys won\'t be drawn from the same candidate pool.', rich_help_panel = 'Inputs'),
     ] = '{}',
     n_decoys_per_tomogram: Annotated[
-        int,
-        typer.Option('--n-decoys-per-tomogram', help='Decoy positions per tomogram.', rich_help_panel = 'Decoy placement'),
-    ] = 50,
+        int | None,
+        typer.Option('--n-decoys-per-tomogram', help='Decoy positions per tomogram. Omit for adaptive targeting (matches real pick count per tomogram).', rich_help_panel = 'Decoy placement'),
+    ] = None,
     min_distance_from_real_angstrom: Annotated[
         float,
         typer.Option('--min-distance-from-real-a', help='Minimum separation from any real pick.', rich_help_panel = 'Rejected surface decoy'),
