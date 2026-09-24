@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 # Import decoy command functions/variables
 import stamp.commands.decoy as decoyfuncs
+from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import resolve_output_dir
 
 # Initialise Typer app
