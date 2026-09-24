@@ -22,7 +22,7 @@ from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import archive_and_remove_directory, load_tomogram_manifests, write_sidecar
+from stamp.utils.io import archive_and_remove_directory, load_cached_picks, load_tomogram_manifests, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.picks import plot_positions
@@ -229,7 +229,7 @@ def run_pick(
                 parameters.setdefault('normalise_per_vesicle', normalise_per_vesicle)
 
         log.progress(f'Running {picker_name}...')
-        picks_by_picker[picker_name] = _run_picker(adapter, manifests, picker_output_dir, parameters, runner, backend)
+        picks_by_picker[picker_name] = (load_cached_picks(picker_output_dir, [m.tomogram_id for m in manifests]) if getattr(adapter, 'runs_in_process', False) and backend != 'mock' else _run_picker(adapter, manifests, picker_output_dir, parameters, runner, backend))
         log.info(f'{picker_name}: {len(picks_by_picker[picker_name])} raw picks')
 
     log.progress(f'Reconciling picks...')
