@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.decoy.generate import (
+    _adaptive_decoy_count,
     generate_rejected_surface_decoys,
     generate_shifted_decoys,
     generate_synthetic_noise_decoys,
@@ -20,7 +21,7 @@ from stamp.decoy.validate import (
 from stamp.picking.native import NativePickerConfig, pick_tomogram
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import HalfSet, Particle, ParticleSet
-from stamp.utils.errors import StampPipelineError
+from stamp.utils.errors import StampPipelineError, StampValidationError
 
 # _write_vesicle_pair: write a matched segmentation/tomogram vesicle pair and return its manifest
 def _write_vesicle_pair(tmp_path: Path, tomogram_id: str = 'tomo000') -> TomogramManifest:
@@ -70,8 +71,8 @@ def _real_set_from_picker(manifest: TomogramManifest, config: NativePickerConfig
         contributing_pickers=['stamp-native'],
     )
 
-# TestDecoy: class containing unit tests for test_decoy.py
-class TestDecoy:
+# TestDecoyGenerate: class containing unit tests for decoy/generate.py
+class TestDecoyGenerate:
     def test_rejected_surface_decoys_avoid_real_picks(self, tmp_path: Path) -> None:
         '''Every decoy is kept clear of real picks'''
         manifest = _write_vesicle_pair(tmp_path)
@@ -177,6 +178,55 @@ class TestDecoy:
         )
         assert all(p.orientation is not None for p in decoy_set.particles)
 
+    def test__adaptive_decoy_count_matches_real_picks(self):
+        '''Default ratio targets the same count as real picks.'''
+        assert _adaptive_decoy_count(20) == 20
+        assert _adaptive_decoy_count(7) == 7
+
+    def test__adaptive_decoy_count_floors_at_one(self):
+        '''Zero picks still requests at least one decoy.'''
+        assert _adaptive_decoy_count(0) >= 1
+
+    def test__adaptive_decoy_count_respects_custom_ratio(self):
+        '''target_ratio scales the target decoys returned.'''
+        assert _adaptive_decoy_count(10, target_ratio=0.5) == 5
+
+    def test_generate_rejected_surface_decoys_adaptive_default(self, tmp_path):
+        '''Derive count from real picks per tomogram.'''
+        manifest = _write_vesicle_pair(tmp_path)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
+        real_set = _real_set_from_picker(manifest, config)
+        assert real_set.particles, 'fixture produced no real picks'
+
+        decoy_set = generate_rejected_surface_decoys(
+            real_particle_set=real_set,
+            manifests=[manifest],
+            config=config,
+            n_decoys_per_tomogram=None,
+            min_distance_from_real_angstrom=100.0,
+            seed=1,
+        )
+        assert decoy_set is not None
+        assert len(decoy_set.particles) <= len(real_set.particles)
+
+    def test_generate_synthetic_noise_decoys_requires_explicit_count(self, tmp_path):
+        '''n_decoys_per_tomogram=None raises for synthetic noise decoys.'''
+        manifest = _write_vesicle_pair(tmp_path)
+        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
+        real_set = _real_set_from_picker(manifest, config)
+        assert real_set.particles, 'fixture produced no real picks'
+        with pytest.raises(StampValidationError):
+            generate_synthetic_noise_decoys(
+                tomogram_shape=(40, 40, 40),
+                n_tomograms=1,
+                n_decoys_per_tomogram=None,
+                output_dir=tmp_path,
+                config=config,
+                seed=1,
+            )
+
+# TestDecoyValidate: class containing unit tests for decoy/validate.py
+class TestDecoyValidate:
     def test_is_decoy_particle_set_detects_mixture(self) -> None:
         '''A mixed decoy/real set raises DecoyContaminationError'''
         def _particle(particle_id: str, picker: str) -> Particle:
