@@ -90,6 +90,7 @@ class IdentifyStage(_Strict):
 class RefineStage(_Strict):
     tool: Literal['relion', 'm'] = 'relion'
     class_id: str = 'all'
+    threshold: float = 0.143
     iterations: int = 5
     mask: Path | None = None
     backend: Literal['local', 'mock', 'cluster'] | None = None

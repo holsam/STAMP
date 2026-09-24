@@ -77,6 +77,7 @@ def run_refine(
     class_assignments: Path,
     raw_tomogram_dir: Path,
     output_dir: Path,
+    threshold: float,
     tool: str,
     mask: Path | None,
     iterations: int,
@@ -128,7 +129,7 @@ def run_refine(
             if mask is not None:
                 with mrcfile.open(str(mask), permissive=True) as mrc:
                     user_mask = np.asarray(mrc.data, dtype=np.float32)
-            fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape))
+            fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape), threshold=threshold)
         except (StampValidationError, StampAdapterError) as exc:
             log.error(f'{target}: {exc}')
             failed_targets.append(target)
@@ -136,7 +137,7 @@ def run_refine(
 
         final_a.replace(tree['combined'] / 'final_A.mrc')
         final_b.replace(tree['combined'] / 'final_B.mrc')
-        write_fsc_files(fsc, tree['combined'])
+        write_fsc_files(fsc, tree['combined'], threshold=threshold)
         log.info(f'{target}: resolution {fsc.resolution_angstrom:.1f} A @ FSC=0.143')
 
         if make_plots:
@@ -182,6 +183,7 @@ def build_refine_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--class-assignments', str(stage_dir(output_dir, 'real', 'classify') / 'class_assignments.json'),
         '--raw-dir', str(config.run.raw_tomogram_dir),
         '--out-dir', str(target),
+        '--threshold', str(config.stage.refine.threshold),
         '--voxel-size-a', str(config.run.voxel_size_angstrom),
         '--tool', config.stage.refine.tool,
         '--iterations', str(config.stage.refine.iterations),

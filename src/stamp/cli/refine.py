@@ -45,6 +45,10 @@ def refine(
         float | None,
         typer.Option('--voxel-size-a', help='Voxel size in Å. Read from MRC headers if omitted.'),
     ] = None,
+    threshold: Annotated[
+        float,
+        typer.Option('--threshold', help='FSC threshold to use for resolution calculation.')
+    ] = 0.143,
     tool: Annotated[
         Literal['relion', 'm'],
         typer.Option('--tool', help='Tool to use for refinement.', rich_help_panel = 'Refinement'),
@@ -82,6 +86,7 @@ def refine(
         class_assignments=class_assignments,
         raw_tomogram_dir=raw_tomogram_dir,
         output_dir=resolve_output_dir(output_dir, 'refine'),
+        threshold=threshold,
         tool=tool,
         mask=mask,
         iterations=iterations,

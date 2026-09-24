@@ -119,7 +119,11 @@ def compute_fsc(
     )
 
 # write_fsc_files: fsc.txt (columns) and a minimal fsc.svg line plot
-def write_fsc_files(result: FSCResult, output_dir: Path) -> tuple[Path, Path]:
+def write_fsc_files(
+    result: FSCResult,
+    output_dir: Path,
+    threshold: float = 0.143,
+) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     text_path = output_dir / 'fsc.txt'
     rows = ['# freq_per_A  fsc_unmasked  fsc_masked']
@@ -135,7 +139,7 @@ def write_fsc_files(result: FSCResult, output_dir: Path) -> tuple[Path, Path]:
         f'{px:.1f},{height * (1 - max(min(value, 1.0), -0.2) / 1.2):.1f}'
         for px, value in zip(x_scaled, result.fsc_masked)
     )
-    threshold_y = height * (1 - 0.143 / 1.2)
+    threshold_y = height * (1 - threshold / 1.2)
     svg_path.write_text(
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">'
         f'<polyline fill="none" stroke="black" points="{points}"/>'
