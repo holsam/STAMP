@@ -149,41 +149,41 @@ class TestSubvolumes:
         a = _write_cache(tmp_path, 'tomoA', 2, box_voxels)
         b = _write_cache(tmp_path, 'tomoB', 3, box_voxels, offset=1000)
         index = [('tomoA', 0), ('tomoA', 1), ('tomoB', 0), ('tomoB', 1), ('tomoB', 2)]
-        store = Subvolumes(tmp_path, index, box_voxels)
+        subvols = Subvolumes(tmp_path, index, box_voxels)
         dense = np.concatenate([a, b], axis=0)
-        for i in range(len(store)):
-            np.testing.assert_array_equal(store[i], dense[i])
+        for i in range(len(subvols)):
+            np.testing.assert_array_equal(subvols[i], dense[i])
 
     def test_take_returns_view_without_copying_cache_files(self, tmp_path):
         box_voxels = 2
         _write_cache(tmp_path, 'tomoA', 4, box_voxels)
         index = [('tomoA', i) for i in range(4)]
-        store = Subvolumes(tmp_path, index, box_voxels)
-        subset = store.take([0, 2])
+        subvols = Subvolumes(tmp_path, index, box_voxels)
+        subset = subvols.take([0, 2])
         assert len(subset) == 2
-        np.testing.assert_array_equal(subset[0], store[0])
-        np.testing.assert_array_equal(subset[1], store[2])
+        np.testing.assert_array_equal(subset[0], subvols[0])
+        np.testing.assert_array_equal(subset[1], subvols[2])
 
     def test_iter_batches_covers_every_index_grouped_by_tomogram(self, tmp_path):
         box_voxels = 2
         _write_cache(tmp_path, 'tomoA', 5, box_voxels)
         _write_cache(tmp_path, 'tomoB', 3, box_voxels, offset=500)
         index = [('tomoA', i) for i in range(5)] + [('tomoB', i) for i in range(3)]
-        store = Subvolumes(tmp_path, index, box_voxels)
+        subvols = Subvolumes(tmp_path, index, box_voxels)
         seen: dict[int, np.ndarray] = {}
-        for indices, batch in store.iter_batches(batch_size=2):
+        for indices, batch in subvols.iter_batches(batch_size=2):
             for local_index, subvolume in zip(indices, batch):
                 seen[local_index] = subvolume
-        assert set(seen) == set(range(len(store)))
+        assert set(seen) == set(range(len(subvols)))
         for i in seen:
-            np.testing.assert_array_equal(seen[i], store[i])
+            np.testing.assert_array_equal(seen[i], subvols[i])
 
-    def test_write_rolled_produces_a_readable_store(self, tmp_path):
+    def test_write_rolled_produces_a_readable_subvols(self, tmp_path):
         box_voxels = 2
         _write_cache(tmp_path, 'tomoA', 3, box_voxels)
         index = [('tomoA', i) for i in range(3)]
-        store = Subvolumes(tmp_path, index, box_voxels)
-        rolled = ((i, store[i] * 2) for i in range(len(store)))
-        new_store = store.write_rolled(rolled, tmp_path / 'rolled')
-        for i in range(len(store)):
-            np.testing.assert_array_equal(new_store[i], store[i] * 2)
+        subvols = Subvolumes(tmp_path, index, box_voxels)
+        rolled = ((i, subvols[i] * 2) for i in range(len(subvols)))
+        new_subvols = subvols.write_rolled(rolled, tmp_path / 'rolled')
+        for i in range(len(subvols)):
+            np.testing.assert_array_equal(new_subvols[i], subvols[i] * 2)

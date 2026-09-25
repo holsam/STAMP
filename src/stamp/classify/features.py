@@ -105,7 +105,7 @@ def _standardise_columns(matrix: np.ndarray) -> np.ndarray:
 
 # build_feature_matrix: feature matrix for a Subvolumes instance, read in per-tomogram batches
 def build_feature_matrix(
-    store: Subvolumes,
+    subvols: Subvolumes,
     n_radial_bins: int = 12,
     max_azimuthal_mode: int = 4,
     n_azimuthal_samples: int = 64,
@@ -114,15 +114,15 @@ def build_feature_matrix(
     *,
     batch_size: int = 512,
 ) -> np.ndarray:
-    log.debug(f'Building features for {len(store)} subvolumes, max_mode={max_azimuthal_mode}')
-    if len(store) == 0:
+    log.debug(f'Building features for {len(subvols)} subvolumes, max_mode={max_azimuthal_mode}')
+    if len(subvols) == 0:
         return np.empty((0, 0))
     if not 0.0 <= min_radius_fraction < 1.0:
         raise ValueError('min_radius_fraction must be between [0, 1)')
 
     worker = partial(azimuthal_magnitudes, n_radial_bins=n_radial_bins, n_azimuthal_samples=n_azimuthal_samples, max_mode=max_azimuthal_mode)
-    magnitudes: list[np.ndarray | None] = [None] * len(store)
-    for indices, batch in store.iter_batches(batch_size):
+    magnitudes: list[np.ndarray | None] = [None] * len(subvols)
+    for indices, batch in subvols.iter_batches(batch_size):
         batch_results = run_parallel_ordered(list(batch), worker, max_workers=n_workers, label='feature-extraction')
         for local_index, result in zip(indices, batch_results):
             magnitudes[local_index] = result

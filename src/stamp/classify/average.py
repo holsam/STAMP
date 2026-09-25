@@ -12,7 +12,7 @@ from stamp.utils.log import log
 
 # compute_class_averages: mean subvolume per cluster, streamed in batches
 def compute_class_averages(
-    store: Subvolumes,
+    subvols: Subvolumes,
     cluster_ids: list[str],
     *,
     batch_size: int = 512,
@@ -22,10 +22,10 @@ def compute_class_averages(
         if cluster_id == 'noise':
             continue
         members = [index for index, cid in enumerate(cluster_ids) if cid == cluster_id]
-        member_store = store.take(members)
-        total = np.zeros((store.box_voxels,) * 3, dtype=np.float64)
+        member_subvols = subvols.take(members)
+        total = np.zeros((subvols.box_voxels,) * 3, dtype=np.float64)
         count = 0
-        for _indices, batch in member_store.iter_batches(batch_size):
+        for _indices, batch in member_subvols.iter_batches(batch_size):
             total += batch.sum(axis=0, dtype=np.float64)
             count += batch.shape[0]
         averages[cluster_id] = ((total / count).astype(np.float32), count)

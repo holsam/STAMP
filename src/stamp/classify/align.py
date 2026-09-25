@@ -66,16 +66,16 @@ def _align_one_cluster(job: _AlignClusterJob) -> dict[int, float]:
 
 # align_inplane: per-cluster iterative azimuthal alignment; returns {particle_index: angle_degrees}
 def align_inplane(
-    store: Subvolumes,
+    subvols: Subvolumes,
     cluster_ids: list[str],
     *,
     angular_step_degrees: float = 10.0,
     iterations: int = 3,
     n_workers: int = 1,
 ) -> dict[int, float]:
-    if len(store) == 0:
+    if len(subvols) == 0:
         return {}
-    box_voxels = store.box_voxels
+    box_voxels = subvols.box_voxels
     mask = _annulus_mask(box_voxels)
     angles = np.arange(0.0, 360.0, angular_step_degrees)
     jobs = []
@@ -83,7 +83,7 @@ def align_inplane(
         if cluster_id == 'noise':
             continue
         members = [index for index, cid in enumerate(cluster_ids) if cid == cluster_id]
-        member_subvolumes = np.stack([store[i] for i in members])  # bounded to one cluster's members, not the whole dataset
+        member_subvolumes = np.stack([subvols[i] for i in members])  # bounded to one cluster's members, not the whole dataset
         jobs.append(_AlignClusterJob(members, member_subvolumes, mask, angles, iterations))
     resolved: dict[int, float] = {}
     for cluster_result in run_parallel(jobs, _align_one_cluster, max_workers=n_workers, label='inplane-align'):
