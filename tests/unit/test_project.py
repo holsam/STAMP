@@ -6,7 +6,7 @@ STAMP: unit tests for project functions
 import pytest
 
 # Import internal STAMP objects
-from stamp.project.manage import init_project, load_project, lock_project, save_manifest
+from stamp.project.manage import init_project, load_project, save_manifest, update_project
 from stamp.utils.errors import StampPipelineError
 
 # TestManage: class containing unit tests for project/manage.py
@@ -33,11 +33,11 @@ class TestManage:
         with pytest.raises(StampPipelineError, match='checksum mismatch'):
             load_project(project.root)
 
-    def test_lock_then_load_succeeds(self, tmp_path, make_project):
+    def test_update_then_load_succeeds(self, tmp_path, make_project):
         project = make_project(tmp_path)
         manifest_path = project.root / 'manifest.toml'
         manifest_path.write_text(manifest_path.read_text() + '\n# hand edit\n')
-        lock_project(project.root)
+        update_project(project.root)
         load_project(project.root)  # no longer raises
 
     def test_init_twice_raises(self, tmp_path, make_project):

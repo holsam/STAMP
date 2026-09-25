@@ -135,8 +135,8 @@ def load_project(root: Path) -> Project:
     manifest_file = ManifestFile.model_validate(tomllib.loads(manifest_path.read_text()))
     return Project(root=root, meta=project_file.project, tomograms=manifest_file.tomogram, config_path=config_path)
 
-# lock_project: accept the current on-disk manifest.toml/stamp_run.toml as-is, re-recording their checksums
-def lock_project(root: Path) -> Project:
+# update_project: accept the current on-disk manifest.toml/stamp_run.toml as-is, re-recording their checksums
+def update_project(root: Path) -> Project:
     project_path = _validate_project_root(root=root, exists=True)
     project_file = ProjectFile.model_validate(tomllib.loads(project_path.read_text()))
     manifest_path = _validate_manifest(root=root, project_file=project_file, check=False)
