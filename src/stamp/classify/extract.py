@@ -94,10 +94,11 @@ def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], lis
             continue
         subvolumes.append(extract_subvolume(tomogram, particle.position, particle.orientation, job.box_voxels))
         kept.append(particle)
-    # cache to disk once tomogram finishes
+    # cache to disk once tomogram finishes, then drop from memory rather than shipping the full array back over the pool
     if subvolumes and job.cache_dir is not None:
         job.cache_dir.mkdir(parents=True, exist_ok=True)
         np.save(job.cache_dir / f'{job.tomogram_id}.npy', np.stack(subvolumes))
+        subvolumes = []
     return kept, skipped, subvolumes
 
 # extract_particle_set: extract subvolumes for a list of particles
