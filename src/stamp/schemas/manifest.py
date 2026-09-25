@@ -13,3 +13,4 @@ class TomogramManifest(BaseModel):
     raw_tomogram_path: Path
     voxel_size_angstrom: float
     is_decoy: bool = False
+    excluded: bool = False
