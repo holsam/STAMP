@@ -123,10 +123,10 @@ class TestExtract:
             mrc.voxel_size = 1.0
 
         particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
-        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, segmentation_paths={'t': str(tmp_path / 's.mrc')})
+        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, segmentation_paths={'t': str(tmp_path / 's.mrc')}, cache_dir=tmp_path)
         assert len(kept) == 1
         # the box centre sampled the membrane plane; it must now sit near background
-        assert abs(float(subvolumes[0, 5, 5, 5])) < 5.0
+        assert abs(float(subvolumes[0][5, 5, 5])) < 5.0
 
     def test_no_segmentation_leaves_tomogram_untouched(self, tmp_path) -> None:
         shape = (40, 40, 40)
@@ -136,8 +136,8 @@ class TestExtract:
             mrc.set_data(tomogram)
             mrc.voxel_size = 1.0
         particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
-        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11)
-        assert float(subvolumes[0, 5, 5, 5]) == 50.0
+        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, cache_dir=tmp_path)
+        assert float(subvolumes[0][5, 5, 5]) == 50.0
 
 # TestFeatures: class containing unit tests for src/stamp/classify/features.py
 class TestFeatures:
