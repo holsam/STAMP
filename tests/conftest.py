@@ -108,6 +108,13 @@ def _run_mock_pipeline(root: Path, args: list[str] | None = None) -> Path:
     assert result.exit_code == 0, result.output
     return root / 'stamp'
 
+# _make_project: build a dataset and initialise a STAMP project from it, returning the project root
+def _make_project(root: Path, **overrides) -> Path:
+    from stamp.project.manage import init_project
+    _make_dataset(root)
+    project = init_project(root / 'proj', root / 'seg', root / 'tomo', voxel_size_angstrom=overrides.get('voxel_size_angstrom', 13.48))
+    return project
+
 # make_dataset: fixture to call _make_dataset
 @pytest.fixture
 def make_dataset():
@@ -122,3 +129,8 @@ def write_config():
 @pytest.fixture
 def run_mock_pipeline():
     return _run_mock_pipeline
+
+# make_project: fixture to call _make_project
+@pytest.fixture
+def make_project():
+    return _make_project
