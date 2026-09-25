@@ -7,19 +7,28 @@ import mrcfile, numpy as np
 from pathlib import Path
 
 # Import internal STAMP objects
+from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.log import log
 
-# compute_class_averages: mean subvolume per cluster
+# compute_class_averages: mean subvolume per cluster, streamed in batches
 def compute_class_averages(
-    subvolumes: np.ndarray, cluster_ids: list[str]
+    store: Subvolumes,
+    cluster_ids: list[str],
+    *,
+    batch_size: int = 512,
 ) -> dict[str, tuple[np.ndarray, int]]:
     averages: dict[str, tuple[np.ndarray, int]] = {}
     for cluster_id in sorted(set(cluster_ids)):
         if cluster_id == 'noise':
             continue
-        mask = np.array([identifier == cluster_id for identifier in cluster_ids])
-        members = subvolumes[mask]
-        averages[cluster_id] = (members.mean(axis=0), int(mask.sum()))
+        members = [index for index, cid in enumerate(cluster_ids) if cid == cluster_id]
+        member_store = store.take(members)
+        total = np.zeros((store.box_voxels,) * 3, dtype=np.float64)
+        count = 0
+        for _indices, batch in member_store.iter_batches(batch_size):
+            total += batch.sum(axis=0, dtype=np.float64)
+            count += batch.shape[0]
+        averages[cluster_id] = ((total / count).astype(np.float32), count)
     return averages
 
 # write_class_averages: write each class average as an MRC with its voxel size set
