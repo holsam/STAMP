@@ -24,6 +24,7 @@ from stamp.decoy.validate import is_decoy_particle_set
 from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
+from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import archive_and_remove_directory, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
@@ -76,7 +77,7 @@ def run_classify(
     if box_voxels % 2 == 0:
         box_voxels += 1  # odd box keeps the particle exactly centred
 
-    subvolumes, kept, skipped = extract_particle_set(
+    subvols, kept, skipped = extract_particle_set(
         particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels,
         segmentation_paths=segmentation_paths, n_workers=n_workers, cache_dir=output_dir / 'raw' / 'subvolumes',
     )
@@ -87,7 +88,7 @@ def run_classify(
     log.info(f'Extracted {len(kept)} subvolumes at box {box_voxels}{" (membrane subtracted)" if segmentation_paths else ""}')
 
     features = build_feature_matrix(
-        subvolumes,
+        subvols,
         n_radial_bins=n_radial_bins,
         max_azimuthal_mode=azimuthal_modes,
         n_azimuthal_samples=n_azimuthal_samples,
@@ -99,8 +100,9 @@ def run_classify(
     degenerate = ~features.any(axis=1)
     if degenerate.any():
         log.warning(f'Dropped {int(degenerate.sum())} particles with a constant/empty subvolume (edge fill)')
+        keep_indices = [i for i, bad in enumerate(degenerate) if not bad]
         features = features[~degenerate]
-        subvolumes = subvolumes[~degenerate]
+        subvols = subvols.take(keep_indices)
         kept = [particle for particle, bad in zip(kept, degenerate) if not bad]
     if not kept:
         raise StampPipelineError('No particles left after dropping degenerate subvolumes')
@@ -127,9 +129,9 @@ def run_classify(
     if not strict_halfset_independence:
         log.warning('--no-strict-halfset-independence used, half-A and half-B particles are clustered together; FSC built on these classes will be inflated')
     if strict_halfset_independence:
-        assignments, result_by_half, averages_by_half = _classify_strict(kept, subvolumes, features, config, output_dir, voxel_size_angstrom, align_settings)
+        assignments, result_by_half, averages_by_half = _classify_strict(kept, subvols, features, config, output_dir, voxel_size_angstrom, align_settings)
     else:
-        assignments, result_by_half, averages_by_half = _classify_combined(kept, subvolumes, features, config, output_dir, voxel_size_angstrom, align_settings)
+        assignments, result_by_half, averages_by_half = _classify_combined(kept, subvols, features, config, output_dir, voxel_size_angstrom, align_settings)
 
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
@@ -224,26 +226,30 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
     argv += ['--plot-format', config.plots.format]
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
-# _resolve_and_apply_inplane: estimate per-row azimuth, return rolled subvolumes and {row: angle}
+# _resolve_and_apply_inplane: estimate per-row azimuth, return a rolled subvols and {row: angle}
 def _resolve_and_apply_inplane(
-    subvolumes: np.ndarray, cluster_ids: list[str], align_settings: dict
-) -> tuple[np.ndarray, dict[int, float]]:
+    subvols: Subvolumes,
+    cluster_ids: list[str],
+    align_settings: dict,
+    rolled_cache_dir: Path,
+) -> tuple[Subvolumes, dict[int, float]]:
     if not align_settings['enabled']:
-        return subvolumes, {}
+        return subvols, {}
     angles = align_inplane(
-        subvolumes,
+        subvols,
         cluster_ids,
         angular_step_degrees=align_settings['angular_step_degrees'],
         iterations=align_settings['iterations'],
         n_workers=align_settings['n_workers'],
     )
-    rolled = np.stack([roll_about_normal(volume, angles.get(index, 0.0)) for index, volume in enumerate(subvolumes)])
+    rolled = ((index, roll_about_normal(subvols[index], angles.get(index, 0.0))) for index in range(len(subvols)))
+    return subvols.write_rolled(rolled, rolled_cache_dir), angles
     return rolled, angles
 
 # _classify_combined: cluster all particles together, then average each half separately
 def _classify_combined(
     particles,
-    subvolumes,
+    subvols: Subvolumes,
     features,
     config,
     output_dir: Path,
@@ -255,14 +261,15 @@ def _classify_combined(
 
     _report_clusters(cluster_ids, result.explained_variance_ratio)
 
-    aligned, angles = _resolve_and_apply_inplane(subvolumes, cluster_ids, align_settings)
+    aligned, angles = _resolve_and_apply_inplane(subvols, cluster_ids, align_settings, output_dir / 'raw' / 'subvolumes_rolled')
 
     averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
     for half_set in (HalfSet.A, HalfSet.B):
-        mask = np.array([p.half_set == half_set for p in particles])
-        if not mask.any():
+        half_indices = [i for i, p in enumerate(particles) if p.half_set == half_set]
+        if not half_indices:
             continue
-        averages = compute_class_averages(aligned[mask], [cid for cid, keep in zip(cluster_ids, mask) if keep])
+        half_cluster_ids = [cluster_ids[i] for i in half_indices]
+        averages = compute_class_averages(aligned.take(half_indices), half_cluster_ids)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_set.value)
         averages_by_half[half_set.value] = averages
 
@@ -281,7 +288,7 @@ def _classify_combined(
 # _classify_strict: cluster each half independently, then match clusters by centroid
 def _classify_strict(
     particles,
-    subvolumes,
+    subvols: Subvolumes,
     features,
     config,
     output_dir: Path,
@@ -290,12 +297,12 @@ def _classify_strict(
 ) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
     half_a, half_b = split_by_half_set(list(particles))
     index_of = {particle.particle_id: i for i, particle in enumerate(particles)}
-    indices_a = np.array([index_of[p.particle_id] for p in half_a])
-    indices_b = np.array([index_of[p.particle_id] for p in half_b])
-    if indices_a.size == 0 or indices_b.size == 0:
+    indices_a = [index_of[p.particle_id] for p in half_a]
+    indices_b = [index_of[p.particle_id] for p in half_b]
+    if not indices_a or not indices_b:
         raise StampPipelineError('Strict mode needs particles in both half-sets')
 
-    results = reduce_and_cluster_shared(features, {'A': indices_a, 'B': indices_b}, config)
+    results = reduce_and_cluster_shared(features, {'A': np.array(indices_a), 'B': np.array(indices_b)}, config)
     result_a, result_b = results['A'], results['B']
     matches = match_clusters_across_halves(result_a.centroids, result_b.centroids)
     log.debug('Cross-half cluster matching (B -> A, shared PCA space):')
@@ -310,7 +317,7 @@ def _classify_strict(
         ('B', half_b, indices_b, result_b, matches),
     ):
         cluster_ids = [label_to_cluster_id(int(label)) for label in result.labels]
-        aligned, local_angles = _resolve_and_apply_inplane(subvolumes[indices], cluster_ids, align_settings)
+        aligned, local_angles = _resolve_and_apply_inplane(subvols.take(indices), cluster_ids, align_settings, output_dir / 'raw' / f'subvolumes_rolled_{half_label}')
         averages = compute_class_averages(aligned, cluster_ids)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_label)
         result_by_half[half_label] = result

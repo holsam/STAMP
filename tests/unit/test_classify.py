@@ -4,6 +4,7 @@ STAMP: unit tests for subvolume extraction, feature classification, and clusteri
 
 # Import external dependencies
 import mrcfile, numpy as np, pytest
+from pathlib import Path
 from scipy.ndimage import gaussian_filter, rotate
 
 # Import internal STAMP objects
@@ -26,6 +27,15 @@ from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, 
 from stamp.commands.classify import _classify_combined
 from stamp.picking.geometry import quaternion_from_reference_to
 from stamp.schemas.particles import HalfSet, Particle
+from stamp.schemas.subvolumes import Subvolumes
+
+# _subvols_from_array: write a dense subvolume stack to a single-tomogram cache and wrap it as a Subvolumes subvols
+def _subvols_from_array(tmp_path: Path, array: np.ndarray) -> Subvolumes:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    box_voxels = array.shape[-1]
+    np.save(tmp_path / 'tomo000.npy', np.asarray(array, dtype=np.float32))
+    index = [('tomo000', i) for i in range(array.shape[0])]
+    return Subvolumes(tmp_path, index, box_voxels)
 
 # _three_blobs: three well-separated Gaussian blobs in 2D
 def _three_blobs(n_per_group: int = 40, seed: int = 0) -> np.ndarray:
@@ -123,10 +133,10 @@ class TestExtract:
             mrc.voxel_size = 1.0
 
         particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
-        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, segmentation_paths={'t': str(tmp_path / 's.mrc')})
+        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, segmentation_paths={'t': str(tmp_path / 's.mrc')}, cache_dir=tmp_path)
         assert len(kept) == 1
         # the box centre sampled the membrane plane; it must now sit near background
-        assert abs(float(subvolumes[0, 5, 5, 5])) < 5.0
+        assert abs(float(subvolumes[0][5, 5, 5])) < 5.0
 
     def test_no_segmentation_leaves_tomogram_untouched(self, tmp_path) -> None:
         shape = (40, 40, 40)
@@ -136,8 +146,8 @@ class TestExtract:
             mrc.set_data(tomogram)
             mrc.voxel_size = 1.0
         particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
-        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11)
-        assert float(subvolumes[0, 5, 5, 5]) == 50.0
+        subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, cache_dir=tmp_path)
+        assert float(subvolumes[0][5, 5, 5]) == 50.0
 
 # TestFeatures: class containing unit tests for src/stamp/classify/features.py
 class TestFeatures:
@@ -147,25 +157,27 @@ class TestFeatures:
         averaged = rotational_average(np.ones((11, 11, 11)), bin_index, valid, 4)
         assert averaged.shape == (4, 11)
 
-    def test_features_are_invariant_to_in_plane_rotation(self) -> None:
+    def test_features_are_invariant_to_in_plane_rotation(self, tmp_path: Path) -> None:
         '''A subvolume rotated about z should give the same feature vector.'''
         rng = np.random.default_rng(0)
         subvolume = rng.normal(size=(21, 21, 21))
         # Blur slightly so interpolation during rotation doesn't dominate.
         subvolume = np.cumsum(np.cumsum(subvolume, axis=0), axis=1) / 100.0
         rotated = rotate(subvolume, angle=37.0, axes=(0, 1), reshape=False, order=1)
-        features = build_feature_matrix(np.stack([subvolume, rotated]), n_radial_bins=8, max_azimuthal_mode=0)
+        subvols = _subvols_from_array(tmp_path, np.stack([subvolume, rotated]))
+        features = build_feature_matrix(subvols, n_radial_bins=8, max_azimuthal_mode=0)
         correlation = np.corrcoef(features[0], features[1])[0, 1]
         assert correlation > 0.9, f'in-plane rotation changed the features (r={correlation:.3f})'
 
-    def test_features_distinguish_different_structures(self) -> None:
+    def test_features_distinguish_different_structures(self, tmp_path: Path) -> None:
         '''A blob and an empty box give different features.'''
         box = 21
         centre = box // 2
         with_blob = np.zeros((box, box, box))
         with_blob[centre - 1 : centre + 2, centre - 1 : centre + 2, centre + 4 : centre + 7] = 1.0
         without_blob = np.zeros((box, box, box))
-        features = build_feature_matrix(np.stack([with_blob, without_blob]), n_radial_bins=8)
+        subvols = _subvols_from_array(tmp_path, np.stack([with_blob, without_blob]))
+        features = build_feature_matrix(subvols, n_radial_bins=8)
         assert not np.allclose(features[0], features[1])
 
     def test_empty_input_returns_empty_matrix(self) -> None:
@@ -173,13 +185,14 @@ class TestFeatures:
         features = build_feature_matrix(np.empty((0, 11, 11, 11)), n_radial_bins=4)
         assert features.shape[0] == 0
 
-    def test_mode_zero_reproduces_rotational_average(self) -> None:
+    def test_mode_zero_reproduces_rotational_average(self, tmp_path: Path) -> None:
         '''max_azimuthal_mode=0 must give features equivalent to rotational average.'''
         rng = np.random.default_rng(0)
         raw = rng.normal(size=(4, 21, 21, 21))
         subvolumes = np.cumsum(np.cumsum(raw, axis=1), axis=2) / 100.0
 
-        azimuthal = build_feature_matrix(subvolumes, n_radial_bins=10, max_azimuthal_mode=0)
+        subvols = _subvols_from_array(tmp_path, subvolumes)
+        azimuthal = build_feature_matrix(subvols, n_radial_bins=10, max_azimuthal_mode=0)
         bin_index, valid = cylindrical_bins(21, n_radial_bins=10)
         classic = np.stack([rotational_average(v, bin_index, valid, 10).ravel() for v in subvolumes])
         classic = (classic - classic.mean(axis=1, keepdims=True)) / classic.std(axis=1, keepdims=True)
@@ -209,7 +222,7 @@ class TestFeatures:
         assert per_mode[3] > per_mode[2]
         assert per_mode[3] > per_mode[4]
 
-    def test_c3_and_c4_separate_with_azimuthal_features_but_not_without(self) -> None:
+    def test_c3_and_c4_separate_with_azimuthal_features_but_not_without(self, tmp_path: Path) -> None:
         '''Two particles differing only in symmetry are indistinguishable to a rotational average and distinguishable once azimuthal modes are included.'''
         rng = np.random.default_rng(0)
         subvolumes = []
@@ -232,8 +245,9 @@ class TestFeatures:
             within = 0.5 * (group_three.std(0).mean() + group_four.std(0).mean())
             return between / max(within, 1e-9)
 
-        rotational_only = build_feature_matrix(subvolumes, n_radial_bins=12, max_azimuthal_mode=0)
-        with_azimuthal = build_feature_matrix(subvolumes, n_radial_bins=12, max_azimuthal_mode=4)
+        subvols = _subvols_from_array(tmp_path, subvolumes)
+        rotational_only = build_feature_matrix(subvols, n_radial_bins=12, max_azimuthal_mode=0)
+        with_azimuthal = build_feature_matrix(subvols, n_radial_bins=12, max_azimuthal_mode=4)
 
         assert _between_group_separation(with_azimuthal) > (1.5 * _between_group_separation(rotational_only)), 'azimuthal features did not improve C3-vs-C4 separation'
 
@@ -242,21 +256,23 @@ class TestFeatures:
         with pytest.raises(ValueError, match='aliasing'):
             azimuthal_magnitudes(_c_n_particle(), n_radial_bins=12, n_azimuthal_samples=6, max_mode=6)
 
-    def test_inner_bins_excluded_from_azimuthal_block(self) -> None:
+    def test_inner_bins_excluded_from_azimuthal_block(self, tmp_path: Path) -> None:
         '''Raising min_radius_fraction should shrink the feature vector.'''
         subvolumes = np.stack([_c_n_particle() for _ in range(3)])
+        subvols = _subvols_from_array(tmp_path, subvolumes)
         wide = build_feature_matrix(
-            subvolumes, n_radial_bins=12, max_azimuthal_mode=4, min_radius_fraction=0.0
+            subvols, n_radial_bins=12, max_azimuthal_mode=4, min_radius_fraction=0.0
         )
         narrow = build_feature_matrix(
-            subvolumes, n_radial_bins=12, max_azimuthal_mode=4, min_radius_fraction=0.5
+            subvols, n_radial_bins=12, max_azimuthal_mode=4, min_radius_fraction=0.5
         )
         assert narrow.shape[1] < wide.shape[1]
 
-    def test_degenerate_rows_are_all_zero(self):
+    def test_degenerate_rows_are_all_zero(self, tmp_path: Path):
         '''build_feature_matrix z-scores a flat subvolume to zeros.'''
         stack = np.stack([np.zeros((11, 11, 11)), np.random.default_rng(0).random((11, 11, 11))])
-        features = build_feature_matrix(stack, n_radial_bins=4, max_azimuthal_mode=0)
+        subvols = _subvols_from_array(tmp_path, stack)
+        features = build_feature_matrix(subvols, n_radial_bins=4, max_azimuthal_mode=0)
         assert not features[0].any() and features[1].any()
 
 # TestCluster: class containing unit tests for src/stamp/classify/cluster.py
@@ -338,23 +354,25 @@ class TestCluster:
 
 # TestAlign: class containing unit tests for src/stamp/classify/align.py
 class TestAlign:
-    def test_recovers_planted_rolls(self):
+    def test_recovers_planted_rolls(self, tmp_path: Path):
         '''Rolled copies of one motif align back to a common frame.'''
         box = 21
         base = _asymmetric_blob(box)
         planted = [0.0, 40.0, 120.0, 250.0, 300.0]
         stack = np.stack([roll_about_normal(base, angle) for angle in planted])
-        angles = align_inplane(stack, ['c00'] * len(planted), angular_step_degrees=10.0, iterations=4)
+        subvols = _subvols_from_array(tmp_path, stack)
+        angles = align_inplane(subvols, ['c00'] * len(planted), angular_step_degrees=10.0, iterations=4)
 
         aligned = np.stack([roll_about_normal(stack[i], angles[i]) for i in range(len(planted))])
         reference = aligned.mean(axis=0)
         for frame in aligned:
             assert np.corrcoef(frame.ravel(), reference.ravel())[0, 1] > 0.98
 
-    def test_noise_cluster_skipped(self):
+    def test_noise_cluster_skipped(self, tmp_path: Path):
         '''Noise rows get no angle.'''
         stack = np.random.default_rng(0).random((4, 15, 15, 15))
-        angles = align_inplane(stack, ['noise', 'noise', 'c00', 'c00'])
+        subvols = _subvols_from_array(tmp_path, stack)
+        angles = align_inplane(subvols, ['noise', 'noise', 'c00', 'c00'])
         assert set(angles) == {2, 3}
 
 # TestVesicle: class containing unit tests for vesicle_id carry-through in classification
@@ -366,7 +384,7 @@ class TestVesicle:
         centres = np.array([[0.0, 0.0], [20.0, 0.0]])
         features = np.vstack([rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres])
         n_particles = features.shape[0]
-        subvolumes = np.zeros((n_particles, box, box, box), dtype=np.float32)
+        subvolumes = _subvols_from_array(tmp_path / 'subvolumes', np.zeros((n_particles, box, box, box), dtype=np.float32))
 
         particles = [
             Particle(
@@ -397,7 +415,7 @@ class TestVesicle:
         centres = np.array([[0.0, 0.0], [20.0, 0.0]])
         features = np.vstack([rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres])
         n_particles = features.shape[0]
-        subvolumes = np.zeros((n_particles, box, box, box), dtype=np.float32)
+        subvolumes = _subvols_from_array(tmp_path / 'subvolumes', np.zeros((n_particles, box, box, box), dtype=np.float32))
 
         particles = [
             Particle(

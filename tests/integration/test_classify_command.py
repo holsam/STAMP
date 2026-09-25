@@ -8,7 +8,12 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 # Import main CLI
+from stamp.classify.extract import extract_particle_set
+from stamp.classify.features import build_feature_matrix
+from stamp.classify.align import align_inplane
+from stamp.classify.average import compute_class_averages
 from stamp.cli.cli import stamp_app
+from stamp.schemas.particles import HalfSet, Particle
 
 # Initialise runner
 runner = CliRunner()
@@ -113,3 +118,58 @@ class TestClassifyCommand:
         )
         assert result.exit_code == 0, result.output
         assert 'Cross-half cluster matching' in result.output
+
+class TestClassifyChunking:
+    def _guard_no_full_concatenate(self, monkeypatch, max_rows: int) -> None:
+        '''Fail the test if anything tries to stack more than max_rows at once.'''
+        real_stack = np.stack
+        def guarded_stack(arrays, *args, **kwargs):
+            if len(arrays) > max_rows:
+                raise AssertionError(f'np.stack called with {len(arrays)} arrays, exceeding the per-batch bound of {max_rows}')
+            return real_stack(arrays, *args, **kwargs)
+        monkeypatch.setattr(np, 'stack', guarded_stack)
+
+    def test_classify_pipeline_never_stacks_the_whole_dataset(self, tmp_path, monkeypatch):
+        '''extract/features/align/average batch per-tomogram, instead of stacking the whole dataset.'''
+        n_tomograms = 4
+        n_particles_per_tomogram = 20
+        box_voxels = 9
+        rng = np.random.default_rng(0)
+        raw_dir = tmp_path / 'raw'
+        raw_dir.mkdir()
+        tomogram_paths: dict[str, str] = {}
+        particles: list[Particle] = []
+        grid = [(10 + (i % 5) * 5, 10 + (i // 5) * 5, 20) for i in range(n_particles_per_tomogram)]
+        for t in range(n_tomograms):
+            tomogram_id = f'tomo{t:03d}'
+            volume = rng.normal(0.0, 0.2, size=(40, 40, 40)).astype(np.float32)
+            for x, y, z in grid:
+                volume[z - 2 : z + 2, y - 2 : y + 2, x - 2 : x + 2] -= 3.0
+            path = raw_dir / f'{tomogram_id}.mrc'
+            with mrcfile.new(path, overwrite=True) as mrc:
+                mrc.set_data(volume)
+            tomogram_paths[tomogram_id] = str(path)
+            for index, (x, y, z) in enumerate(grid):
+                particles.append(
+                    Particle(
+                        particle_id=f'{tomogram_id}_p{index:03d}',
+                        tomogram_id=tomogram_id,
+                        position=(float(x), float(y), float(z)),
+                        orientation=(1.0, 0.0, 0.0, 0.0),
+                        source_picker='stamp-native',
+                        half_set=HalfSet.A if index % 2 == 0 else HalfSet.B,
+                    )
+                )
+        cache_dir = tmp_path / 'subvolumes'
+        self._guard_no_full_concatenate(monkeypatch, max_rows=n_particles_per_tomogram)
+        subvols, kept, skipped = extract_particle_set(particles, tomogram_paths, box_voxels, cache_dir=cache_dir)
+        assert not skipped
+        assert len(subvols) == n_tomograms * n_particles_per_tomogram
+        monkeypatch.undo()
+        features = build_feature_matrix(subvols, n_workers=1, batch_size=n_particles_per_tomogram)
+        assert features.shape[0] == len(subvols)
+        cluster_ids = ['c00'] * len(subvols)
+        angles = align_inplane(subvols, cluster_ids, n_workers=1)
+        assert len(angles) == len(subvols)
+        averages = compute_class_averages(subvols, cluster_ids)
+        assert averages['c00'][1] == len(subvols)

@@ -3,7 +3,7 @@ STAMP: unit tests for schema
 '''
 
 # Import external dependencies
-import pytest
+import numpy as np, pytest
 from datetime import datetime, timezone
 from pathlib import Path
 from pydantic import ValidationError
@@ -18,7 +18,14 @@ from stamp.schemas.particles import (
     ParticleSet,
 )
 from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
+
+# _write_cache: helper writing a fake per-tomogram cache of n subvolumes
+def _write_cache(cache_dir, tomogram_id: str, n: int, box_voxels: int, offset: int = 0) -> np.ndarray:
+    data = np.arange(n * box_voxels**3, dtype=np.float32).reshape(n, box_voxels, box_voxels, box_voxels) + offset
+    np.save(cache_dir / f'{tomogram_id}.npy', data)
+    return data
 
 # TestManifestSchema: class containing unit tests for schemas/manifest.py
 class TestManifestSchema:
@@ -135,3 +142,48 @@ class TestProvenanceSchema:
             input_checksums={'tomo001_seg.mrc': 'abc123'},
         )
         assert sidecar.stage == 'pick'
+
+class TestSubvolumes:
+    def test_getitem_matches_dense_reference(self, tmp_path):
+        box_voxels = 3
+        a = _write_cache(tmp_path, 'tomoA', 2, box_voxels)
+        b = _write_cache(tmp_path, 'tomoB', 3, box_voxels, offset=1000)
+        index = [('tomoA', 0), ('tomoA', 1), ('tomoB', 0), ('tomoB', 1), ('tomoB', 2)]
+        subvols = Subvolumes(tmp_path, index, box_voxels)
+        dense = np.concatenate([a, b], axis=0)
+        for i in range(len(subvols)):
+            np.testing.assert_array_equal(subvols[i], dense[i])
+
+    def test_take_returns_view_without_copying_cache_files(self, tmp_path):
+        box_voxels = 2
+        _write_cache(tmp_path, 'tomoA', 4, box_voxels)
+        index = [('tomoA', i) for i in range(4)]
+        subvols = Subvolumes(tmp_path, index, box_voxels)
+        subset = subvols.take([0, 2])
+        assert len(subset) == 2
+        np.testing.assert_array_equal(subset[0], subvols[0])
+        np.testing.assert_array_equal(subset[1], subvols[2])
+
+    def test_iter_batches_covers_every_index_grouped_by_tomogram(self, tmp_path):
+        box_voxels = 2
+        _write_cache(tmp_path, 'tomoA', 5, box_voxels)
+        _write_cache(tmp_path, 'tomoB', 3, box_voxels, offset=500)
+        index = [('tomoA', i) for i in range(5)] + [('tomoB', i) for i in range(3)]
+        subvols = Subvolumes(tmp_path, index, box_voxels)
+        seen: dict[int, np.ndarray] = {}
+        for indices, batch in subvols.iter_batches(batch_size=2):
+            for local_index, subvolume in zip(indices, batch):
+                seen[local_index] = subvolume
+        assert set(seen) == set(range(len(subvols)))
+        for i in seen:
+            np.testing.assert_array_equal(seen[i], subvols[i])
+
+    def test_write_rolled_produces_a_readable_subvols(self, tmp_path):
+        box_voxels = 2
+        _write_cache(tmp_path, 'tomoA', 3, box_voxels)
+        index = [('tomoA', i) for i in range(3)]
+        subvols = Subvolumes(tmp_path, index, box_voxels)
+        rolled = ((i, subvols[i] * 2) for i in range(len(subvols)))
+        new_subvols = subvols.write_rolled(rolled, tmp_path / 'rolled')
+        for i in range(len(subvols)):
+            np.testing.assert_array_equal(new_subvols[i], subvols[i] * 2)
