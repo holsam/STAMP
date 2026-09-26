@@ -8,6 +8,7 @@ from functools import partial
 from scipy.ndimage import map_coordinates
 
 # Import internal STAMP objects
+from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel_ordered
 
@@ -102,23 +103,29 @@ def _standardise_columns(matrix: np.ndarray) -> np.ndarray:
     stds[stds == 0.0] = 1.0
     return (matrix - means) / stds
 
-# build_feature_matrix: feature matrix for a stack of canonical subvolumes
+# build_feature_matrix: feature matrix for a Subvolumes instance, read in per-tomogram batches
 def build_feature_matrix(
-    subvolumes: np.ndarray,
+    subvols: Subvolumes,
     n_radial_bins: int = 12,
     max_azimuthal_mode: int = 4,
     n_azimuthal_samples: int = 64,
     min_radius_fraction: float = 0.25,
     n_workers: int = 1,
+    *,
+    batch_size: int = 512,
 ) -> np.ndarray:
-    log.debug(f'Building features for {subvolumes.shape[0]} subvolumes, max_mode={max_azimuthal_mode}')
-    if subvolumes.shape[0] == 0:
+    log.debug(f'Building features for {len(subvols)} subvolumes, max_mode={max_azimuthal_mode}')
+    if len(subvols) == 0:
         return np.empty((0, 0))
     if not 0.0 <= min_radius_fraction < 1.0:
         raise ValueError('min_radius_fraction must be between [0, 1)')
 
     worker = partial(azimuthal_magnitudes, n_radial_bins=n_radial_bins, n_azimuthal_samples=n_azimuthal_samples, max_mode=max_azimuthal_mode)
-    magnitudes = run_parallel_ordered(list(subvolumes), worker, max_workers=n_workers, label='feature-extraction')
+    magnitudes: list[np.ndarray | None] = [None] * len(subvols)
+    for indices, batch in subvols.iter_batches(batch_size):
+        batch_results = run_parallel_ordered(list(batch), worker, max_workers=n_workers, label='feature-extraction')
+        for local_index, result in zip(indices, batch_results):
+            magnitudes[local_index] = result
     stacked = np.stack(magnitudes)  # (n_particles, n_modes, n_radial_bins, box_voxels)
 
     n_particles = stacked.shape[0]

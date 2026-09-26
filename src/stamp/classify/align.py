@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from scipy.ndimage import rotate
 
 # Import internal STAMP objects
+from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.parallel import run_parallel
 
 # _ROLL_AXES: box axes spanning the plane perpendicular to the membrane normal
@@ -63,18 +64,18 @@ def _align_one_cluster(job: _AlignClusterJob) -> dict[int, float]:
         current = {local: _best_angle(job.member_subvolumes[local], reference_masked, job.mask, job.angles) for local in current}
     return {job.member_indices[local]: angle for local, angle in current.items()}
 
-# align_inplace: per-cluster iterative azimuthal alignment; returns {subvolume_row_index: angle_degrees}
+# align_inplane: per-cluster iterative azimuthal alignment; returns {particle_index: angle_degrees}
 def align_inplane(
-    subvolumes: np.ndarray,
+    subvols: Subvolumes,
     cluster_ids: list[str],
     *,
     angular_step_degrees: float = 10.0,
     iterations: int = 3,
     n_workers: int = 1,
 ) -> dict[int, float]:
-    if subvolumes.shape[0] == 0:
+    if len(subvols) == 0:
         return {}
-    box_voxels = subvolumes.shape[-1]
+    box_voxels = subvols.box_voxels
     mask = _annulus_mask(box_voxels)
     angles = np.arange(0.0, 360.0, angular_step_degrees)
     jobs = []
@@ -82,7 +83,8 @@ def align_inplane(
         if cluster_id == 'noise':
             continue
         members = [index for index, cid in enumerate(cluster_ids) if cid == cluster_id]
-        jobs.append(_AlignClusterJob(members, subvolumes[members], mask, angles, iterations))
+        member_subvolumes = np.stack([subvols[i] for i in members])  # bounded to one cluster's members, not the whole dataset
+        jobs.append(_AlignClusterJob(members, member_subvolumes, mask, angles, iterations))
     resolved: dict[int, float] = {}
     for cluster_result in run_parallel(jobs, _align_one_cluster, max_workers=n_workers, label='inplane-align'):
         resolved.update(cluster_result)

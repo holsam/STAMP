@@ -10,9 +10,20 @@ from scipy.ndimage import map_coordinates
 
 # Import STAMP schema
 from stamp.schemas.particles import Particle
+from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
+
+# _ExtractTomogramJob: one tomogram's particle group, picklable for ProcessPoolExecutor
+@dataclass(frozen=True)
+class _ExtractTomogramJob:
+    tomogram_id: str
+    group: list[Particle]
+    tomogram_path: str
+    segmentation_path: str | None
+    box_voxels: int
+    cache_dir: Path
 
 # quaternion_to_matrix: return a rotation matrix from a unit quaternion (w, x, y, z)
 def quaternion_to_matrix(quaternion: tuple[float, float, float, float]) -> np.ndarray:
@@ -62,18 +73,8 @@ def box_fits_inside(
     position = np.array(position_xyz)
     return bool(np.all(position >= radius) and np.all(position <= extent_xyz - radius))
 
-# _ExtractTomogramJob: one tomogram's particle group, picklable for ProcessPoolExecutor
-@dataclass(frozen=True)
-class _ExtractTomogramJob:
-    tomogram_id: str
-    group: list[Particle]
-    tomogram_path: str
-    segmentation_path: str | None
-    box_voxels: int
-    cache_dir: Path | None = None
-
 # _extract_one_tomogram: worker entry point — loads one tomogram and extracts subvolumes for its particles
-def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], list[Particle], list[np.ndarray]]:
+def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], list[Particle]]:
     with mrcfile.open(str(job.tomogram_path), permissive=True) as mrc:
         tomogram = np.asarray(mrc.data).astype(np.float32)
 
@@ -94,21 +95,22 @@ def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], lis
             continue
         subvolumes.append(extract_subvolume(tomogram, particle.position, particle.orientation, job.box_voxels))
         kept.append(particle)
-    # cache to disk once tomogram finishes
-    if subvolumes and job.cache_dir is not None:
+    if subvolumes:
         job.cache_dir.mkdir(parents=True, exist_ok=True)
         np.save(job.cache_dir / f'{job.tomogram_id}.npy', np.stack(subvolumes))
-    return kept, skipped, subvolumes
+    return kept, skipped
 
 # extract_particle_set: extract subvolumes for a list of particles
+# extract_particle_set: extract subvolumes for a list of particles, cached per tomogram
 def extract_particle_set(
     particles: list[Particle],
     tomogram_paths: dict[str, str],
     box_voxels: int,
     segmentation_paths: dict[str, str] | None = None,
     n_workers: int = 1,
-    cache_dir: Path | None = None,
-) -> tuple[np.ndarray, list[Particle], list[Particle]]:
+    *,
+    cache_dir: Path,
+) -> tuple[Subvolumes, list[Particle], list[Particle]]:
     by_tomogram: dict[str, list[Particle]] = {}
     for particle in particles:
         by_tomogram.setdefault(particle.tomogram_id, []).append(particle)
@@ -126,11 +128,10 @@ def extract_particle_set(
             continue
         jobs.append(_ExtractTomogramJob(tomogram_id, group, path, segmentation_paths.get(tomogram_id), box_voxels, cache_dir))
 
-    result_by_tomogram: dict[str, tuple[list[Particle], list[Particle], list[np.ndarray]]] = {}
+    result_by_tomogram: dict[str, tuple[list[Particle], list[Particle]]] = {}
 
-    def _on_success(job: _ExtractTomogramJob, result: tuple[list[Particle], list[Particle], list[np.ndarray]]) -> None:
-        tomogram_kept, tomogram_skipped, subvolumes = result
-        result_by_tomogram[job.tomogram_id] = (tomogram_kept, tomogram_skipped, subvolumes)
+    def _on_success(job: _ExtractTomogramJob, result: tuple[list[Particle], list[Particle]]) -> None:
+        result_by_tomogram[job.tomogram_id] = result
 
     def _on_error(job: _ExtractTomogramJob, exc: Exception) -> None:
         if isinstance(exc, StampValidationError):
@@ -141,21 +142,15 @@ def extract_particle_set(
 
     run_parallel(jobs, _extract_one_tomogram, max_workers=n_workers, label='subvolume-extraction', on_success=_on_success, on_error=_on_error)
 
-    parts: list[np.ndarray] = []
+    index: list[tuple[str, int]] = []
     for job in jobs:
         result = result_by_tomogram.get(job.tomogram_id)
         if result is None:
             continue
-        tomogram_kept, tomogram_skipped, subvolumes = result
+        tomogram_kept, tomogram_skipped = result
         kept.extend(tomogram_kept)
         skipped.extend(tomogram_skipped)
-        cache_path = job.cache_dir / f'{job.tomogram_id}.npy' if job.cache_dir is not None else None
-        if cache_path is not None and cache_path.exists():
-            parts.append(np.load(cache_path, mmap_mode='r'))
-        elif subvolumes:
-            parts.append(np.stack(subvolumes))
+        index.extend((job.tomogram_id, row) for row in range(len(tomogram_kept)))
 
     log.debug(f'extract_particle_set: {len(kept)} kept, {len(skipped)} skipped')
-    if not parts:
-        return np.empty((0, box_voxels, box_voxels, box_voxels)), kept, skipped
-    return np.concatenate(parts, axis=0), kept, skipped
+    return Subvolumes(cache_dir, index, box_voxels), kept, skipped
