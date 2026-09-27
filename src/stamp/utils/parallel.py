@@ -23,11 +23,16 @@ def run_parallel(
     label: str,
     on_success: Callable[[T, R], None] | None = None,
     on_error: Callable[[T, Exception], None] | None = None,
+    pool: ProcessPoolExecutor | None = None,
+    progress_total: int | None = None,
+    progress_offset: int = 0,
 ) -> list[R]:
     total = len(items)
     if total == 0:
         return []
-    report_every = max(1, total // 10)
+    # progress_total lets callers define an overall total to report against (eg if using batches)
+    report_total = progress_total if progress_total is not None else total
+    report_every = max(1, report_total // 10)
     results: list[R] = []
 
     # _handle: per-item bookkeeping
@@ -42,17 +47,26 @@ def run_parallel(
             if on_success is not None:
                 on_success(item, result)
             results.append(result)
-        if index % report_every == 0 or index == total:
-            log.progress(f'{label}: {index}/{total} complete')
+        reported_index = progress_offset + index
+        if reported_index % report_every == 0 or reported_index == report_total:
+            log.progress(f'{label}: {reported_index}/{report_total} complete')
 
     if max_workers <= 1 or total == 1:
         for index, item in enumerate(items, start=1):
             _handle(item, index, lambda item=item: worker_fn(item))
         return results
 
-    level_name, log_path = get_worker_log_config()
-    with ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker_logging, initargs=(level_name, log_path)) as pool:
+    # use the provided pool when given
+    if pool is not None:
         future_to_item = {pool.submit(worker_fn, item): item for item in items}
+        for index, future in enumerate(as_completed(future_to_item), start=1):
+            item = future_to_item[future]
+            _handle(item, index, future.result)
+        return results
+
+    level_name, log_path = get_worker_log_config()
+    with ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker_logging, initargs=(level_name, log_path)) as owned_pool:
+        future_to_item = {owned_pool.submit(worker_fn, item): item for item in items}
         for index, future in enumerate(as_completed(future_to_item), start=1):
             item = future_to_item[future]
             _handle(item, index, future.result)
@@ -70,11 +84,17 @@ def run_parallel_ordered(
     *,
     max_workers: int = 1,
     label: str,
+    pool: ProcessPoolExecutor | None = None,
+    progress_total: int | None = None,
+    progress_offset: int = 0,
 ) -> list[R]:
     indexed_results = run_parallel(
         list(enumerate(items)),
         partial(_call_indexed, worker_fn),
         max_workers=max_workers,
         label=label,
+        pool=pool,
+        progress_total=progress_total,
+        progress_offset=progress_offset,
     )
     return [result for _, result in sorted(indexed_results, key=lambda pair: pair[0])]

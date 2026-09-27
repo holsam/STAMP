@@ -4,12 +4,14 @@ STAMP: rotationally invariant features from subvolumes
 
 # Import external dependencies
 import numpy as np
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import nullcontext
 from functools import partial
 from scipy.ndimage import map_coordinates
 
 # Import internal STAMP objects
 from stamp.schemas.subvolumes import Subvolumes
-from stamp.utils.log import log
+from stamp.utils.log import get_worker_log_config, init_worker_logging, log
 from stamp.utils.parallel import run_parallel_ordered
 
 # cylindrical_bins: precompute per-voxel radial bin index and validity mask
@@ -122,10 +124,28 @@ def build_feature_matrix(
 
     worker = partial(azimuthal_magnitudes, n_radial_bins=n_radial_bins, n_azimuthal_samples=n_azimuthal_samples, max_mode=max_azimuthal_mode)
     magnitudes: list[np.ndarray | None] = [None] * len(subvols)
-    for indices, batch in subvols.iter_batches(batch_size):
-        batch_results = run_parallel_ordered(list(batch), worker, max_workers=n_workers, label='feature-extraction')
-        for local_index, result in zip(indices, batch_results):
-            magnitudes[local_index] = result
+    total_particles = len(subvols)
+    # create process pool for feature extraction to be reused across batches
+    pool_context = (
+        ProcessPoolExecutor(max_workers=n_workers, initializer=init_worker_logging, initargs=get_worker_log_config())
+        if n_workers > 1
+        else nullcontext()
+    )
+    with pool_context as pool:
+        completed = 0
+        for indices, batch in subvols.iter_batches(batch_size):
+            batch_results = run_parallel_ordered(
+                list(batch),
+                worker,
+                max_workers=n_workers,
+                label='feature-extraction',
+                pool=pool,
+                progress_total=total_particles,
+                progress_offset=completed,
+            )
+            completed += len(batch_results)
+            for local_index, result in zip(indices, batch_results):
+                magnitudes[local_index] = result
     stacked = np.stack(magnitudes)  # (n_particles, n_modes, n_radial_bins, box_voxels)
 
     n_particles = stacked.shape[0]
