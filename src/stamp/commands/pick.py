@@ -46,6 +46,7 @@ def _execute(adapter: ToolAdapter, inputs: AdapterInputs, runner: Runner) -> lis
 # _select_adapter: return the adapter for a picker name, guarding it against the chosen backend
 def _select_adapter(picker_name: str, backend: str) -> ToolAdapter:
     if backend == 'mock':
+        log.debug(f'{picker_name}: using mock adapter (backend=mock)')
         return get_mock_adapter(picker_name)
 
     adapter = REAL_ADAPTERS.get(picker_name)
@@ -64,6 +65,7 @@ def _run_picker(
     backend: str,
 ) -> list[RawPick]:
     if backend != 'mock' and getattr(adapter, 'runs_in_process', False):
+        log.debug(f'{adapter.name}: dispatching in-process for {len(manifests)} tomogram(s)')
         inputs = AdapterInputs(
             input_paths=[m.segmentation_path for m in manifests],
             raw_tomogram_paths=[m.raw_tomogram_path for m in manifests],
@@ -74,6 +76,7 @@ def _run_picker(
         return adapter.run_in_process(inputs)  # type: ignore[attr-defined]
 
     if backend == 'mock' or adapter.batches_natively:
+        log.debug(f'{adapter.name}: dispatching as a single batched command for {len(manifests)} tomogram(s)')
         inputs = AdapterInputs(
             input_paths=[m.segmentation_path for m in manifests],
             raw_tomogram_paths=[m.raw_tomogram_path for m in manifests],
@@ -83,6 +86,7 @@ def _run_picker(
         )
         return _execute(adapter, inputs, runner)
 
+    log.debug(f'{adapter.name}: dispatching one command per tomogram for {len(manifests)} tomogram(s)')
     collected: list[RawPick] = []
     for manifest in manifests:
         inputs = AdapterInputs(
@@ -206,6 +210,7 @@ def run_pick(
         raise StampPipelineError(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
     log.info(f'Matched {len(manifests)} tomograms/segmentations')
     resolved_voxel_size_angstrom = manifests[0].voxel_size_angstrom
+    log.debug(f'Resolved voxel size: {resolved_voxel_size_angstrom} Å')
 
     runner = select_runner(backend)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -265,6 +270,7 @@ def run_pick(
     particle_set_path.write_text(particle_set.model_dump_json(indent=2))
     log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
 
+    log.progress('Computing vesicle summary')
     _write_vesicle_summary(all_reconciled, manifests, vesicle_labels_mrc_by_tomogram, output_dir, n_workers=n_workers)
     log.progress(f'Writing parameters...')
     write_sidecar(
