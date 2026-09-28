@@ -128,7 +128,10 @@ def run_identify(
             log.info('Decoy control passed')
         else:
             log.warning(f'Decoy control failed: {decoy_control.reason}')
+    else:
+        log.debug('No --decoy-classes given, skipping decoy control')
 
+    log.progress('Writing identification report')
     _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control, resolution, inplane_aligned)
 
     write_sidecar(

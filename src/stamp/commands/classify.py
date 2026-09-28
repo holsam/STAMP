@@ -27,7 +27,7 @@ from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import archive_and_remove_directory, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
-from stamp.utils.log import log
+from stamp.utils.log import log, log_config
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
@@ -61,6 +61,7 @@ def run_classify(
         voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(raw_tomogram_dir.glob('*.mrc')))
         if voxel_size_angstrom is None:
             raise StampPipelineError('Voxel size not given and not found in any MRC header in --raw-dir.')
+        log.debug(f'Resolved voxel size from MRC headers: {voxel_size_angstrom} Å')
     log.progress('Classifying particle set')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
@@ -76,7 +77,10 @@ def run_classify(
     box_voxels = int(round(box_angstrom / voxel_size_angstrom))
     if box_voxels % 2 == 0:
         box_voxels += 1  # odd box keeps the particle exactly centred
+        log.debug(f'Using odd box voxel for centred particles: {box_voxels - 1} -> {box_voxels}')    
+    log.progress(f'Using box voxels: {box_voxels}')
 
+    log.progress('Starting subvolume extraction')
     subvols, kept, skipped = extract_particle_set(
         particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels,
         segmentation_paths=segmentation_paths, n_workers=n_workers, cache_dir=output_dir / 'raw' / 'subvolumes',
@@ -87,6 +91,7 @@ def run_classify(
         raise StampPipelineError('No particles could be extracted. Check --raw-dir and --box-length-a')
     log.info(f'Extracted {len(kept)} subvolumes at box {box_voxels}{" (membrane subtracted)" if segmentation_paths else ""}')
 
+    log.progress('Starting feature matrix construction')
     features = build_feature_matrix(
         subvols,
         n_radial_bins=n_radial_bins,
@@ -114,6 +119,7 @@ def run_classify(
         n_clusters=n_clusters,
         random_state=random_state,
     )
+    log_config('classify.clustering', config)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -129,8 +135,10 @@ def run_classify(
     if not strict_halfset_independence:
         log.warning('--no-strict-halfset-independence used, half-A and half-B particles are clustered together; FSC built on these classes will be inflated')
     if strict_halfset_independence:
+        log.debug('Dispatching to strict half-set-independent clustering')
         assignments, result_by_half, averages_by_half = _classify_strict(kept, subvols, features, config, output_dir, voxel_size_angstrom, align_settings)
     else:
+        log.debug('Dispatching to combined clustering (half-sets pooled)')
         assignments, result_by_half, averages_by_half = _classify_combined(kept, subvols, features, config, output_dir, voxel_size_angstrom, align_settings)
 
     assignments_path = output_dir / 'class_assignments.json'

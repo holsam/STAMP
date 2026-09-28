@@ -56,7 +56,9 @@ def _synthetic_shape(config: RunConfig) -> tuple[int, int, int]:
         log.debug('No real tomograms found to infer synthetic shape from, defaulting to (200, 200, 200)')
         return (200, 200, 200)
     with mrcfile.open(str(first), permissive=True, header_only=True) as mrc:
-        return (int(mrc.header.nz), int(mrc.header.ny), int(mrc.header.nx))
+        shape = (int(mrc.header.nz), int(mrc.header.ny), int(mrc.header.nx))
+    log.debug(f'Inferred synthetic shape {shape} from {first}')
+    return shape
 
 # _decoy_pick: run decoy generation
 def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) -> Path:
