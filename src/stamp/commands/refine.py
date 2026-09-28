@@ -59,6 +59,7 @@ def _run_half(adapter, runner, particles, reference, workdir, parameters, backen
         raise StampPipelineError(f'Refine failed for {workdir.name}: {result.stderr}')
     final_map = workdir / f'final_{workdir.name[-1]}.mrc'
     if backend == 'mock':
+        log.debug(f'{workdir.name}: mock backend, synthesising final map from the seed reference')
         # mock backend runs nothing; synthesise a deterministic map from the seed
         with mrcfile.open(str(reference), permissive=True) as mrc:
             seed = np.asarray(mrc.data, dtype=np.float32)
@@ -91,6 +92,7 @@ def run_refine(
         voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(raw_tomogram_dir.glob('*.mrc')))
         if voxel_size_angstrom is None:
             raise StampValidationError('Voxel size not given and not found in any MRC header in --raw-dir.')
+        log.debug(f'Resolved voxel size from MRC headers: {voxel_size_angstrom} Å')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     assignments = [ClassAssignment.model_validate(row) for row in json.loads(class_assignments.read_text())]
     angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None}
@@ -129,6 +131,7 @@ def run_refine(
             if mask is not None:
                 with mrcfile.open(str(mask), permissive=True) as mrc:
                     user_mask = np.asarray(mrc.data, dtype=np.float32)
+            log.progress(f'{target}: computing FSC')
             fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape), threshold=threshold)
         except (StampValidationError, StampAdapterError) as exc:
             log.error(f'{target}: {exc}')
