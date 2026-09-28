@@ -76,7 +76,9 @@ def box_fits_inside(
 # _extract_one_tomogram: worker entry point — loads one tomogram and extracts subvolumes for its particles
 def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], list[Particle]]:
     with mrcfile.open(str(job.tomogram_path), permissive=True) as mrc:
-        tomogram = np.asarray(mrc.data).astype(np.float32)
+        tomogram = np.asarray(mrc.data)
+        if tomogram.dtype != np.float32:
+            tomogram=tomogram.astype(np.float32)
 
     if job.segmentation_path is not None:
         with mrcfile.open(str(job.segmentation_path), permissive=True) as mrc:
