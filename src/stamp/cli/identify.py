@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 # Import identify command functions
 import stamp.commands.identify as identifyfuncs
 from stamp.utils.io import resolve_output_dir
+from stamp.utils.log import log_started
 
 # Initialise Typer app
 identifyCli = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -63,6 +64,7 @@ def identify(
     ] = 'tiff',
 ) -> None:
     '''Fit predicted structures to class averages and score candidates.'''
+    log_started('identification')
     identifyfuncs.run_identify(
         classes=classes,
         candidates=candidates,

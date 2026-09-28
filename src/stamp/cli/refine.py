@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 # Import refine command functions/variables
 import stamp.commands.refine as refinefuncs
 from stamp.utils.io import resolve_output_dir
+from stamp.utils.log import log_started
 
 # Initialise Typer app
 refineCli = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -79,6 +80,7 @@ def refine(
     ] = 'tiff',
 ) -> None:
     '''Refine identified classes with independent half-sets.'''
+    log_started('refinement')
     refinefuncs.run_refine(
         class_id=class_id, 
         identification=identification,

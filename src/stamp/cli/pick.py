@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 # Import pick command functions/variables
 import stamp.commands.pick as pickfuncs
 from stamp.utils.io import resolve_output_dir
+from stamp.utils.log import log_started
 
 # Initialise Typer app
 pickCli = typer.Typer(
@@ -102,6 +103,7 @@ def pick(
     ] = False,
 ) -> None:
     '''Run particle picking, reconcile across pickers, and assign half-sets.'''
+    log_started('picking')
     # Validate provided pickers
     picker_names = [name.strip() for name in pickers.split(',') if name.strip()]
     if not picker_names:

@@ -9,7 +9,7 @@ from pathlib import Path
 from stamp.run.orchestrate import run_pipeline
 from stamp.run.report import write_report
 from stamp.schemas.config import load_run_config
-from stamp.utils.log import log
+from stamp.utils.log import log, log_started
 
 # run_full_pipeline: load the config, run every track, write the combined report
 def run_full_pipeline(
@@ -19,6 +19,7 @@ def run_full_pipeline(
     no_decoy: bool,
     backend: str | None
 ) -> None:
+    log_started('run')
     log.progress(f'Running STAMP pipeline from {config_path}')
     config = load_run_config(config_path)
     if no_decoy:

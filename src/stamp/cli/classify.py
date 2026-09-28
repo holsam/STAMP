@@ -13,6 +13,7 @@ from stamp.decoy.validate import is_decoy_particle_set
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import resolve_output_dir
+from stamp.utils.log import log_started
 
 # Initialise Typer app
 classifyCli = typer.Typer(
@@ -115,6 +116,7 @@ def classify(
     ] = False,
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
+    log_started('classification')
     is_decoy = is_decoy_particle_set(ParticleSet.model_validate(json.loads(particles.read_text())))
     classifyfuncs.run_classify(
         particles=particles,
