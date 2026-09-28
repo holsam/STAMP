@@ -4,9 +4,13 @@ STAMP: lazy index over per-tomogram cached subvolume stacks
 
 # Import external dependencies
 import numpy as np
+from collections import OrderedDict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# _MAX_OPEN_MMAPS: cap on concurrently open per-tomogram mmaps, well under default OS fd limits (macOS ulimit -n defaults to 256)
+_MAX_OPEN_MMAPS = 64
 
 # Subvolumes: particle -> (tomogram_id, row) index over mmap'd per-tomogram .npy caches
 @dataclass(frozen=True)
@@ -14,18 +18,21 @@ class Subvolumes:
     cache_dir: Path
     index: list[tuple[str, int]]  # index[i] = (tomogram_id, row) for particle i, in extraction order
     box_voxels: int
-    _mmaps: dict[str, np.ndarray] = field(default_factory=dict, repr=False, compare=False)
+    _mmaps: OrderedDict[str, np.ndarray] = field(default_factory=OrderedDict, repr=False, compare=False)
 
     def __len__(self) -> int:
         return len(self.index)
 
-    # _mmap_for: open (or reuse) the mmap for one tomogram's cache file
+    # _mmap_for: open (or reuse) the mmap for one tomogram's cache file, evicting the least-recently-used entry once the cache is full so open file handles stay bounded
     def _mmap_for(self, tomogram_id: str) -> np.ndarray:
         cached = self._mmaps.get(tomogram_id)
         if cached is not None:
+            self._mmaps.move_to_end(tomogram_id)
             return cached
         array = np.load(self.cache_dir / f'{tomogram_id}.npy', mmap_mode='r')
         self._mmaps[tomogram_id] = array  # mutating the dict's contents, not the frozen field itself
+        if len(self._mmaps) > _MAX_OPEN_MMAPS:
+            self._mmaps.popitem(last=False)  # drop oldest; np.memmap closes its file on garbage collection
         return array
 
     def __getitem__(self, i: int) -> np.ndarray:

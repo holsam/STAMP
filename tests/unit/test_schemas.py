@@ -178,6 +178,19 @@ class TestSubvolumes:
         for i in seen:
             np.testing.assert_array_equal(seen[i], subvols[i])
 
+    def test_mmap_cache_stays_bounded_across_many_tomograms(self, tmp_path):
+        box_voxels = 2
+        n_tomograms = 200  # well past _MAX_OPEN_MMAPS
+        index: list[tuple[str, int]] = []
+        for t in range(n_tomograms):
+            tomogram_id = f'tomo{t}'
+            _write_cache(tmp_path, tomogram_id, 1, box_voxels, offset=t * 100)
+            index.append((tomogram_id, 0))
+        subvols = Subvolumes(tmp_path, index, box_voxels)
+        for i in range(len(subvols)):
+            _ = subvols[i]  # touch every tomogram once, sequentially
+        assert len(subvols._mmaps) <= 64
+
     def test_write_rolled_produces_a_readable_subvols(self, tmp_path):
         box_voxels = 2
         _write_cache(tmp_path, 'tomoA', 3, box_voxels)
