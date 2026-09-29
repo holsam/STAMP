@@ -348,3 +348,20 @@ class TestCheckpoint:
         assert (raw / 'kept.npy').exists()
         assert sync_checkpoint(raw, {'box': 13}) is False
         assert not (raw / 'kept.npy').exists()
+
+    def test_tuple_and_path_values_still_resume(self, tmp_path: Path) -> None:
+        from stamp.utils.checkpoint import sync_checkpoint
+        raw = tmp_path / 'raw'
+        fingerprint = {'window': (20.0, 80.0), 'path': tmp_path / 'x'}
+        assert sync_checkpoint(raw, fingerprint) is False
+        assert sync_checkpoint(raw, fingerprint) is True
+
+    def test_signatures_change_with_file_content(self, tmp_path: Path) -> None:
+        from stamp.utils.checkpoint import directory_signatures, signatures
+        (tmp_path / 'a.mrc').write_text('x')
+        first = directory_signatures(tmp_path)
+        assert set(first) == {'a.mrc'}
+        assert directory_signatures(None) == {}
+        (tmp_path / 'a.mrc').write_text('longer')
+        assert directory_signatures(tmp_path) != first
+        assert signatures({'a': tmp_path / 'a.mrc'}, content=True) == signatures({'a': tmp_path / 'a.mrc'}, content=True)

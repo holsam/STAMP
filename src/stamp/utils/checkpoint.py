@@ -19,6 +19,16 @@ def file_signature(path: Path, *, content: bool = False) -> str:
     stat = path.stat()
     return f'{stat.st_size}:{stat.st_mtime_ns}'
 
+# signatures: file_signature per role, sorted so the fingerprint is stable
+def signatures(paths: dict[str, Path], *, content: bool = False) -> dict[str, str]:
+    return {role: file_signature(Path(path), content=content) for role, path in sorted(paths.items())}
+
+# directory_signatures: signatures of every file in directory matching pattern, keyed by filename; empty when directory is None
+def directory_signatures(directory: Path | None, pattern: str = '*.mrc') -> dict[str, str]:
+    if directory is None:
+        return {}
+    return signatures({path.name: path for path in directory.glob(pattern)})
+
 # atomic_save_npz: write arrays via a temporary file so a partial file never looks complete
 def atomic_save_npz(path: Path, **arrays: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,6 +46,7 @@ def atomic_write_json(path: Path, payload: object) -> None:
 
 # sync_checkpoint: keep work_dir when its stored fingerprint matches exactly, else wipe it; returns True when resuming
 def sync_checkpoint(work_dir: Path, fingerprint: dict) -> bool:
+    fingerprint = json.loads(json.dumps(fingerprint, default=str))  # compare as it reads back: tuples become lists, paths strings
     path = work_dir / _CHECKPOINT_NAME
     try:
         stored = json.loads(path.read_text())
