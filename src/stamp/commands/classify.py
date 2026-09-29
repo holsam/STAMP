@@ -17,6 +17,7 @@ from stamp.classify.cluster import (
     reduce_and_cluster,
     reduce_and_cluster_shared,
 )
+from stamp.utils.checkpoint import file_signature, sync_checkpoint
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
@@ -80,6 +81,30 @@ def run_classify(
         log.debug(f'Using odd box voxel for centred particles: {box_voxels - 1} -> {box_voxels}')    
     log.progress(f'Using box voxels: {box_voxels}')
 
+    # everything that changes results; n_workers, plots and keep_raw are left out so a run can resume with different resources
+    fingerprint = {
+        'particles': file_signature(particles, content=True),
+        'raw': {stem: file_signature(Path(path)) for stem, path in sorted(tomogram_paths.items())},
+        'segmentation': {stem: file_signature(Path(path)) for stem, path in sorted(segmentation_paths.items())},
+        'voxel_size_angstrom': voxel_size_angstrom,
+        'box_voxels': box_voxels,
+        'n_radial_bins': n_radial_bins,
+        'azimuthal_modes': azimuthal_modes,
+        'n_azimuthal_samples': n_azimuthal_samples,
+        'min_radius_fraction': min_radius_fraction,
+        'method': method,
+        'min_cluster_size': min_cluster_size,
+        'n_clusters': n_clusters,
+        'n_components': n_components,
+        'strict_halfset_independence': strict_halfset_independence,
+        'inplane_alignment': inplane_alignment,
+        'inplane_angular_step_degrees': inplane_angular_step_degrees,
+        'inplane_iterations': inplane_iterations,
+        'random_state': random_state,
+    }
+    if sync_checkpoint(output_dir / 'raw', fingerprint):
+        log.info('Found matching partial output, resuming')
+
     log.progress('Starting subvolume extraction')
     subvols, kept, skipped = extract_particle_set(
         particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels,
@@ -89,7 +114,6 @@ def run_classify(
         log.warning(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
     if not kept:
         raise StampPipelineError('No particles could be extracted. Check --raw-dir and --box-length-a')
-    log.info(f'Extracted {len(kept)} subvolumes at box {box_voxels}{" (membrane subtracted)" if segmentation_paths else ""}')
 
     log.progress('Starting feature matrix construction')
     features = build_feature_matrix(
@@ -99,6 +123,7 @@ def run_classify(
         n_azimuthal_samples=n_azimuthal_samples,
         min_radius_fraction=min_radius_fraction,
         n_workers=n_workers,
+        cache_dir=output_dir / 'raw' / 'features',
     )
     log.debug(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
 
@@ -240,6 +265,7 @@ def _resolve_and_apply_inplane(
     cluster_ids: list[str],
     align_settings: dict,
     rolled_cache_dir: Path,
+    checkpoint_dir: Path,
 ) -> tuple[Subvolumes, dict[int, float]]:
     if not align_settings['enabled']:
         return subvols, {}
@@ -249,6 +275,7 @@ def _resolve_and_apply_inplane(
         angular_step_degrees=align_settings['angular_step_degrees'],
         iterations=align_settings['iterations'],
         n_workers=align_settings['n_workers'],
+        checkpoint_dir=checkpoint_dir,
     )
     rolled = ((index, roll_about_normal(subvols[index], angles.get(index, 0.0))) for index in range(len(subvols)))
     return subvols.write_rolled(rolled, rolled_cache_dir), angles
@@ -269,7 +296,7 @@ def _classify_combined(
 
     _report_clusters(cluster_ids, result.explained_variance_ratio)
 
-    aligned, angles = _resolve_and_apply_inplane(subvols, cluster_ids, align_settings, output_dir / 'raw' / 'subvolumes_rolled')
+    aligned, angles = _resolve_and_apply_inplane(subvols, cluster_ids, align_settings, output_dir / 'raw' / 'subvolumes_rolled', output_dir / 'raw' / 'align' / 'combined')
 
     averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
     for half_set in (HalfSet.A, HalfSet.B):
@@ -325,7 +352,7 @@ def _classify_strict(
         ('B', half_b, indices_b, result_b, matches),
     ):
         cluster_ids = [label_to_cluster_id(int(label)) for label in result.labels]
-        aligned, local_angles = _resolve_and_apply_inplane(subvols.take(indices), cluster_ids, align_settings, output_dir / 'raw' / f'subvolumes_rolled_{half_label}')
+        aligned, local_angles = _resolve_and_apply_inplane(subvols.take(indices), cluster_ids, align_settings, output_dir / 'raw' / f'subvolumes_rolled_{half_label}', output_dir / 'raw' / 'align' / half_label)
         averages = compute_class_averages(aligned, cluster_ids)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_label)
         result_by_half[half_label] = result

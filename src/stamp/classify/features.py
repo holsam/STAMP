@@ -7,10 +7,12 @@ import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import nullcontext
 from functools import partial
+from pathlib import Path
 from scipy.ndimage import map_coordinates
 
 # Import internal STAMP objects
 from stamp.schemas.subvolumes import Subvolumes
+from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.log import get_worker_log_config, init_worker_logging, log
 from stamp.utils.parallel import run_parallel_ordered
 
@@ -105,7 +107,19 @@ def _standardise_columns(matrix: np.ndarray) -> np.ndarray:
     stds[stds == 0.0] = 1.0
     return (matrix - means) / stds
 
-# build_feature_matrix: feature matrix for a Subvolumes instance, read in per-tomogram batches
+# _load_cached_magnitudes: one tomogram's cached magnitudes, or None when absent or built for different rows
+def _load_cached_magnitudes(cache_dir: Path | None, tomogram_id: str, rows: list[int]) -> np.ndarray | None:
+    if cache_dir is None:
+        return None
+    try:
+        with np.load(cache_dir / f'{tomogram_id}.npz') as cached:
+            if np.array_equal(cached['rows'], rows):
+                return cached['magnitudes']
+    except (OSError, ValueError, KeyError):
+        pass
+    return None
+
+# build_feature_matrix: feature matrix for a Subvolumes instance, read in per-tomogram batches, per-tomogram magnitudes cached in cache_dir when given
 def build_feature_matrix(
     subvols: Subvolumes,
     n_radial_bins: int = 12,
@@ -115,6 +129,7 @@ def build_feature_matrix(
     n_workers: int = 1,
     *,
     batch_size: int = 512,
+    cache_dir: Path | None = None,
 ) -> np.ndarray:
     log.debug(f'Building features for {len(subvols)} subvolumes, max_mode={max_azimuthal_mode}')
     if len(subvols) == 0:
@@ -131,20 +146,33 @@ def build_feature_matrix(
         if n_workers > 1
         else nullcontext()
     )
+    by_tomogram: dict[str, list[int]] = {}
+    for local_index, (tomogram_id, _row) in enumerate(subvols.index):
+        by_tomogram.setdefault(tomogram_id, []).append(local_index)
     with pool_context as pool:
         completed = 0
-        for indices, batch in subvols.iter_batches(batch_size):
-            batch_results = run_parallel_ordered(
-                list(batch),
-                worker,
-                max_workers=n_workers,
-                label='feature-extraction',
-                pool=pool,
-                progress_total=total_particles,
-                progress_offset=completed,
-            )
-            completed += len(batch_results)
-            for local_index, result in zip(indices, batch_results):
+        for tomogram_id, local_indices in by_tomogram.items():
+            rows = [subvols.index[i][1] for i in local_indices]
+            tomogram_magnitudes = _load_cached_magnitudes(cache_dir, tomogram_id, rows)
+            if tomogram_magnitudes is None:
+                results: list[np.ndarray] = []
+                for _indices, batch in subvols.take(local_indices).iter_batches(batch_size):
+                    results.extend(run_parallel_ordered(
+                        list(batch),
+                        worker,
+                        max_workers=n_workers,
+                        label='feature-extraction',
+                        pool=pool,
+                        progress_total=total_particles,
+                        progress_offset=completed + len(results),
+                    ))
+                tomogram_magnitudes = np.stack(results)
+                if cache_dir is not None:
+                    atomic_save_npz(cache_dir / f'{tomogram_id}.npz', rows=np.array(rows), magnitudes=tomogram_magnitudes)
+            else:
+                log.debug(f'{tomogram_id}: features loaded from checkpoint')
+            completed += len(local_indices)
+            for local_index, result in zip(local_indices, tomogram_magnitudes):
                 magnitudes[local_index] = result
     stacked = np.stack(magnitudes)  # (n_particles, n_modes, n_radial_bins, box_voxels)
 
