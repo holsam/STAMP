@@ -21,9 +21,16 @@ class _ExtractTomogramJob:
     tomogram_id: str
     group: list[Particle]
     tomogram_path: str
-    segmentation_path: str | None
     box_voxels: int
     cache_dir: Path
+
+# _SubtractTomogramJob: one tomogram's membrane subtraction, written to disk for extraction to mmap
+@dataclass(frozen=True)
+class _SubtractTomogramJob:
+    tomogram_id: str
+    tomogram_path: str
+    segmentation_path: str
+    output_path: Path
 
 # quaternion_to_matrix: return a rotation matrix from a unit quaternion (w, x, y, z)
 def quaternion_to_matrix(quaternion: tuple[float, float, float, float]) -> np.ndarray:
