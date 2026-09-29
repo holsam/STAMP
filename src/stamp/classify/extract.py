@@ -96,35 +96,27 @@ def _subtract_one_tomogram(job: _SubtractTomogramJob) -> Path:
         out.set_data(tomogram)
         out.voxel_size = voxel_size
     return job.output_path
+
+# _extract_one_tomogram: worker entry point to mmaps one tomogram and extracts subvolumes for its particles
 def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], list[Particle]]:
-    with mrcfile.open(str(job.tomogram_path), permissive=True) as mrc:
-        tomogram = np.asarray(mrc.data)
-        if tomogram.dtype != np.float32:
-            tomogram=tomogram.astype(np.float32)
-
-    if job.segmentation_path is not None:
-        with mrcfile.open(str(job.segmentation_path), permissive=True) as mrc:
-            segmentation = np.asarray(mrc.data)
-        if segmentation.shape != tomogram.shape:
-            raise StampValidationError(f'segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {job.tomogram_id!r}; they must be the same volume at the same binning')
-        # replace membrane voxels with the background median so the class average is not dominated by the membrane slab
-        tomogram[segmentation > 0] = np.median(tomogram[segmentation <= 0])
-
     kept: list[Particle] = []
     skipped: list[Particle] = []
     subvolumes: list[np.ndarray] = []
-    for particle in job.group:
-        if particle.orientation is None or not box_fits_inside(particle.position, tomogram.shape, job.box_voxels):
-            skipped.append(particle)
-            continue
-        subvolumes.append(extract_subvolume(tomogram, particle.position, particle.orientation, job.box_voxels))
-        kept.append(particle)
+    with mrcfile.mmap(job.tomogram_path, permissive=True) as mrc:
+        tomogram = mrc.data
+        if tomogram.dtype != np.float32:
+            tomogram = tomogram.astype(np.float32)
+        for particle in job.group:
+            if particle.orientation is None or not box_fits_inside(particle.position, tomogram.shape, job.box_voxels):
+                skipped.append(particle)
+                continue
+            subvolumes.append(extract_subvolume(tomogram, particle.position, particle.orientation, job.box_voxels))
+            kept.append(particle)
     if subvolumes:
         job.cache_dir.mkdir(parents=True, exist_ok=True)
         np.save(job.cache_dir / f'{job.tomogram_id}.npy', np.stack(subvolumes))
     return kept, skipped
 
-# extract_particle_set: extract subvolumes for a list of particles
 # extract_particle_set: extract subvolumes for a list of particles, cached per tomogram
 def extract_particle_set(
     particles: list[Particle],
