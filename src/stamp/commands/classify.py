@@ -123,6 +123,7 @@ def run_classify(
         n_azimuthal_samples=n_azimuthal_samples,
         min_radius_fraction=min_radius_fraction,
         n_workers=n_workers,
+        cache_dir=output_dir / 'raw' / 'features',
     )
     log.debug(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
 
@@ -264,6 +265,7 @@ def _resolve_and_apply_inplane(
     cluster_ids: list[str],
     align_settings: dict,
     rolled_cache_dir: Path,
+    checkpoint_dir: Path,
 ) -> tuple[Subvolumes, dict[int, float]]:
     if not align_settings['enabled']:
         return subvols, {}
@@ -273,6 +275,7 @@ def _resolve_and_apply_inplane(
         angular_step_degrees=align_settings['angular_step_degrees'],
         iterations=align_settings['iterations'],
         n_workers=align_settings['n_workers'],
+        checkpoint_dir=checkpoint_dir,
     )
     rolled = ((index, roll_about_normal(subvols[index], angles.get(index, 0.0))) for index in range(len(subvols)))
     return subvols.write_rolled(rolled, rolled_cache_dir), angles
@@ -293,7 +296,7 @@ def _classify_combined(
 
     _report_clusters(cluster_ids, result.explained_variance_ratio)
 
-    aligned, angles = _resolve_and_apply_inplane(subvols, cluster_ids, align_settings, output_dir / 'raw' / 'subvolumes_rolled')
+    aligned, angles = _resolve_and_apply_inplane(subvols, cluster_ids, align_settings, output_dir / 'raw' / 'subvolumes_rolled', output_dir / 'raw' / 'align' / 'combined')
 
     averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
     for half_set in (HalfSet.A, HalfSet.B):
@@ -349,7 +352,7 @@ def _classify_strict(
         ('B', half_b, indices_b, result_b, matches),
     ):
         cluster_ids = [label_to_cluster_id(int(label)) for label in result.labels]
-        aligned, local_angles = _resolve_and_apply_inplane(subvols.take(indices), cluster_ids, align_settings, output_dir / 'raw' / f'subvolumes_rolled_{half_label}')
+        aligned, local_angles = _resolve_and_apply_inplane(subvols.take(indices), cluster_ids, align_settings, output_dir / 'raw' / f'subvolumes_rolled_{half_label}', output_dir / 'raw' / 'align' / half_label)
         averages = compute_class_averages(aligned, cluster_ids)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_label)
         result_by_half[half_label] = result
