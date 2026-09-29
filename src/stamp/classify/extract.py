@@ -135,6 +135,9 @@ def extract_particle_set(
     kept: list[Particle] = []
     skipped: list[Particle] = []
 
+    # subtract membranes to cached mrc files
+    subtracted_dir = cache_dir / '.subtracted'
+    subtract_jobs: list[_SubtractTomogramJob] = []
     jobs: list[_ExtractTomogramJob] = []
     for tomogram_id, group in by_tomogram.items():
         path = tomogram_paths.get(tomogram_id)
@@ -142,24 +145,47 @@ def extract_particle_set(
             log.warning(f'{tomogram_id}: no matching raw tomogram path, skipping {len(group)} particle(s)')
             skipped.extend(group)
             continue
-        jobs.append(_ExtractTomogramJob(tomogram_id, group, path, segmentation_paths.get(tomogram_id), box_voxels, cache_dir))
+        segmentation_path = segmentation_paths.get(tomogram_id)
+        if segmentation_path is not None:
+            subtract_jobs.append(_SubtractTomogramJob(tomogram_id, path, segmentation_path, subtracted_dir / f'{tomogram_id}.mrc'))
+        else:
+            jobs.append(_ExtractTomogramJob(tomogram_id, group, path, box_voxels, cache_dir))
 
     result_by_tomogram: dict[str, tuple[list[Particle], list[Particle]]] = {}
 
-    def _on_success(job: _ExtractTomogramJob, result: tuple[list[Particle], list[Particle]]) -> None:
-        result_by_tomogram[job.tomogram_id] = result
-
-    def _on_error(job: _ExtractTomogramJob, exc: Exception) -> None:
+    def _on_error(job, exc: Exception) -> None:
         if isinstance(exc, StampValidationError):
             log.error(f'{job.tomogram_id}: {exc}')
-            skipped.extend(job.group)
+            skipped.extend(by_tomogram[job.tomogram_id])
         else:
             raise exc
 
-    run_parallel(jobs, _extract_one_tomogram, max_workers=n_workers, label='subvolume-extraction', on_success=_on_success, on_error=_on_error)
+    def _on_subtract_error(job: _SubtractTomogramJob, exc: Exception) -> None:
+        if not isinstance(exc, StampValidationError):
+            raise exc
+        # fall back to the raw tomogram so the particles are still classified, just without subtraction
+        log.warning(f'{job.tomogram_id}: {exc}; extracting from the raw tomogram without membrane subtraction')
+        jobs.append(_ExtractTomogramJob(job.tomogram_id, by_tomogram[job.tomogram_id], job.tomogram_path, box_voxels, cache_dir))
+
+    subtracted_ids: set[str] = set()
+
+    def _on_subtracted(job: _SubtractTomogramJob, output_path: Path) -> None:
+        subtracted_ids.add(job.tomogram_id)
+        jobs.append(_ExtractTomogramJob(job.tomogram_id, by_tomogram[job.tomogram_id], str(output_path), box_voxels, cache_dir))
+
+    def _on_success(job: _ExtractTomogramJob, result: tuple[list[Particle], list[Particle]]) -> None:
+        result_by_tomogram[job.tomogram_id] = result
+        if Path(job.tomogram_path).parent == subtracted_dir:
+            Path(job.tomogram_path).unlink(missing_ok=True)  # free disk as soon as a tomogram is done
+
+    try:
+        run_parallel(subtract_jobs, _subtract_one_tomogram, max_workers=n_workers, label='membrane-subtraction', on_success=_on_subtracted, on_error=_on_subtract_error)
+        run_parallel(jobs, _extract_one_tomogram, max_workers=n_workers, label='subvolume-extraction', on_success=_on_success, on_error=_on_error)
+    finally:
+        shutil.rmtree(subtracted_dir, ignore_errors=True)
 
     index: list[tuple[str, int]] = []
-    for job in jobs:
+    for job in sorted(jobs, key=lambda job: job.tomogram_id):
         result = result_by_tomogram.get(job.tomogram_id)
         if result is None:
             continue
