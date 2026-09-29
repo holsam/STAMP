@@ -80,7 +80,22 @@ def box_fits_inside(
     position = np.array(position_xyz)
     return bool(np.all(position >= radius) and np.all(position <= extent_xyz - radius))
 
-# _extract_one_tomogram: worker entry point — loads one tomogram and extracts subvolumes for its particles
+# _subtract_one_tomogram: worker entry point to replace membrane voxels with the background median and write a float32 mrc
+def _subtract_one_tomogram(job: _SubtractTomogramJob) -> Path:
+    with mrcfile.open(job.tomogram_path, permissive=True) as mrc:
+        tomogram = np.array(mrc.data, dtype=np.float32)  # writable copy
+        voxel_size = mrc.voxel_size.copy()
+    with mrcfile.open(job.segmentation_path, permissive=True) as mrc:
+        membrane = np.asarray(mrc.data) > 0
+    if membrane.shape != tomogram.shape:
+        raise StampValidationError(f'segmentation shape {membrane.shape} does not match tomogram shape {tomogram.shape} for {job.tomogram_id!r}; they must be the same volume at the same binning')
+    # replace membrane voxels with the background median so the class average is not dominated by the membrane slab
+    tomogram[membrane] = np.median(tomogram[~membrane])
+    job.output_path.parent.mkdir(parents=True, exist_ok=True)
+    with mrcfile.new(str(job.output_path), overwrite=True) as out:
+        out.set_data(tomogram)
+        out.voxel_size = voxel_size
+    return job.output_path
 def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], list[Particle]]:
     with mrcfile.open(str(job.tomogram_path), permissive=True) as mrc:
         tomogram = np.asarray(mrc.data)
