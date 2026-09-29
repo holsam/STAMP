@@ -123,7 +123,7 @@ Option | Default | Use
 `-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/classify` or `<dir/stamp/classify_decoy>`)
 `--box-length-a` | `300.0` | Extraction box edge length in Å (roughly 2x the largest expected particle)
 `--n-bins` | `12` | Radial bins in the rotational average
-`--method` | `hbdscan` | Clustering method to use (`hbdscan` or `kmeans`)
+`--method` | `hdbscan` | Clustering method to use (`hdbscan` or `kmeans`)
 `--min-cluster-size` | `20` | HDBSCAN minimum cluster size
 `--n-clusters` | `5` | Number of KMeans clusters to use
 `--n-components` | `20` | Number of PCA components to use

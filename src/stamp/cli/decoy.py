@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 import stamp.commands.decoy as decoyfuncs
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import resolve_output_dir
+from stamp.utils.log import log_started
 
 # Initialise Typer app
 decoyCli = typer.Typer(
@@ -111,6 +112,7 @@ def decoy(
     ] = False,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data.'''
+    log_started('decoy generation')
     # Validate picker parameters
     try:
         parameters = json.loads(picker_params)

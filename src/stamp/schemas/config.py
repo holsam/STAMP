@@ -10,7 +10,7 @@ from typing import Literal
 
 # Import internal STAMP objects
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.log import log
+from stamp.utils.log import log, log_config
 
 # _Strict: reject unknown keys, treat "" as unset
 class _Strict(BaseModel):
@@ -139,4 +139,5 @@ def load_run_config(path: Path) -> RunConfig:
     if config.stage.refine.backend is None:
         log.debug(f'stage.refine.backend not set, inheriting run.backend={config.run.backend!r}')
         config.stage.refine.backend = config.run.backend
+    log_config('run', config)
     return config

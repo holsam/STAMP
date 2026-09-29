@@ -3,9 +3,11 @@ STAMP: logging set up and handling
 '''
 
 # Import external dependencies
-import sys
+import shlex, sys
+from dataclasses import asdict, is_dataclass
 from loguru import logger as logger
 from pathlib import Path
+from pydantic import BaseModel
 
 # Import internal STAMP objects
 import stamp.utils.io as io
@@ -146,4 +148,12 @@ register_custom_levels()
 # Create logger as instance of _StampLogger
 log = _StampLogger()
 
+# log_started: INFO message for a command starting (with terminal command used)
+def log_started(stage: str) -> None:
+    log.info(f'Started {stage} ({shlex.join(sys.argv)})')
 
+# log_config: DEBUG message for loaded/constructed config object's fields
+def log_config(name: str, model: BaseModel | object) -> None:
+    values = model.model_dump() if isinstance(model, BaseModel) else asdict(model) if is_dataclass(model) else vars(model)
+    fields = ', '.join(f'{k}={v!r}' for k, v in values.items())
+    log.debug(f'Configuration loaded for {name}: {fields}')

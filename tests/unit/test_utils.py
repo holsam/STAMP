@@ -336,3 +336,15 @@ class TestParallel:
         sequential = run_parallel_ordered(items, _square, max_workers=1, label='sq')
         batch = run_parallel_ordered(items, _square, max_workers=4, label='sq')
         assert sequential == batch
+
+# TestCheckpoint: class containing unit tests for src/stamp/utils/checkpoint.py
+class TestCheckpoint:
+    def test_matching_fingerprint_resumes_and_mismatch_wipes(self, tmp_path: Path) -> None:
+        from stamp.utils.checkpoint import sync_checkpoint
+        raw = tmp_path / 'raw'
+        assert sync_checkpoint(raw, {'box': 11}) is False
+        (raw / 'kept.npy').write_text('x')
+        assert sync_checkpoint(raw, {'box': 11}) is True
+        assert (raw / 'kept.npy').exists()
+        assert sync_checkpoint(raw, {'box': 13}) is False
+        assert not (raw / 'kept.npy').exists()
