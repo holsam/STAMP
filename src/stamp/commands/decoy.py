@@ -4,6 +4,7 @@ STAMP: decoy dataset generation logic
 
 # Import external dependencies
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -20,6 +21,7 @@ from stamp.decoy.validate import assert_comparable
 from stamp.picking.native import NativePickerConfig
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import ParticleSet
+from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import archive_and_remove_directory, load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
@@ -66,6 +68,26 @@ def run_decoy(
     config = NativePickerConfig(voxel_size_angstrom=voxel_size_angstrom, **config_fields)
 
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # everything that changes decoy positions; workers, plots and keep_raw are left out so a run can resume with different resources
+    uses_real_data = method != METHOD_SYNTHETIC_NOISE
+    fingerprint = {
+        'method': method,
+        'seed': seed,
+        'picker_config': asdict(config),
+        'n_decoys_per_tomogram': n_decoys_per_tomogram,
+        'min_distance_from_real_angstrom': min_distance_from_real_angstrom,
+        'min_shift_angstrom': min_shift_angstrom,
+        'max_shift_angstrom': max_shift_angstrom,
+        'min_distance_from_picks_angstrom': min_distance_from_picks_angstrom,
+        'n_synthetic_tomograms': n_synthetic_tomograms,
+        'synthetic_shape': synthetic_shape,
+        'real_particle_set': file_signature(real_particle_set, content=True) if uses_real_data and real_particle_set else None,
+        'segmentation': directory_signatures(segmentation_dir) if uses_real_data else {},
+        'raw': directory_signatures(raw_tomogram_dir) if uses_real_data else {},
+    }
+    if sync_checkpoint(output_dir / 'raw', fingerprint):
+        log.info('Found matching partial output, resuming')
 
     if method == METHOD_SYNTHETIC_NOISE:
         shape = tuple(int(value) for value in synthetic_shape.split(','))
