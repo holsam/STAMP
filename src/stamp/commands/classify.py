@@ -17,6 +17,7 @@ from stamp.classify.cluster import (
     reduce_and_cluster,
     reduce_and_cluster_shared,
 )
+from stamp.utils.checkpoint import file_signature, sync_checkpoint
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
@@ -79,6 +80,30 @@ def run_classify(
         box_voxels += 1  # odd box keeps the particle exactly centred
         log.debug(f'Using odd box voxel for centred particles: {box_voxels - 1} -> {box_voxels}')    
     log.progress(f'Using box voxels: {box_voxels}')
+
+    # everything that changes results; n_workers, plots and keep_raw are left out so a run can resume with different resources
+    fingerprint = {
+        'particles': file_signature(particles, content=True),
+        'raw': {stem: file_signature(Path(path)) for stem, path in sorted(tomogram_paths.items())},
+        'segmentation': {stem: file_signature(Path(path)) for stem, path in sorted(segmentation_paths.items())},
+        'voxel_size_angstrom': voxel_size_angstrom,
+        'box_voxels': box_voxels,
+        'n_radial_bins': n_radial_bins,
+        'azimuthal_modes': azimuthal_modes,
+        'n_azimuthal_samples': n_azimuthal_samples,
+        'min_radius_fraction': min_radius_fraction,
+        'method': method,
+        'min_cluster_size': min_cluster_size,
+        'n_clusters': n_clusters,
+        'n_components': n_components,
+        'strict_halfset_independence': strict_halfset_independence,
+        'inplane_alignment': inplane_alignment,
+        'inplane_angular_step_degrees': inplane_angular_step_degrees,
+        'inplane_iterations': inplane_iterations,
+        'random_state': random_state,
+    }
+    if sync_checkpoint(output_dir / 'raw', fingerprint):
+        log.info('Found matching partial output, resuming')
 
     log.progress('Starting subvolume extraction')
     subvols, kept, skipped = extract_particle_set(
