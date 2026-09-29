@@ -89,7 +89,6 @@ def run_classify(
         log.warning(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
     if not kept:
         raise StampPipelineError('No particles could be extracted. Check --raw-dir and --box-length-a')
-    log.info(f'Extracted {len(kept)} subvolumes at box {box_voxels}{" (membrane subtracted)" if segmentation_paths else ""}')
 
     log.progress('Starting feature matrix construction')
     features = build_feature_matrix(

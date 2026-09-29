@@ -149,6 +149,24 @@ class TestExtract:
         subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, cache_dir=tmp_path)
         assert float(subvolumes[0][5, 5, 5]) == 50.0
 
+    def test_shape_mismatch_falls_back_to_raw_tomogram(self, tmp_path, caplog) -> None:
+        tomogram = np.zeros((40, 40, 40), dtype=np.float32)
+        tomogram[:, :, 20] = 50.0
+        segmentation = np.zeros((30, 30, 30), dtype=np.float32)  # wrong shape
+        with mrcfile.new(tmp_path / 't.mrc', overwrite=True) as mrc:
+            mrc.set_data(tomogram)
+            mrc.voxel_size = 1.0
+        with mrcfile.new(tmp_path / 's.mrc', overwrite=True) as mrc:
+            mrc.set_data(segmentation)
+            mrc.voxel_size = 1.0
+        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        subvolumes, kept, skipped = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, segmentation_paths={'t': str(tmp_path / 's.mrc')}, cache_dir=tmp_path)
+        assert len(kept) == 1 and not skipped
+        assert float(subvolumes[0][5, 5, 5]) == 50.0  # raw density, membrane untouched
+        assert not (tmp_path / '.subtracted').exists()
+        assert 'without membrane subtraction' in caplog.text
+        assert '1 (raw density)' in caplog.text
+
 # TestFeatures: class containing unit tests for src/stamp/classify/features.py
 class TestFeatures:
     def test_rotational_average_shape(self) -> None:

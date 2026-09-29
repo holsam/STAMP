@@ -3,7 +3,7 @@ STAMP: subvolume extraction
 '''
 
 # Import external dependencies
-import mrcfile, numpy as np
+import mrcfile, numpy as np, shutil
 from dataclasses import dataclass
 from pathlib import Path
 from scipy.ndimage import map_coordinates
@@ -66,9 +66,7 @@ def extract_subvolume(
     sample_xyz = grid_xyz + np.array(position_xyz)[:, None]
     sample_zyx = sample_xyz[::-1]  # single xyz -> zyx conversion
 
-    values = map_coordinates(
-        tomogram.astype(np.float32), sample_zyx, order=1, mode='constant', cval=0.0
-    )
+    values = map_coordinates(np.asarray(tomogram, dtype=np.float32), sample_zyx, order=1, mode='constant', cval=0.0)
     return values.reshape(box_voxels, box_voxels, box_voxels)
 
 # box_fits_inside: whether a rotated box at this position stays inside the volume
@@ -195,4 +193,7 @@ def extract_particle_set(
         index.extend((job.tomogram_id, row) for row in range(len(tomogram_kept)))
 
     log.debug(f'extract_particle_set: {len(kept)} kept, {len(skipped)} skipped')
+    n_subtracted = sum(particle.tomogram_id in subtracted_ids for particle in kept)
+    parts = [f'{n} ({label})' for n, label in ((n_subtracted, 'membrane-subtracted'), (len(kept) - n_subtracted, 'raw density')) if n]
+    log.info(f'Extracted {" + ".join(parts)} subvolumes at box {box_voxels}')
     return Subvolumes(cache_dir, index, box_voxels), kept, skipped
