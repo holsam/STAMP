@@ -365,3 +365,14 @@ class TestCheckpoint:
         (tmp_path / 'a.mrc').write_text('longer')
         assert directory_signatures(tmp_path) != first
         assert signatures({'a': tmp_path / 'a.mrc'}, content=True) == signatures({'a': tmp_path / 'a.mrc'}, content=True)
+
+# TestPickCache: class containing unit tests for cache_tomogram_picks and load_cached_picks in src/stamp/utils/io.py
+class TestPickCache:
+    def test_round_trip_and_truncated_file_is_skipped(self, tmp_path: Path) -> None:
+        from stamp.schemas.picks import RawPick
+        from stamp.utils.io import cache_tomogram_picks, load_cached_picks
+        pick = RawPick(tomogram_id='t0', position=(1.0, 2.0, 3.0), source_picker='x')
+        cache_tomogram_picks(tmp_path / 'cache', 't0', [pick])
+        (tmp_path / 'cache' / 't1.json').write_text('[{"tomogram_id": ')  # truncated
+        loaded = load_cached_picks(tmp_path / 'cache', ['t0', 't1'])
+        assert [p.tomogram_id for p in loaded] == ['t0']
