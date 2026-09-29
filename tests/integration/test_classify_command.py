@@ -129,6 +129,32 @@ class TestClassifyChunking:
             return real_stack(arrays, *args, **kwargs)
         monkeypatch.setattr(np, 'stack', guarded_stack)
 
+    def test_classify_resumes_from_matching_partial_output(self, tmp_path: Path) -> None:
+        '''A second identical run reuses extraction, features and alignment; a changed command starts fresh.'''
+        particle_set_path, raw_dir = _build_dataset(tmp_path)
+        argv = [
+            '-vv', '-d', str(tmp_path), 'classify',
+            '--particles', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path),
+            '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'kmeans',
+            '--n-clusters', '2', '--n-components', '10', '--keep-raw',
+        ]
+        assert runner.invoke(stamp_app, argv).exit_code == 0
+        output_dir = tmp_path / 'stamp' / 'classify'
+        first = (output_dir / 'class_assignments.json').read_text()
+
+        result = runner.invoke(stamp_app, argv)
+        assert result.exit_code == 0, result.output
+        assert 'Resuming extraction' in result.output
+        assert 'features loaded from checkpoint' in result.output
+        assert 'Resuming in-plane alignment' in result.output
+        assert (output_dir / 'class_assignments.json').read_text() == first
+
+        changed = argv[:argv.index('--n-clusters')] + ['--n-clusters', '3'] + argv[argv.index('--n-clusters') + 2:]
+        result = runner.invoke(stamp_app, changed)
+        assert result.exit_code == 0, result.output
+        assert 'starting fresh' in result.output
+        assert 'Resuming extraction' not in result.output
+
     def test_classify_pipeline_never_stacks_the_whole_dataset(self, tmp_path, monkeypatch):
         '''extract/features/align/average batch per-tomogram, instead of stacking the whole dataset.'''
         n_tomograms = 4

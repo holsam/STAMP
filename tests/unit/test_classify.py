@@ -167,6 +167,33 @@ class TestExtract:
         assert 'without membrane subtraction' in caplog.text
         assert '1 (raw density)' in caplog.text
 
+    def test_aborted_extraction_resumes_without_recomputing(self, tmp_path, monkeypatch) -> None:
+        from stamp.classify import extract as extract_module
+        particles, paths = [], {}
+        for name in ('a', 'b'):
+            with mrcfile.new(tmp_path / f'{name}.mrc', overwrite=True) as mrc:
+                mrc.set_data(np.random.default_rng(0).normal(size=(40, 40, 40)).astype(np.float32))
+            paths[name] = str(tmp_path / f'{name}.mrc')
+            particles.append(Particle(particle_id=f'p_{name}', tomogram_id=name, position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A))
+        cache = tmp_path / 'cache'
+        full, kept_full, _ = extract_particle_set(particles, paths, 11, cache_dir=cache)
+
+        # simulate an abort during tomogram b: its marker never got written
+        (cache / 'b.json').unlink()
+        (cache / 'b.npy').unlink()
+        calls: list[str] = []
+        original = extract_module._extract_one_tomogram
+        monkeypatch.setattr(extract_module, '_extract_one_tomogram', lambda job: (calls.append(job.tomogram_id), original(job))[1])
+        resumed, kept_resumed, _ = extract_particle_set(particles, paths, 11, cache_dir=cache)
+        assert calls == ['b']
+        assert [p.particle_id for p in kept_resumed] == [p.particle_id for p in kept_full]
+        assert np.array_equal(resumed[1], full[1])
+
+        # a different box size invalidates the markers
+        calls.clear()
+        extract_particle_set(particles, paths, 13, cache_dir=cache)
+        assert sorted(calls) == ['a', 'b']
+
 # TestFeatures: class containing unit tests for src/stamp/classify/features.py
 class TestFeatures:
     def test_rotational_average_shape(self) -> None:
@@ -293,6 +320,22 @@ class TestFeatures:
         features = build_feature_matrix(subvols, n_radial_bins=4, max_azimuthal_mode=0)
         assert not features[0].any() and features[1].any()
 
+    def test_feature_checkpoint_skips_recomputation(self, tmp_path: Path, monkeypatch) -> None:
+        from stamp.classify import features as features_module
+        subvols = _subvols_from_array(tmp_path / 'sv', np.random.default_rng(0).random((6, 11, 11, 11)))
+        cache = tmp_path / 'features'
+        first = build_feature_matrix(subvols, n_radial_bins=4, cache_dir=cache)
+
+        def _fail(*args, **kwargs):
+            raise AssertionError('features recomputed despite checkpoint')
+
+        monkeypatch.setattr(features_module, 'azimuthal_magnitudes', _fail)
+        assert np.array_equal(build_feature_matrix(subvols, n_radial_bins=4, cache_dir=cache), first)
+
+        # a checkpoint built for different rows is ignored
+        with pytest.raises(AssertionError):
+            build_feature_matrix(subvols.take([0, 1, 2]), n_radial_bins=4, cache_dir=cache)
+
 # TestCluster: class containing unit tests for src/stamp/classify/cluster.py
 class TestCluster:
     def test_hdbscan_recovers_three_groups(self) -> None:
@@ -385,6 +428,28 @@ class TestAlign:
         reference = aligned.mean(axis=0)
         for frame in aligned:
             assert np.corrcoef(frame.ravel(), reference.ravel())[0, 1] > 0.98
+
+    def test_alignment_checkpoint_resumes_per_cluster(self, tmp_path: Path, monkeypatch) -> None:
+        from stamp.classify import align as align_module
+        stack = np.random.default_rng(0).random((6, 15, 15, 15))
+        subvols = _subvols_from_array(tmp_path / 'sv', stack)
+        cluster_ids = ['c00', 'c00', 'c00', 'c01', 'c01', 'c01']
+        checkpoint = tmp_path / 'align'
+        first = align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint)
+        assert sorted(p.name for p in checkpoint.glob('*.json')) == ['c00.json', 'c01.json']
+
+        # simulate an abort before c01 finished
+        (checkpoint / 'c01.json').unlink()
+        aligned_clusters: list[list[int]] = []
+        original = align_module._align_one_cluster
+        monkeypatch.setattr(align_module, '_align_one_cluster', lambda job: (aligned_clusters.append(job.member_indices), original(job))[1])
+        assert align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint) == first
+        assert aligned_clusters == [[3, 4, 5]]
+
+        # a cluster whose membership changed is recomputed
+        aligned_clusters.clear()
+        align_inplane(subvols, ['c00', 'c00', 'c01', 'c01', 'c01', 'c01'], checkpoint_dir=checkpoint)
+        assert sorted(aligned_clusters) == [[0, 1], [2, 3, 4, 5]]
 
     def test_noise_cluster_skipped(self, tmp_path: Path):
         '''Noise rows get no angle.'''
