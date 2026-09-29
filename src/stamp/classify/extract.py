@@ -3,7 +3,7 @@ STAMP: subvolume extraction
 '''
 
 # Import external dependencies
-import mrcfile, numpy as np, shutil
+import json, mrcfile, numpy as np, os, shutil
 from dataclasses import dataclass
 from pathlib import Path
 from scipy.ndimage import map_coordinates
@@ -23,6 +23,7 @@ class _ExtractTomogramJob:
     tomogram_path: str
     box_voxels: int
     cache_dir: Path
+    subtracted: bool = False
 
 # _SubtractTomogramJob: one tomogram's membrane subtraction, written to disk for extraction to mmap
 @dataclass(frozen=True)
@@ -95,8 +96,40 @@ def _subtract_one_tomogram(job: _SubtractTomogramJob) -> Path:
         out.voxel_size = voxel_size
     return job.output_path
 
+# _marker_path: per-tomogram completion marker, written only after its subvolume cache is in place
+def _marker_path(cache_dir: Path, tomogram_id: str) -> Path:
+    return cache_dir / f'{tomogram_id}.json'
+
+# _write_marker: record which particles were kept or skipped so an aborted run can resume without recomputing
+def _write_marker(job: _ExtractTomogramJob, kept: list[Particle], skipped: list[Particle]) -> None:
+    marker = {
+        'box_voxels': job.box_voxels,
+        'subtracted': job.subtracted,
+        'kept': [particle.particle_id for particle in kept],
+        'skipped': [particle.particle_id for particle in skipped],
+    }
+    path = _marker_path(job.cache_dir, job.tomogram_id)
+    temporary = path.with_name(path.name + '.tmp')
+    temporary.write_text(json.dumps(marker))
+    os.replace(temporary, path)  # atomic, a partial marker never looks complete
+
+# _read_marker: (kept, skipped, subtracted) from a valid marker for this group, else None
+def _read_marker(cache_dir: Path, tomogram_id: str, group: list[Particle], box_voxels: int) -> tuple[list[Particle], list[Particle], bool] | None:
+    try:
+        marker = json.loads(_marker_path(cache_dir, tomogram_id).read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    by_id = {particle.particle_id: particle for particle in group}
+    ids = marker.get('kept', []) + marker.get('skipped', [])
+    if marker.get('box_voxels') != box_voxels or len(ids) != len(by_id) or set(ids) != set(by_id):
+        return None
+    if marker['kept'] and not (cache_dir / f'{tomogram_id}.npy').is_file():
+        return None
+    return [by_id[i] for i in marker['kept']], [by_id[i] for i in marker['skipped']], bool(marker.get('subtracted'))
+
 # _extract_one_tomogram: worker entry point to mmaps one tomogram and extracts subvolumes for its particles
 def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], list[Particle]]:
+    _marker_path(job.cache_dir, job.tomogram_id).unlink(missing_ok=True)  # invalidate any stale marker before rewriting
     kept: list[Particle] = []
     skipped: list[Particle] = []
     subvolumes: list[np.ndarray] = []
@@ -110,9 +143,14 @@ def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], lis
                 continue
             subvolumes.append(extract_subvolume(tomogram, particle.position, particle.orientation, job.box_voxels))
             kept.append(particle)
+    job.cache_dir.mkdir(parents=True, exist_ok=True)
     if subvolumes:
-        job.cache_dir.mkdir(parents=True, exist_ok=True)
-        np.save(job.cache_dir / f'{job.tomogram_id}.npy', np.stack(subvolumes))
+        final = job.cache_dir / f'{job.tomogram_id}.npy'
+        temporary = final.with_name(final.name + '.tmp')
+        with open(temporary, 'wb') as handle:
+            np.save(handle, np.stack(subvolumes))
+        os.replace(temporary, final)  # atomic, a truncated cache never looks complete
+    _write_marker(job, kept, skipped)
     return kept, skipped
 
 # extract_particle_set: extract subvolumes for a list of particles, cached per tomogram
@@ -133,8 +171,12 @@ def extract_particle_set(
     kept: list[Particle] = []
     skipped: list[Particle] = []
 
-    # subtract membranes to cached mrc files
+    # subtract membranes to cached mrc files, any leftovers from an aborted run are recomputed
     subtracted_dir = cache_dir / '.subtracted'
+    shutil.rmtree(subtracted_dir, ignore_errors=True)
+    result_by_tomogram: dict[str, tuple[list[Particle], list[Particle]]] = {}
+    subtracted_ids: set[str] = set()
+    n_resumed = 0
     subtract_jobs: list[_SubtractTomogramJob] = []
     jobs: list[_ExtractTomogramJob] = []
     for tomogram_id, group in by_tomogram.items():
@@ -143,13 +185,21 @@ def extract_particle_set(
             log.warning(f'{tomogram_id}: no matching raw tomogram path, skipping {len(group)} particle(s)')
             skipped.extend(group)
             continue
+        resumed = _read_marker(cache_dir, tomogram_id, group, box_voxels)
+        if resumed is not None:
+            result_by_tomogram[tomogram_id] = (resumed[0], resumed[1])
+            if resumed[2]:
+                subtracted_ids.add(tomogram_id)
+            n_resumed += 1
+            continue
         segmentation_path = segmentation_paths.get(tomogram_id)
         if segmentation_path is not None:
             subtract_jobs.append(_SubtractTomogramJob(tomogram_id, path, segmentation_path, subtracted_dir / f'{tomogram_id}.mrc'))
         else:
             jobs.append(_ExtractTomogramJob(tomogram_id, group, path, box_voxels, cache_dir))
 
-    result_by_tomogram: dict[str, tuple[list[Particle], list[Particle]]] = {}
+    if n_resumed:
+        log.info(f'Resuming extraction: {n_resumed}/{len(by_tomogram)} tomogram(s) already extracted')
 
     def _on_error(job, exc: Exception) -> None:
         if isinstance(exc, StampValidationError):
@@ -165,15 +215,13 @@ def extract_particle_set(
         log.warning(f'{job.tomogram_id}: {exc}; extracting from the raw tomogram without membrane subtraction')
         jobs.append(_ExtractTomogramJob(job.tomogram_id, by_tomogram[job.tomogram_id], job.tomogram_path, box_voxels, cache_dir))
 
-    subtracted_ids: set[str] = set()
-
     def _on_subtracted(job: _SubtractTomogramJob, output_path: Path) -> None:
-        subtracted_ids.add(job.tomogram_id)
-        jobs.append(_ExtractTomogramJob(job.tomogram_id, by_tomogram[job.tomogram_id], str(output_path), box_voxels, cache_dir))
+        jobs.append(_ExtractTomogramJob(job.tomogram_id, by_tomogram[job.tomogram_id], str(output_path), box_voxels, cache_dir, subtracted=True))
 
     def _on_success(job: _ExtractTomogramJob, result: tuple[list[Particle], list[Particle]]) -> None:
         result_by_tomogram[job.tomogram_id] = result
-        if Path(job.tomogram_path).parent == subtracted_dir:
+        if job.subtracted:
+            subtracted_ids.add(job.tomogram_id)
             Path(job.tomogram_path).unlink(missing_ok=True)  # free disk as soon as a tomogram is done
 
     try:
@@ -183,14 +231,11 @@ def extract_particle_set(
         shutil.rmtree(subtracted_dir, ignore_errors=True)
 
     index: list[tuple[str, int]] = []
-    for job in sorted(jobs, key=lambda job: job.tomogram_id):
-        result = result_by_tomogram.get(job.tomogram_id)
-        if result is None:
-            continue
-        tomogram_kept, tomogram_skipped = result
+    for tomogram_id in sorted(result_by_tomogram):
+        tomogram_kept, tomogram_skipped = result_by_tomogram[tomogram_id]
         kept.extend(tomogram_kept)
         skipped.extend(tomogram_skipped)
-        index.extend((job.tomogram_id, row) for row in range(len(tomogram_kept)))
+        index.extend((tomogram_id, row) for row in range(len(tomogram_kept)))
 
     log.debug(f'extract_particle_set: {len(kept)} kept, {len(skipped)} skipped')
     n_subtracted = sum(particle.tomogram_id in subtracted_ids for particle in kept)
