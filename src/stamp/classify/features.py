@@ -151,6 +151,7 @@ def build_feature_matrix(
         by_tomogram.setdefault(tomogram_id, []).append(local_index)
     with pool_context as pool:
         completed = 0
+        n_resumed = 0
         for tomogram_id, local_indices in by_tomogram.items():
             rows = [subvols.index[i][1] for i in local_indices]
             tomogram_magnitudes = _load_cached_magnitudes(cache_dir, tomogram_id, rows)
@@ -170,10 +171,13 @@ def build_feature_matrix(
                 if cache_dir is not None:
                     atomic_save_npz(cache_dir / f'{tomogram_id}.npz', rows=np.array(rows), magnitudes=tomogram_magnitudes)
             else:
+                n_resumed += 1
                 log.debug(f'{tomogram_id}: features loaded from checkpoint')
             completed += len(local_indices)
             for local_index, result in zip(local_indices, tomogram_magnitudes):
                 magnitudes[local_index] = result
+    if n_resumed:
+        log.info(f'Resuming feature extraction: {n_resumed}/{len(by_tomogram)} tomogram(s) loaded from checkpoint')
     stacked = np.stack(magnitudes)  # (n_particles, n_modes, n_radial_bins, box_voxels)
 
     n_particles = stacked.shape[0]

@@ -125,7 +125,7 @@ def run_classify(
         n_workers=n_workers,
         cache_dir=output_dir / 'raw' / 'features',
     )
-    log.debug(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
+    log.progress(f'Feature matrix complete: {features.shape[0]} particles x {features.shape[1]} features (modes 0-{azimuthal_modes})')
 
     degenerate = ~features.any(axis=1)
     if degenerate.any():
