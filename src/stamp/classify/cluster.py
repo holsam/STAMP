@@ -47,6 +47,19 @@ def _cluster_embedding(embedding: np.ndarray, config: ClusteringConfig) -> tuple
     centroids = {int(label): embedding[labels == label].mean(axis=0) for label in np.unique(labels) if label != -1}
     return labels, centroids
 
+# reduce_features: PCA of a feature matrix, return (embedding, explained variance ratio)
+def reduce_features(features: np.ndarray, config: ClusteringConfig) -> tuple[np.ndarray, np.ndarray]:
+    if features.shape[0] == 0:
+        raise ValueError('cannot cluster an empty feature matrix')
+    n_components = min(config.n_components, features.shape[0] - 1, features.shape[1])
+    if n_components < 2:
+        raise ValueError(f'Too few particles ({features.shape[0]}) to run PCA (at least 2 needed)')
+    log.progress(f'Starting PCA: {features.shape[0]} particles, {features.shape[1]} features, {n_components} components')
+    pca = PCA(n_components=n_components, random_state=config.random_state)
+    embedding = pca.fit_transform(features)
+    log.progress(f'PCA complete: {pca.explained_variance_ratio_.sum():.1%} variance explained')
+    return embedding, pca.explained_variance_ratio_
+
 # reduce_and_cluster: PCA followed by HDBSCAN or KMeans
 def reduce_and_cluster(features: np.ndarray, config: ClusteringConfig) -> ClusteringResult:
     if features.shape[0] == 0:
