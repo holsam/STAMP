@@ -38,6 +38,16 @@ Option | Default | Meaning | Notes
 
 <br>
 
+## Resuming interrupted commands
+
+STAMP's `pick`, `decoy`, `classify`, `identify` and `refine` commands periodically checkpoint finished work throughout processing. Re-running a command with the same inputs/parameters will be detected, and the command will resume from the previous checkpoint. Partial output lives in `raw/` (for `refine`, in the class directory) alongside a `checkpoint.json` fingerprint of everything that affects the results.
+
+If a command's inputs or parameters differ, any old partial output is discarded with a warning. Parameters which don't affect results (e.g. `--n-processes`, plots, `--keep-raw`) and steps applied after checkpointed work (for `pick`: consensus rule, distance threshold, seed and beam angle filter) can change between runs without invalidating a given checkpoint.
+
+`stamp run` re-runs will also reuse any valid partial output within a stage.
+
+<br>
+
 ## `stamp pick`
 
 ```

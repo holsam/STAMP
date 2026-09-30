@@ -324,17 +324,23 @@ def print_toml(path: Path) -> None:
     console.print(build_toml_tree(data, path.name))
     console.print()
 
-# cache_tomogram_picks: write one tomogram's picks to <cache_dir>/<tomogram_id>.json
+# cache_tomogram_picks: atomically write one tomogram's picks to <cache_dir>/<tomogram_id>.json
 def cache_tomogram_picks(cache_dir: Path, tomogram_id: str, picks: list[RawPick]) -> None:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    (cache_dir / f'{tomogram_id}.json').write_text(json.dumps([pick.model_dump() for pick in picks], indent=2))
+    from stamp.utils.checkpoint import atomic_write_json  # lazy: log imports io and checkpoint imports log
+    atomic_write_json(cache_dir / f'{tomogram_id}.json', [pick.model_dump() for pick in picks])
 
-# load_cached_picks: read back per-tomogram JSON pick caches written by cache_tomogram_picks
+# load_cached_picks: read back per-tomogram JSON pick caches written by cache_tomogram_picks, skipping unreadable ones
 def load_cached_picks(cache_dir: Path, tomogram_ids: list[str]) -> list[RawPick]:
+    from stamp.utils.log import log
     picks: list[RawPick] = []
     for tomogram_id in tomogram_ids:
         cache_path = cache_dir / f'{tomogram_id}.json'
         if not cache_path.exists():
             continue
-        picks.extend(RawPick(**raw) for raw in json.loads(cache_path.read_text()))
+        try:
+            raw_picks = json.loads(cache_path.read_text())
+        except json.JSONDecodeError:
+            log.warning(f'{cache_path} is not valid JSON, ignoring it')
+            continue
+        picks.extend(RawPick(**raw) for raw in raw_picks)
     return picks

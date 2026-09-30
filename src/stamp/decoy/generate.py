@@ -23,6 +23,7 @@ from stamp.picking.native import NativePickerConfig
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
+from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.errors import StampValidationError
 from stamp.utils.io import cache_tomogram_picks, load_cached_picks
 from stamp.utils.log import log
@@ -51,6 +52,23 @@ def _adaptive_decoy_count(n_real_picks: int, *, target_ratio: float = 1.0) -> in
 def _score_one_tomogram(job: _RejectedSurfaceJob) -> _ScoreSurfaceResult:
     return _score_surface(job.manifest, job.config)
 
+# _SCORE_FIELDS: names under which _score_surface's six arrays are stored
+_SCORE_FIELDS = ('points', 'normals', 'scores', 'winning_window', 'mean_scores', 'profile_scores')
+
+# _save_cached_scores: checkpoint one tomogram's surface scores
+def _save_cached_scores(scores_dir: Path, tomogram_id: str, result: _ScoreSurfaceResult) -> None:
+    atomic_save_npz(scores_dir / f'{tomogram_id}.npz', **dict(zip(_SCORE_FIELDS, result)))
+
+# _load_cached_scores: one tomogram's checkpointed surface scores, or None when absent or unreadable
+def _load_cached_scores(scores_dir: Path | None, tomogram_id: str) -> _ScoreSurfaceResult | None:
+    if scores_dir is None:
+        return None
+    try:
+        with np.load(scores_dir / f'{tomogram_id}.npz') as cached:
+            return tuple(cached[name] for name in _SCORE_FIELDS)  # type: ignore[return-value]
+    except (OSError, ValueError, KeyError):
+        return None
+
 # generate_rejected_surface_decoys: sample decoys from surface points the native picker scored and rejected
 def generate_rejected_surface_decoys(
     real_particle_set: ParticleSet,
@@ -74,11 +92,15 @@ def generate_rejected_surface_decoys(
     cache_dir = output_dir / 'raw' / METHOD_REJECTED_SURFACE if output_dir is not None else None
     tomogram_ids = []
 
+    scores_dir = cache_dir / 'scores' if cache_dir is not None else None
+
     # run surface scoring in a pool but keep rng-driven sampling sequential and in manifest order so results stay reproducible for a given seed
     result_by_tomogram: dict[str, _ScoreSurfaceResult] = {}
 
     def _on_success(job: _RejectedSurfaceJob, result: _ScoreSurfaceResult) -> None:
         result_by_tomogram[job.manifest.tomogram_id] = result
+        if scores_dir is not None:
+            _save_cached_scores(scores_dir, job.manifest.tomogram_id, result)
 
     def _on_error(job: _RejectedSurfaceJob, exc: Exception) -> None:
         if isinstance(exc, StampValidationError):
@@ -86,7 +108,15 @@ def generate_rejected_surface_decoys(
         else:
             raise exc
 
-    jobs = [_RejectedSurfaceJob(manifest, config) for manifest in manifests]
+    jobs: list[_RejectedSurfaceJob] = []
+    for manifest in manifests:
+        cached = _load_cached_scores(scores_dir, manifest.tomogram_id)
+        if cached is None:
+            jobs.append(_RejectedSurfaceJob(manifest, config))
+        else:
+            result_by_tomogram[manifest.tomogram_id] = cached
+    if len(jobs) < len(manifests):
+        log.info(f'Resuming rejected-surface decoys: {len(manifests) - len(jobs)} tomogram(s) loaded from checkpoint')
     run_parallel(jobs, _score_one_tomogram, max_workers=n_workers, label='decoy-surface-score', on_success=_on_success, on_error=_on_error)
 
     for manifest in manifests:
@@ -161,6 +191,21 @@ def _extract_surface_for_manifest(manifest: TomogramManifest) -> tuple[tuple[int
     vertices, normals = extract_surface(segmentation)
     return segmentation.shape, vertices, normals
 
+# _save_cached_surface: checkpoint one tomogram's extracted surface
+def _save_cached_surface(surfaces_dir: Path, tomogram_id: str, surface: tuple[tuple[int, ...], np.ndarray, np.ndarray]) -> None:
+    shape, vertices, normals = surface
+    atomic_save_npz(surfaces_dir / f'{tomogram_id}.npz', shape=np.array(shape), vertices=vertices, normals=normals)
+
+# _load_cached_surface: one tomogram's checkpointed surface, or None when absent or unreadable
+def _load_cached_surface(surfaces_dir: Path | None, tomogram_id: str) -> tuple[tuple[int, ...], np.ndarray, np.ndarray] | None:
+    if surfaces_dir is None:
+        return None
+    try:
+        with np.load(surfaces_dir / f'{tomogram_id}.npz') as cached:
+            return tuple(int(size) for size in cached['shape']), cached['vertices'], cached['normals']
+    except (OSError, ValueError, KeyError):
+        return None
+
 # generate_shifted_decoys: displace each real pick by a large random vector away from surface and picks
 def generate_shifted_decoys(
     real_particle_set: ParticleSet,
@@ -178,21 +223,38 @@ def generate_shifted_decoys(
 ) -> ParticleSet | None:
     log.progress('Generating shifted decoys')
     rng = np.random.default_rng(seed)
+    surfaces_dir = output_dir / 'raw' / METHOD_SHIFTED / 'surfaces' if output_dir is not None else None
     shape_by_tomogram = {}
     surface_by_tomogram: dict[str, tuple[cKDTree, np.ndarray]] = {}
-    def _on_success(manifest: TomogramManifest, result: tuple[tuple[int, ...], np.ndarray, np.ndarray] | None) -> None:
-        if result is None:
-            return
+
+    # _register: index one tomogram's surface for the sampling loop below
+    def _register(manifest: TomogramManifest, result: tuple[tuple[int, ...], np.ndarray, np.ndarray]) -> None:
         shape, vertices, normals = result
         shape_by_tomogram[manifest.tomogram_id] = shape
         surface_by_tomogram[manifest.tomogram_id] = (cKDTree(vertices[:, ::-1]), normals[:, ::-1])
+
+    def _on_success(manifest: TomogramManifest, result: tuple[tuple[int, ...], np.ndarray, np.ndarray] | None) -> None:
+        if result is None:
+            return
+        _register(manifest, result)
+        if surfaces_dir is not None:
+            _save_cached_surface(surfaces_dir, manifest.tomogram_id, result)
     def _on_error(manifest: TomogramManifest, exc: Exception) -> None:
         if isinstance(exc, ValueError):
             log.warning(f'{manifest.tomogram_id}: skipped ({exc})')
         else:
             raise exc
 
-    run_parallel(manifests, _extract_surface_for_manifest, max_workers=n_workers, label='decoy-surface-extract', on_success=_on_success, on_error=_on_error)
+    pending: list[TomogramManifest] = []
+    for manifest in manifests:
+        cached = _load_cached_surface(surfaces_dir, manifest.tomogram_id)
+        if cached is None:
+            pending.append(manifest)
+        else:
+            _register(manifest, cached)
+    if len(pending) < len(manifests):
+        log.info(f'Resuming shifted decoys: {len(manifests) - len(pending)} tomogram(s) loaded from checkpoint')
+    run_parallel(pending, _extract_surface_for_manifest, max_workers=n_workers, label='decoy-surface-extract', on_success=_on_success, on_error=_on_error)
 
     real_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
     for particle in real_particle_set.particles:
@@ -271,20 +333,11 @@ class _SyntheticNoiseJob:
     n_decoys_per_tomogram: int
     cache_dir: Path | None = None
 
-# _generate_one_synthetic_noise_tomogram: multiprocessing worker entry point
+# _generate_one_synthetic_noise_tomogram: multiprocessing worker entry point, reusing a finished volume from the checkpoint
 def _generate_one_synthetic_noise_tomogram(job: _SyntheticNoiseJob) -> tuple[TomogramManifest, list[RawPick]]:
-    rng = np.random.default_rng(job.seed + job.index)
     tomogram_id = f'decoy-noise-{job.index:03d}'
-    volume = rng.normal(0.0, 1.0, size=job.tomogram_shape).astype(np.float32)
-    volume[job.shell > 0] += job.config.density_sign * 2.0
-
     segmentation_path = job.segmentation_dir / f'{tomogram_id}.mrc'
     tomogram_path = job.tomogram_dir / f'{tomogram_id}.mrc'
-    with mrcfile.new(segmentation_path, overwrite=True) as mrc:
-        mrc.set_data(job.shell)
-    with mrcfile.new(tomogram_path, overwrite=True) as mrc:
-        mrc.set_data(volume)
-
     manifest = TomogramManifest(
         tomogram_id=tomogram_id,
         segmentation_path=segmentation_path,
@@ -292,6 +345,20 @@ def _generate_one_synthetic_noise_tomogram(job: _SyntheticNoiseJob) -> tuple[Tom
         voxel_size_angstrom=job.config.voxel_size_angstrom,
         is_decoy=True,
     )
+
+    # the pick cache is written last and atomically, so its presence means the volumes and picks are complete
+    if job.cache_dir is not None and (job.cache_dir / f'{tomogram_id}.json').is_file() and segmentation_path.is_file() and tomogram_path.is_file():
+        log.debug(f'{tomogram_id}: loaded from checkpoint')
+        return manifest, load_cached_picks(job.cache_dir, [tomogram_id])
+
+    rng = np.random.default_rng(job.seed + job.index)
+    volume = rng.normal(0.0, 1.0, size=job.tomogram_shape).astype(np.float32)
+    volume[job.shell > 0] += job.config.density_sign * 2.0
+
+    with mrcfile.new(segmentation_path, overwrite=True) as mrc:
+        mrc.set_data(job.shell)
+    with mrcfile.new(tomogram_path, overwrite=True) as mrc:
+        mrc.set_data(volume)
 
     shell_voxels = np.argwhere(job.shell > 0)
     chosen = rng.choice(

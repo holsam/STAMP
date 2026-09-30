@@ -36,6 +36,21 @@ def _write_pair(seg_dir: Path, raw_dir: Path, tomogram_id: str, *, voxel_size: f
         if voxel_size is not None:
             mrc.voxel_size = voxel_size
 
+# _pick_args: CLI arguments for a native pick run over the given directories
+def _pick_args(tmp_path: Path, seg_dir: Path, raw_dir: Path, n_mad: float) -> list[str]:
+    return [
+        '-d', str(tmp_path),
+        'pick',
+        '--seg-dir', str(seg_dir),
+        '--raw-dir', str(raw_dir),
+        '--out-dir', str(tmp_path),
+        '--voxel-size-a', '10.0',
+        '--picker-params', json.dumps({'stamp-native': {'n_mad': n_mad, 'offset_windows_angstrom': [[20.0, 80.0]]}}),
+        '--backend', 'local',
+        '--n-processes', '1',
+        'stamp-native',
+    ]
+
 # TestPickCommand: class containing tests for pick command
 class TestPickCommand:
     # check `stamp pick` runs the native picker and writes outputs
@@ -168,3 +183,54 @@ class TestPickCommand:
         )
         assert result.exit_code == 0, result.output
         assert 'Multiple voxel sizes were found' in result.output
+    # check an interrupted pick resumes, picking only the tomograms that had not finished
+    def test_pick_resumes_after_interruption(self, tmp_path: Path, monkeypatch) -> None:
+        from stamp.adapters import native
+        seg_dir, raw_dir = tmp_path / 'seg', tmp_path / 'raw'
+        for tomogram_id in ('tomo000', 'tomo001', 'tomo002'):
+            _write_pair(seg_dir, raw_dir, tomogram_id)
+        real = native.pick_tomogram
+        picked: list[str] = []
+        state = {'fail': True}
+
+        # flaky: fail on tomo001 until told otherwise, else pick normally
+        def flaky(segmentation_path, tomogram_path, tomogram_id, config):
+            if state['fail'] and tomogram_id == 'tomo001':
+                raise RuntimeError('boom')
+            picked.append(tomogram_id)
+            return real(segmentation_path, tomogram_path, tomogram_id, config)
+
+        monkeypatch.setattr(native, 'pick_tomogram', flaky)
+        args = _pick_args(tmp_path, seg_dir, raw_dir, 2.5)
+        assert runner.invoke(stamp_app, args).exit_code != 0
+        assert picked == ['tomo000']  # manifests are processed in sorted order
+
+        state['fail'] = False
+        picked.clear()
+        result = runner.invoke(stamp_app, args)
+        assert result.exit_code == 0, result.output
+        assert picked == ['tomo001', 'tomo002']
+
+    # check changed picker parameters discard the checkpoint
+    def test_pick_restarts_when_picker_params_change(self, tmp_path: Path, monkeypatch) -> None:
+        from stamp.adapters import native
+        seg_dir, raw_dir = tmp_path / 'seg', tmp_path / 'raw'
+        for tomogram_id in ('tomo000', 'tomo001'):
+            _write_pair(seg_dir, raw_dir, tomogram_id)
+        real = native.pick_tomogram
+        picked: list[str] = []
+        state = {'fail': True}
+
+        # flaky: fail on tomo001 until told otherwise, else pick normally
+        def flaky(segmentation_path, tomogram_path, tomogram_id, config):
+            if state['fail'] and tomogram_id == 'tomo001':
+                raise RuntimeError('boom')
+            picked.append(tomogram_id)
+            return real(segmentation_path, tomogram_path, tomogram_id, config)
+
+        monkeypatch.setattr(native, 'pick_tomogram', flaky)
+        runner.invoke(stamp_app, _pick_args(tmp_path, seg_dir, raw_dir, 2.5))
+        state['fail'] = False
+        picked.clear()
+        runner.invoke(stamp_app, _pick_args(tmp_path, seg_dir, raw_dir, 2.0))  # exit code irrelevant, only what ran matters
+        assert picked == ['tomo000', 'tomo001']

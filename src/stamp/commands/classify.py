@@ -17,7 +17,7 @@ from stamp.classify.cluster import (
     reduce_and_cluster,
     reduce_and_cluster_shared,
 )
-from stamp.utils.checkpoint import file_signature, sync_checkpoint
+from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
@@ -84,8 +84,8 @@ def run_classify(
     # everything that changes results; n_workers, plots and keep_raw are left out so a run can resume with different resources
     fingerprint = {
         'particles': file_signature(particles, content=True),
-        'raw': {stem: file_signature(Path(path)) for stem, path in sorted(tomogram_paths.items())},
-        'segmentation': {stem: file_signature(Path(path)) for stem, path in sorted(segmentation_paths.items())},
+        'raw': signatures(tomogram_paths),
+        'segmentation': signatures(segmentation_paths),
         'voxel_size_angstrom': voxel_size_angstrom,
         'box_voxels': box_voxels,
         'n_radial_bins': n_radial_bins,

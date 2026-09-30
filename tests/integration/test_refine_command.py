@@ -60,7 +60,7 @@ def _fixture(tmp_path, mixed=False):
     (tmp_path / 'tomo').mkdir()
     return stage_d
 
-def _invoke(tmp_path, stage_d):
+def _invoke(tmp_path, stage_d, *extra):
     return runner.invoke(stamp_app, [
         '-d', str(tmp_path),
         'refine',
@@ -72,6 +72,7 @@ def _invoke(tmp_path, stage_d):
         '--out-dir', tmp_path,
         '--voxel-size-a', '3.0',
         '--backend', 'mock',
+        *extra,
     ])
 
 # TestRefineCommand: class containing tests for `stamp refine`
@@ -93,3 +94,50 @@ class TestRefineCommand:
         assert result.exit_code != 0
         out = tmp_path / 'stamp' / 'refine'
         assert not (out / 'c00' / 'halfA' / 'particles.star').exists()
+
+    def test_refine_resumes_unfinished_half(self, tmp_path, monkeypatch):
+        from stamp.commands import refine
+        stage_d = _fixture(tmp_path)
+        real = refine._run_half
+        ran: list[str] = []
+        state = {'fail': True}
+
+        # flaky: fail on half B until told otherwise, else refine normally
+        def flaky(adapter, runner, particles, reference, workdir, parameters, backend):
+            if state['fail'] and workdir.name == 'halfB':
+                raise RuntimeError('boom')
+            ran.append(workdir.name)
+            return real(adapter, runner, particles, reference, workdir, parameters, backend)
+
+        monkeypatch.setattr(refine, '_run_half', flaky)
+        assert _invoke(tmp_path, stage_d).exit_code != 0
+        assert ran == ['halfA']
+
+        state['fail'] = False
+        ran.clear()
+        result = _invoke(tmp_path, stage_d)
+        assert result.exit_code == 0, result.output
+        assert ran == ['halfB']
+        assert (tmp_path / 'stamp' / 'refine' / 'c00' / 'final_A.mrc').is_file()
+
+    def test_refine_reuses_finished_halves_until_parameters_change(self, tmp_path, monkeypatch):
+        from stamp.commands import refine
+        stage_d = _fixture(tmp_path)
+        real = refine._run_half
+        ran: list[str] = []
+
+        # counting: record which half ran, then refine normally
+        def counting(adapter, runner, particles, reference, workdir, parameters, backend):
+            ran.append(workdir.name)
+            return real(adapter, runner, particles, reference, workdir, parameters, backend)
+
+        monkeypatch.setattr(refine, '_run_half', counting)
+        assert _invoke(tmp_path, stage_d, '--iterations', '2').exit_code == 0
+        assert ran == ['halfA', 'halfB']
+
+        ran.clear()
+        assert _invoke(tmp_path, stage_d, '--iterations', '2').exit_code == 0
+        assert ran == []  # both halves reused, FSC recomputed
+
+        assert _invoke(tmp_path, stage_d, '--iterations', '3').exit_code == 0
+        assert ran == ['halfA', 'halfB']  # changed iterations wipe the class directory
