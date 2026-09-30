@@ -20,6 +20,7 @@ from stamp.refine.halfset_guard import (
 )
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, ParticleSet
+from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
 from stamp.utils.io import resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
@@ -35,6 +36,14 @@ def _seed_reference(class_averages_dir: Path, class_id: str, half: str) -> Path:
     if not matches:
         raise StampPipelineError(f'No class average for {class_id} half {half} in {class_averages_dir}')
     return matches[0]
+
+# _half_map: a half-map finished by an earlier run, still in its half directory or already moved to the class directory, else None
+def _half_map(tree: dict[str, Path], half: str) -> Path | None:
+    for directory in (tree[half], tree['combined']):
+        candidate = directory / f'final_{half}.mrc'
+        if candidate.is_file():
+            return candidate
+    return None
 
 # _with_inplane: return a copy of the particle with the estimated in-plane roll folded into its orientation
 def _with_inplane(particle, angle_by_particle: dict[str, float]):
@@ -115,13 +124,34 @@ def run_refine(
             half_a, half_b = split_class_by_half(target, assignments, particle_set.particles)
             half_a = [_with_inplane(p, angle_by_particle) for p in half_a]
             half_b = [_with_inplane(p, angle_by_particle) for p in half_b]
-            tree = refine_output_tree(output_dir, target)
             reference_a = _seed_reference(class_averages_dir, target, 'A')
             reference_b = _seed_reference(class_averages_dir, target, 'B')
             assert_distinct_references(reference_a, reference_b)
 
-            final_a = _run_half(adapter, runner, half_a, reference_a, tree['A'], parameters, backend)
-            final_b = _run_half(adapter, runner, half_b, reference_b, tree['B'], parameters, backend)
+            # everything that changes a half-map; mask, threshold and plots only affect the FSC that always reruns, so they can change between runs
+            fingerprint = {
+                'particles': file_signature(particles, content=True),
+                'class_assignments': file_signature(class_assignments, content=True),
+                'references': signatures({'A': reference_a, 'B': reference_b}),
+                'tool': tool,
+                'iterations': iterations,
+                'voxel_size_angstrom': voxel_size_angstrom,
+                'backend': backend,
+            }
+            if sync_checkpoint(output_dir / target, fingerprint):  # the class directory is both output and work dir
+                log.info(f'{target}: found matching partial output, resuming')
+            tree = refine_output_tree(output_dir, target)
+
+            final_a = _half_map(tree, 'A')
+            if final_a is None:
+                final_a = _run_half(adapter, runner, half_a, reference_a, tree['A'], parameters, backend)
+            else:
+                log.info(f'{target}: half A loaded from checkpoint')
+            final_b = _half_map(tree, 'B')
+            if final_b is None:
+                final_b = _run_half(adapter, runner, half_b, reference_b, tree['B'], parameters, backend)
+            else:
+                log.info(f'{target}: half B loaded from checkpoint')
 
             with mrcfile.open(str(final_a), permissive=True) as mrc:
                 map_a = np.asarray(mrc.data, dtype=np.float32)
