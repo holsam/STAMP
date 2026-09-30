@@ -9,7 +9,7 @@ from sklearn.cluster import HDBSCAN, KMeans
 from sklearn.decomposition import PCA
 
 # Import internal STAMP objects
-from stamp.utils.log import log
+from stamp.utils.log import log, log_config
 
 # NOISE_CLUSTER_ID: id for noise cluster
 NOISE_CLUSTER_ID = 'noise'
@@ -60,41 +60,30 @@ def reduce_features(features: np.ndarray, config: ClusteringConfig) -> tuple[np.
     log.progress(f'PCA complete: {pca.explained_variance_ratio_.sum():.1%} variance explained')
     return embedding, pca.explained_variance_ratio_
 
+
 # reduce_and_cluster: PCA followed by HDBSCAN or KMeans
 def reduce_and_cluster(features: np.ndarray, config: ClusteringConfig) -> ClusteringResult:
-    if features.shape[0] == 0:
-        raise ValueError('cannot cluster an empty feature matrix')
-    n_components = min(config.n_components, features.shape[0] - 1, features.shape[1])
-    if n_components < 2:
-        raise ValueError(f'Too few particles ({features.shape[0]}) to run PCA (at least 2 needed)')
-
-    pca = PCA(n_components=n_components, random_state=config.random_state)
-    embedding = pca.fit_transform(features)
-    log.debug(f'PCA: {n_components} components, {pca.explained_variance_ratio_[:n_components].sum():.1%} variance explained')
+    embedding, explained_variance_ratio = reduce_features(features, config)
+    log.progress(f'Starting {config.method} clustering')
+    log_config(config.method, config)
     labels, centroids = _cluster_embedding(embedding, config)
-    log.debug(f'{config.method}: {len(set(labels))} cluster(s) found')
-    return ClusteringResult(
-        labels=labels,
-        embedding=embedding,
-        explained_variance_ratio=pca.explained_variance_ratio_,
-        centroids=centroids,
-    )
+    log.progress(f'Clustering complete: {len(set(labels) - {-1})} cluster(s), {int((labels == -1).sum())} noise')
+    return ClusteringResult(labels=labels, embedding=embedding, explained_variance_ratio=explained_variance_ratio, centroids=centroids)
 
 # reduce_and_cluster_shared: one PCA basis fitted on every particle, each index group clustered in that basis
 def reduce_and_cluster_shared(features: np.ndarray, groups: dict[str, np.ndarray], config: ClusteringConfig) -> dict[str, ClusteringResult]:
-    n_components = min(config.n_components, features.shape[0] - 1, features.shape[1])
-    if n_components < 1:
-        raise ValueError(f'too few particles ({features.shape[0]}) to run PCA (at least 2 needed)')
-    pca = PCA(n_components=n_components, random_state=config.random_state)
-    embedding_all = pca.fit_transform(features)
+    embedding_all, explained_variance_ratio = reduce_features(features, config)
     results: dict[str, ClusteringResult] = {}
     for name, indices in groups.items():
+        log.progress(f'Starting {config.method} clustering for half {name}')
+        log_config(config.method, config)
         embedding = embedding_all[indices]
         labels, centroids = _cluster_embedding(embedding, config)
+        log.progress(f'Half {name} clustering complete: {len(set(labels) - {-1})} cluster(s), {int((labels == -1).sum())} noise')
         results[name] = ClusteringResult(
             labels=labels,
             embedding=embedding,
-            explained_variance_ratio=pca.explained_variance_ratio_,
+            explained_variance_ratio=explained_variance_ratio,
             centroids=centroids,
         )
     return results

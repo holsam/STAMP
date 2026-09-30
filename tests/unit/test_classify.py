@@ -14,6 +14,7 @@ from stamp.classify.cluster import (
     label_to_cluster_id,
     match_clusters_across_halves,
     reduce_and_cluster,
+    reduce_features,
     reduce_and_cluster_shared,
 )
 from stamp.classify.extract import (
@@ -357,17 +358,14 @@ class TestCluster:
     def test_pca_components_capped_by_sample_count(self) -> None:
         '''N_components is capped at what the data supports.'''
         features = np.random.default_rng(0).normal(size=(5, 100))
-        result = reduce_and_cluster(
-            features, ClusteringConfig(method='kmeans', n_components=50, n_clusters=2)
-        )
-        assert result.embedding.shape[1] <= 4
+        embedding, explained = reduce_features(features, ClusteringConfig(n_components=50))
+        assert embedding.shape[1] <= 4
+        assert explained.shape == (embedding.shape[1],)
 
     def test_too_few_particles_raises(self) -> None:
         '''A single particle raises a clear error.'''
         with pytest.raises(ValueError, match='Too few particles'):
-            reduce_and_cluster(
-                np.zeros((1, 10)), ClusteringConfig(method='kmeans', n_clusters=1)
-            )
+            reduce_features(np.zeros((1, 10)), ClusteringConfig())
 
     def test_hdbscan_below_min_cluster_size_raises_clearly(self) -> None:
         '''Too few particles for min_cluster_size raises.'''
