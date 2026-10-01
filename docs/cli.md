@@ -74,6 +74,8 @@ Argument/Option | Default | Use
 `--max-beam-angle-deviation` | `None` | Drop particles whose normal deviates from the beam-orthogonal plane by more than this many degrees
 `--vesicle-labels-mrc` | `None` | Path to an MRC file produced by EValuator's `label` command, or a directory to be matched by filename stem
 `--normalise-per-vesicle` | `False` | Normalise `stamp-native` scores per vesicle instead of per tomogram
+`-n, --n-processes` | `1` | Processes to use for the `stamp-native` picker (1 = sequential)
+`--keep-raw` | `False` | Keep the raw intermediate output instead of archiving it to `raw.tar.gz`
 
 <br>
 
@@ -92,20 +94,22 @@ Option | Default | Use
 `-s, --seg-dir` | *n/a (required unless `--method synthetic-noise`)* | Directory containing segmented MRC files
 `-r, --raw-dir` | *n/a (required unless `--method synthetic-noise`)* | Directory of raw tomogram MRCs
 `--picker-params` | `'{}'` | JSON of native-picker parameters (must match the values used for `stamp pick` so decoys are drawn from the same candidate pool)
-`--n-decoys-per-tomogram` | `50` | Number of decoy positions to pick per tomogram
-`--min-distance-from-real-a` | `100.0` | Minimum distance from a real pick in Å for `--method rejected-surface`
+`--n-decoys-per-tomogram` | `None` *(adaptive: matches the real pick count per tomogram)* | Number of decoy positions to pick per tomogram (required for `--method synthetic-noise`)
+`--min-distance-from-real-a` | `100.0` | Minimum distance in Å from a real pick for `--method rejected-surface`, or from the membrane surface for `--method shifted`
 `--min-pick-distance-a` | `60.0` | Minimum distance from a real pick in Å for `--method shifted`
 `--min-shift-a` | `200.0` | Minimum displacement in Å for `--method shifted`
 `--max-shift-a` | `600.0` | Maximum displacement in Å for `--method shifted`
 `--n-synthetic-tomograms` | `3` | Number of volumes to produce for `--method synthetic-noise`
 `--synthetic-shape` | `'200,200,200'` | Volume shape (in `z,y,x`) to use for `--method synthetic-noise`
 `--seed` | `0` | Seed to use for sampling and half-set assignment
-`-backend` | `local` | Backend to use for picking (`local` or `mock`)
+`--backend` | `local` | Backend to use for picking (`local` or `mock`)
 `--plots/--no-plots` | `--plots` | Write decoy position plots
 `--pick-plot-style` | `segmented` | Style of decoy position plots (`segmented` or `none`)
 `--plot-format` | `tiff` | Decoy plot file format (`png` or `jpg` or `tiff` or `svg`)
 `--pick-zstack-movie/--no-pick-zstack-movie` | `--pick-zstack-movie` | Write a per-tomogram movie through Z with picks highlighted
 `--pick-plot-3d/--no-pick-plot-3d` | `--no-pick-plot-3d` | Write a static 3D pick visualisation per tomogram
+`-n, --n-processes` | `1` | Processes to use for per-tomogram decoy generation (1 = sequential)
+`--keep-raw` | `False` | Keep the raw intermediate output instead of archiving it to `raw.tar.gz`
 
 ### `stamp decoy` methods
 `stamp decoy` provides three methods for generating decoy picks:
@@ -147,6 +151,8 @@ Option | Default | Use
 `--n-azimuthal-samples` | `64` | Number of azimuthal sampling points (must be >= `2*(modes+1)`)
 `--plots/--no-plots` | `--plots` | Write embedding and class-average plots
 `--plot-format` | `tiff` | Embedding and class average plot file format (`png` or `jpg` or `tiff` or `svg`)
+`-n, --n-processes` | `1` | Processes to use for per-cluster in-plane alignment, extraction and feature building (1 = sequential)
+`--keep-raw` | `False` | Keep the raw intermediate output instead of archiving it to `raw.tar.gz`
 
 
 <br>
@@ -169,6 +175,7 @@ Option | Default | Use
 `--fetch-missing` | `False` | Fetch model from AlphaFold when a candidate has no local `structure_path`
 `--plots/--no-plots` | `--plots` | Write fit-score heatmap and decoy-control histogram plots
 `--plot-format` | `tiff` | Fit-score heatmap and decoy-control histogram plot file format (`png` or `jpg` or `tiff` or `svg`)
+`-n, --n-processes` | `1` | Processes to use for candidate fitting (1 = sequential)
 
 <br>
 
@@ -191,7 +198,7 @@ Option | Default | Use
 `--mask` | `None` | Path to MRC file to use as mask
 `--iterations` | `5` | Number of refinement iterations to use
 `--backend` | `local` | Backend to use for refinement (`local` or `mock`)
-`--combined-halfset` | `False` | Use a single combined refinement step with an internal split, instead of two independent trees
+`--threshold` | `0.143` | FSC threshold used to read the resolution
 `--plots/--no-plots` | `--plots` | Write FSC curve plots
 `--plot-format` | `tiff` | FSC curve plot file format  (`png` or `jpg` or `tiff` or `svg`)
 
