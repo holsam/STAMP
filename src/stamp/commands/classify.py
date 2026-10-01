@@ -3,7 +3,7 @@ STAMP: unsupervised classification logic
 '''
 
 # Import external dependencies
-import json, matplotlib.pyplot as plt, numpy as np
+import json, os, matplotlib.pyplot as plt, numpy as np
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -17,7 +17,7 @@ from stamp.classify.cluster import (
     reduce_and_cluster,
     reduce_and_cluster_shared,
 )
-from stamp.utils.checkpoint import file_signature, sync_checkpoint
+from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
@@ -84,8 +84,8 @@ def run_classify(
     # everything that changes results; n_workers, plots and keep_raw are left out so a run can resume with different resources
     fingerprint = {
         'particles': file_signature(particles, content=True),
-        'raw': {stem: file_signature(Path(path)) for stem, path in sorted(tomogram_paths.items())},
-        'segmentation': {stem: file_signature(Path(path)) for stem, path in sorted(segmentation_paths.items())},
+        'raw': signatures(tomogram_paths),
+        'segmentation': signatures(segmentation_paths),
         'voxel_size_angstrom': voxel_size_angstrom,
         'box_voxels': box_voxels,
         'n_radial_bins': n_radial_bins,
@@ -125,7 +125,7 @@ def run_classify(
         n_workers=n_workers,
         cache_dir=output_dir / 'raw' / 'features',
     )
-    log.debug(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
+    log.progress(f'Feature matrix complete: {features.shape[0]} particles x {features.shape[1]} features (modes 0-{azimuthal_modes})')
 
     degenerate = ~features.any(axis=1)
     if degenerate.any():
@@ -145,6 +145,9 @@ def run_classify(
         random_state=random_state,
     )
     log_config('classify.clustering', config)
+    
+    # set environment variable NUMBA_NUM_THREADS so fast_hdbscan doesn't try to use all CPUs on compute clusters
+    os.environ['NUMBA_NUM_THREADS'] = str(n_workers)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 

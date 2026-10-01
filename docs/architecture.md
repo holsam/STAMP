@@ -50,6 +50,22 @@ commands/<stage>.py   orchestration: selects adapter + backend, drives the stage
 
 <br>
 
+## Checkpointing
+
+`stamp.utils.checkpoint` provides shared checkpointing/resume utilities: `sync_checkpoint(work_dir, fingerprint)` keeps a work directory when its stored `checkpoint.json` matches the current fingerprint (normalised through JSON) and wipes it otherwise; `signatures` and `directory_signatures` fingerprint input files by size and modification time; `atomic_save_npz` and `atomic_write_json` write each finished unit so a partial file never looks complete.
+
+Command | Work directory | Unit checkpointed
+-- | -- | --
+`pick` | `raw/<picker>/` | tomogram picks (`<id>.json`)
+`decoy` | `raw/<method>/` | rejected-surface: surface scores (`scores/<id>.npz`); shifted: surfaces (`surfaces/<id>.npz`); synthetic-noise: volumes and picks
+`classify` | `raw/` | subvolumes, per-tomogram features, per-cluster alignment angles
+`identify` | `raw/{real,decoy}/` | one fit score per (class, candidate)
+`refine` | `<out>/<class>/` | finished half-maps
+
+Random sampling steps (decoy placement) are never checkpointed, only the deterministic work before them, so a resumed run is identical to an uninterrupted one for a given seed.
+
+<br>
+
 ## Adapters & Runners
 STAMP separates what a tool is from how to run it, as a `ToolAdapter` and `Runner` respectively:
 - `ToolAdapter`: builds a `ToolCommand` from `AdapterInputs` and parses a `RunResult` into `AdapterOutput`.

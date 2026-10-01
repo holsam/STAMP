@@ -21,6 +21,7 @@ from stamp.picking.vesicles import load_vesicle_labels, summarise_vesicles, vesi
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
+from stamp.utils.checkpoint import signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import archive_and_remove_directory, load_cached_picks, load_tomogram_manifests, write_sidecar
 from stamp.utils.log import log
@@ -218,6 +219,20 @@ def run_pick(
     vesicle_labels_mrc_by_tomogram = _resolve_vesicle_labels(vesicle_labels_mrc, manifests)
     if normalise_per_vesicle and not vesicle_labels_mrc_by_tomogram:
         raise StampPipelineError('--normalise-per-vesicle requires --vesicle-labels-mrc to resolve to at least one tomogram')
+
+    # everything that changes raw picks; consensus, seed, beam filter, workers and plots are left out so they can change between runs
+    fingerprint = {
+        'pickers': list(picker_names),
+        'segmentation': signatures({m.tomogram_id: m.segmentation_path for m in manifests}),
+        'raw': signatures({m.tomogram_id: m.raw_tomogram_path for m in manifests}),
+        'vesicle_labels': signatures(vesicle_labels_mrc_by_tomogram),
+        'normalise_per_vesicle': normalise_per_vesicle,
+        'voxel_size_angstrom': resolved_voxel_size_angstrom,
+        'picker_params': extra_params,
+        'backend': backend,
+    }
+    if sync_checkpoint(output_dir / 'raw', fingerprint):
+        log.info('Found matching partial output, resuming')
 
     picks_by_picker: dict[str, list[RawPick]] = {}
     for picker_name in picker_names:

@@ -90,5 +90,9 @@ class NativePickerAdapter:
                 log.error(f'{job.tomogram_id}: {exc}')
             else:
                 raise exc
-        run_parallel(jobs, _pick_one, max_workers=n_workers, label='stamp-native', on_success=_on_success, on_error=_on_error)
+        # a tomogram's cache file is written atomically on completion, so its presence means it is done
+        pending = [job for job in jobs if not (inputs.output_directory / f'{job.tomogram_id}.json').is_file()]
+        if len(pending) < len(jobs):
+            log.info(f'Resuming stamp-native: {len(jobs) - len(pending)} tomogram(s) loaded from checkpoint')
+        run_parallel(pending, _pick_one, max_workers=n_workers, label='stamp-native', on_success=_on_success, on_error=_on_error)
         return load_cached_picks(inputs.output_directory, inputs.tomogram_ids)
