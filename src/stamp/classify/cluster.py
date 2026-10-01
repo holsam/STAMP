@@ -5,7 +5,7 @@ STAMP: dimensionality reduction and clustering of particle features
 # Import external dependencies
 import numpy as np
 from dataclasses import dataclass
-from sklearn.cluster import HDBSCAN, KMeans
+from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
 # Import internal STAMP objects
@@ -40,7 +40,8 @@ def _cluster_embedding(embedding: np.ndarray, config: ClusteringConfig) -> tuple
     if config.method == 'hdbscan':
         if embedding.shape[0] < config.min_cluster_size:
             raise ValueError(f'only {embedding.shape[0]} particles but min_cluster_size is {config.min_cluster_size}')
-        labels = HDBSCAN(min_cluster_size=config.min_cluster_size, copy=True).fit_predict(embedding)
+        from fast_hdbscan import HDBSCAN
+        labels = HDBSCAN(min_cluster_size=config.min_cluster_size, min_samples=max(config.min_cluster_size - 1, 1)).fit_predict(np.asarray(embedding, dtype=np.float64))
     else:
         n_clusters = min(config.n_clusters, embedding.shape[0])
         labels = KMeans(n_clusters=n_clusters, random_state=config.random_state, n_init=10).fit_predict(embedding)
