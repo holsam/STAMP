@@ -3,7 +3,7 @@ STAMP: unsupervised classification logic
 '''
 
 # Import external dependencies
-import json, matplotlib.pyplot as plt, numpy as np
+import json, os, matplotlib.pyplot as plt, numpy as np
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -125,7 +125,7 @@ def run_classify(
         n_workers=n_workers,
         cache_dir=output_dir / 'raw' / 'features',
     )
-    log.debug(f'Feature vector: {features.shape[1]} dimensions (modes 0-{azimuthal_modes})')
+    log.progress(f'Feature matrix complete: {features.shape[0]} particles x {features.shape[1]} features (modes 0-{azimuthal_modes})')
 
     degenerate = ~features.any(axis=1)
     if degenerate.any():
@@ -145,6 +145,9 @@ def run_classify(
         random_state=random_state,
     )
     log_config('classify.clustering', config)
+    
+    # set environment variable NUMBA_NUM_THREADS so fast_hdbscan doesn't try to use all CPUs on compute clusters
+    os.environ['NUMBA_NUM_THREADS'] = str(n_workers)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
