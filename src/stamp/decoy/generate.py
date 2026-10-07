@@ -3,7 +3,7 @@ STAMP: decoy generation
 '''
 
 # Import external dependencies
-import mrcfile, numpy as np
+import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from scipy.spatial import cKDTree
@@ -25,7 +25,7 @@ from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.errors import StampValidationError
-from stamp.utils.io import cache_tomogram_picks, load_cached_picks, read_mrc
+from stamp.utils.io import cache_tomogram_picks, load_cached_picks, new_mrc, read_mrc
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
@@ -354,10 +354,8 @@ def _generate_one_synthetic_noise_tomogram(job: _SyntheticNoiseJob) -> tuple[Tom
     volume = rng.normal(0.0, 1.0, size=job.tomogram_shape).astype(np.float32)
     volume[job.shell > 0] += job.config.density_sign * 2.0
 
-    with mrcfile.new(segmentation_path, overwrite=True) as mrc:
-        mrc.set_data(job.shell)
-    with mrcfile.new(tomogram_path, overwrite=True) as mrc:
-        mrc.set_data(volume)
+    new_mrc(segmentation_path, job.shell)
+    new_mrc(tomogram_path, volume)
 
     shell_voxels = np.argwhere(job.shell > 0)
     chosen = rng.choice(

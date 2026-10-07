@@ -21,7 +21,7 @@ from stamp.identify.panel import Candidate, load_candidate_panel
 from stamp.identify.simulate import simulate_density, to_comparable
 from stamp.utils.checkpoint import atomic_write_json, directory_signatures, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import open_mrc, write_sidecar
+from stamp.utils.io import glob_mrc, open_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.core import PlotFormat, finish, plot_path
@@ -41,7 +41,7 @@ def _classify_was_inplane_aligned(classes: Path) -> bool:
 def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
     grouped: dict[str, list[np.ndarray]] = defaultdict(list)
     voxel_sizes: dict[str, float] = {}
-    for path in sorted(directory.glob('*.mrc')):
+    for path in glob_mrc(directory):
         match = _CLASS_ID.match(path.stem)
         if not match:
             continue

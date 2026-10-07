@@ -241,8 +241,8 @@ def load_tomogram_manifests(
 ) -> list[TomogramManifest]:
     from stamp.utils.errors import StampPipelineError
     from stamp.utils.log import log
-    segmentation_paths = sorted(segmentation_dir.glob('*.mrc'))
-    raw_paths = sorted(raw_tomogram_dir.glob('*.mrc'))
+    segmentation_paths = glob_mrc(segmentation_dir)
+    raw_paths = glob_mrc(raw_tomogram_dir)
     matched, unmatched = match_by_stem(segmentation_paths, raw_paths)
     for segmentation_path in unmatched:
         log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')

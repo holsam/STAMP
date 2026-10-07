@@ -23,7 +23,7 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import archive_and_remove_directory, load_cached_picks, load_tomogram_manifests, read_mrc, write_sidecar
+from stamp.utils.io import archive_and_remove_directory, glob_mrc, load_cached_picks, load_tomogram_manifests, read_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.picks import plot_positions
@@ -109,7 +109,7 @@ def _resolve_vesicle_labels(vesicle_labels_mrc: Path | None, manifests: list[Tom
             log.warning('--vesicle-labels-mrc is a single file but multiple tomograms are being picked; ignoring --vesicle-labels-mrc')
         return {}
 
-    by_stem = {path.stem: path for path in sorted(vesicle_labels_mrc.glob('*.mrc'))}
+    by_stem = {path.stem: path for path in glob_mrc(vesicle_labels_mrc)}
     resolved: dict[str, Path] = {}
     for manifest in manifests:
         match = by_stem.get(f'{manifest.tomogram_id}_labelled') or next(

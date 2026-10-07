@@ -16,7 +16,7 @@ from stamp.commands.pick import REAL_ADAPTERS, run_pick
 from stamp.commands.refine import _ADAPTERS as REFINE_ADAPTERS, run_refine
 from stamp.run.state import STAGE_ORDER, is_complete, mark_complete, stage_dir, stages_to_run
 from stamp.schemas.config import RunConfig
-from stamp.utils.io import open_mrc
+from stamp.utils.io import glob_mrc, open_mrc
 from stamp.utils.log import log
 
 # RunOutcome: completed run information reported
@@ -52,7 +52,7 @@ def _real_pick(config: RunConfig, output_dir: Path) -> Path:
 def _synthetic_shape(config: RunConfig) -> tuple[int, int, int]:
     if config.decoy.synthetic_shape_voxels is not None:
         return config.decoy.synthetic_shape_voxels
-    first = next(iter(sorted(config.run.raw_tomogram_dir.glob('*.mrc'))), None)
+    first = next(iter(glob_mrc(config.run.raw_tomogram_dir)), None)
     if first is None:
         log.debug('No real tomograms found to infer synthetic shape from, defaulting to (200, 200, 200)')
         return (200, 200, 200)

@@ -27,7 +27,7 @@ from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import archive_and_remove_directory, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import archive_and_remove_directory, glob_mrc, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log, log_config
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
@@ -59,7 +59,7 @@ def run_classify(
     keep_raw: bool = False,
 ) -> None:
     if voxel_size_angstrom is None:
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(raw_tomogram_dir.glob('*.mrc')))
+        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(raw_tomogram_dir))
         if voxel_size_angstrom is None:
             raise StampPipelineError('Voxel size not given and not found in any MRC header in --raw-dir.')
         log.debug(f'Resolved voxel size from MRC headers: {voxel_size_angstrom} Å')
@@ -68,12 +68,12 @@ def run_classify(
     is_decoy = is_decoy_particle_set(particle_set)
     log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles')
     tomogram_ids = sorted({particle.tomogram_id for particle in particle_set.particles})
-    matched, unmatched = match_by_stem([Path(f'{tomogram_id}.mrc') for tomogram_id in tomogram_ids], sorted(raw_tomogram_dir.glob('*.mrc')))
+    matched, unmatched = match_by_stem([Path(f'{tomogram_id}.mrc') for tomogram_id in tomogram_ids], glob_mrc(raw_tomogram_dir))
     for stem_path in unmatched:
         log.warning(f'No raw tomogram matching {stem_path.stem}, its particles will be skipped')
     tomogram_paths = {stem_path.stem: raw_path for stem_path, raw_path in matched.items()}
     segmentation_paths = (
-        {path.stem: str(path) for path in sorted(segmentation_dir.glob('*.mrc'))} if segmentation_dir is not None else {}
+        {path.stem: str(path) for path in glob_mrc(segmentation_dir)} if segmentation_dir is not None else {}
     )
     box_voxels = int(round(box_angstrom / voxel_size_angstrom))
     if box_voxels % 2 == 0:
