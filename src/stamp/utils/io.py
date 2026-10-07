@@ -3,7 +3,9 @@ STAMP: input/output utilities
 '''
 
 # Import external dependencies
-import hashlib, json, mrcfile, shutil, subprocess, tarfile, tomli_w, tomllib
+import hashlib, json, mrcfile, numpy as np, shutil, subprocess, tarfile, tomli_w, tomllib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -30,6 +32,58 @@ def _is_writable(directory: Path):
     from os import access, W_OK
     directory = _resolve_abspath(directory)
     return access(directory, W_OK)
+
+# _mrc_error: translate an OSError/ValueError from mrcfile into a StampValidationError naming the path
+def _mrc_error(action: str, path: Path, exc: Exception) -> Exception:
+    from stamp.utils.errors import StampValidationError
+    if isinstance(exc, PermissionError):
+        return StampValidationError(f'No permission to {action} MRC file {str(path)!r}')
+    if isinstance(exc, FileNotFoundError):
+        return StampValidationError(f'MRC file not found: {str(path)!r}')
+    return StampValidationError(f'Could not {action} MRC file {str(path)!r}: {exc}')
+
+# open_mrc: context manager opening an MRC with IO failures raised as StampValidationError
+@contextmanager
+def open_mrc(path: Path | str, *, mmap: bool = False, header_only: bool = False) -> Iterator[Any]:
+    path = Path(path)
+    # only wrap open so any errors raised in caller's with body aren't shown as IO errors instead
+    try:
+        if mmap:
+            mrc = mrcfile.mmap(str(path), mode='r', permissive=True)
+        else:
+            mrc = mrcfile.open(str(path), mode='r', permissive=True, header_only=header_only)
+    except (OSError, ValueError) as exc:
+        raise _mrc_error('read', path, exc) from exc
+    with mrc:
+        yield mrc
+
+# read_mrc: read an MRC file volume
+def read_mrc(path: Path | str, *, dtype: type | None = None) -> np.ndarray:
+    with open_mrc(path) as mrc:
+        data = np.asarray(mrc.data)
+    return data if dtype is None else data.astype(dtype, copy=False)
+
+# new_mrc: write an array (and optional voxel size) to a new MRC, raising IO failures as StampValidationError
+def new_mrc(path: Path | str, data: np.ndarray, *, voxel_size: Any = None) -> None:
+    path = Path(path)
+    try:
+        with mrcfile.new(str(path), overwrite=True) as mrc:
+            mrc.set_data(data)
+            if voxel_size is not None:
+                mrc.voxel_size = voxel_size
+    except (OSError, ValueError) as exc:
+        raise _mrc_error('write', path, exc) from exc
+
+# glob_mrc: sorted *.mrc paths in a directory, raising StampConfigError if it is missing or unreadable
+def glob_mrc(directory: Path) -> list[Path]:
+    from os import access, R_OK, X_OK
+    from stamp.utils.errors import StampConfigError
+    if not directory.is_dir():
+        raise StampConfigError(f'Not a directory: {str(directory)!r}')
+    # X_OK is needed to list and open files inside a directory
+    if not access(directory, R_OK | X_OK):
+        raise StampConfigError(f'No permission to read directory {str(directory)!r}')
+    return sorted(directory.glob('*.mrc'))
 
 # toml_none_to_empty: map any None instances to an empty string for TOML serialisation
 def toml_none_to_empty(obj):

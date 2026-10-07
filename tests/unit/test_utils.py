@@ -3,7 +3,7 @@ STAMP: unit tests for utilities
 '''
 
 # Import external dependencies
-import mrcfile, numpy as np, pytest, subprocess, tomllib
+import mrcfile, numpy as np, os, pytest, subprocess, tomllib
 from pathlib import Path
 
 # Import internal functions and schema
@@ -11,7 +11,7 @@ from stamp.utils.halfset import assign_half_sets, split_by_half_set, validate_si
 from stamp.schemas.particles import HalfSet, Particle
 from stamp.utils import io as io_utils
 from stamp.schemas.provenance import ProvenanceSidecar
-from stamp.utils.errors import StampPipelineError
+from stamp.utils.errors import StampConfigError, StampPipelineError, StampValidationError
 from stamp.utils.log import configure_logging
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
@@ -272,6 +272,76 @@ class TestIoResolveDirectoryVoxelSizeAngstrom:
             mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
         assert io_utils.resolve_directory_voxel_size_angstrom([path]) is None
 
+class TestIoMrc:
+    def test_round_trip(self, tmp_path: Path) -> None:
+        path = tmp_path / 'a.mrc'
+        data = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+        io_utils.new_mrc(path, data, voxel_size=3.0)
+        assert np.array_equal(io_utils.read_mrc(path), data)
+        with io_utils.open_mrc(path, header_only=True) as mrc:
+            assert float(mrc.voxel_size.x) == 3.0
+        with io_utils.open_mrc(path, mmap=True) as mrc:
+            assert mrc.data.shape == (2, 3, 4)
+
+    def test_read_dtype(self, tmp_path: Path) -> None:
+        path = tmp_path / 'a.mrc'
+        io_utils.new_mrc(path, np.ones((2, 2, 2), dtype=np.float32))
+        assert io_utils.read_mrc(path, dtype=np.float32).dtype == np.float32
+        assert io_utils.read_mrc(path, dtype=np.float64).dtype == np.float64
+
+    def test_missing_file(self, tmp_path: Path) -> None:
+        with pytest.raises(StampValidationError, match='not found'):
+            io_utils.read_mrc(tmp_path / 'nope.mrc')
+
+    def test_corrupt_file(self, tmp_path: Path) -> None:
+        path = tmp_path / 'bad.mrc'
+        path.write_bytes(b'not an mrc')
+        with pytest.raises(StampValidationError):
+            io_utils.read_mrc(path)
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason='root ignores file modes')
+    def test_unreadable_file(self, tmp_path: Path) -> None:
+        path = tmp_path / 'a.mrc'
+        io_utils.new_mrc(path, np.ones((2, 2, 2), dtype=np.float32))
+        path.chmod(0o000)
+        try:
+            with pytest.raises(StampValidationError, match='No permission'):
+                io_utils.read_mrc(path)
+        finally:
+            path.chmod(0o600)
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason='root ignores file modes')
+    def test_unwritable_directory(self, tmp_path: Path) -> None:
+        tmp_path.chmod(0o500)
+        try:
+            with pytest.raises(StampValidationError, match='No permission'):
+                io_utils.new_mrc(tmp_path / 'a.mrc', np.ones((2, 2, 2), dtype=np.float32))
+        finally:
+            tmp_path.chmod(0o700)
+
+    def test_body_error_not_remapped(self, tmp_path: Path) -> None:
+        path = tmp_path / 'a.mrc'
+        io_utils.new_mrc(path, np.ones((2, 2, 2), dtype=np.float32))
+        with pytest.raises(OSError, match='boom'):
+            with io_utils.open_mrc(path):
+                raise OSError('boom')
+
+    def test_glob_mrc(self, tmp_path: Path) -> None:
+        (tmp_path / 'b.mrc').touch()
+        (tmp_path / 'a.mrc').touch()
+        assert [p.name for p in io_utils.glob_mrc(tmp_path)] == ['a.mrc', 'b.mrc']
+        with pytest.raises(StampConfigError, match='Not a directory'):
+            io_utils.glob_mrc(tmp_path / 'missing')
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason='root ignores file modes')
+    def test_glob_mrc_unreadable_directory(self, tmp_path: Path) -> None:
+        tmp_path.chmod(0o000)
+        try:
+            with pytest.raises(StampConfigError, match='No permission'):
+                io_utils.glob_mrc(tmp_path)
+        finally:
+            tmp_path.chmod(0o700)
+
 class TestLog:
     def test_configure_logging_writes_to_the_given_directory(self, tmp_path) -> None:
         '''Logging is configured to the specified directory.'''
@@ -376,3 +446,5 @@ class TestPickCache:
         (tmp_path / 'cache' / 't1.json').write_text('[{"tomogram_id": ')  # truncated
         loaded = load_cached_picks(tmp_path / 'cache', ['t0', 't1'])
         assert [p.tomogram_id for p in loaded] == ['t0']
+
+
