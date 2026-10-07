@@ -263,7 +263,7 @@ def load_tomogram_manifests(
 # read_voxel_size_angstrom: voxel size from an MRC header, Angstrom, or None if absent/zero/non-cubic
 def read_voxel_size_angstrom(path: Path) -> float | None:
     from stamp.utils.log import log
-    with mrcfile.open(str(path), header_only=True, permissive=True) as mrc:
+    with open_mrc(path, header_only=True) as mrc:
         voxel_size = mrc.voxel_size
     x, y, z = float(voxel_size.x), float(voxel_size.y), float(voxel_size.z)
     if x <= 0 or y <= 0 or z <= 0:

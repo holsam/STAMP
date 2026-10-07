@@ -12,6 +12,7 @@ from scipy.ndimage import map_coordinates
 from stamp.schemas.particles import Particle
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampValidationError
+from stamp.utils.io import open_mrc
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 
@@ -133,7 +134,7 @@ def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], lis
     kept: list[Particle] = []
     skipped: list[Particle] = []
     subvolumes: list[np.ndarray] = []
-    with mrcfile.mmap(job.tomogram_path, permissive=True) as mrc:
+    with open_mrc(job.tomogram_path, mmap=True) as mrc:
         tomogram = mrc.data
         if tomogram.dtype != np.float32:
             tomogram = tomogram.astype(np.float32)

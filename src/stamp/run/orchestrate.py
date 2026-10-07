@@ -3,7 +3,7 @@ STAMP: in-process chaining of the real and decoy tracks for `stamp run`
 '''
 
 # Import external dependencies
-import json, mrcfile, tomllib
+import json, tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,6 +16,7 @@ from stamp.commands.pick import REAL_ADAPTERS, run_pick
 from stamp.commands.refine import _ADAPTERS as REFINE_ADAPTERS, run_refine
 from stamp.run.state import STAGE_ORDER, is_complete, mark_complete, stage_dir, stages_to_run
 from stamp.schemas.config import RunConfig
+from stamp.utils.io import open_mrc
 from stamp.utils.log import log
 
 # RunOutcome: completed run information reported
@@ -55,7 +56,7 @@ def _synthetic_shape(config: RunConfig) -> tuple[int, int, int]:
     if first is None:
         log.debug('No real tomograms found to infer synthetic shape from, defaulting to (200, 200, 200)')
         return (200, 200, 200)
-    with mrcfile.open(str(first), permissive=True, header_only=True) as mrc:
+    with open_mrc(first, header_only=True) as mrc:
         shape = (int(mrc.header.nz), int(mrc.header.ny), int(mrc.header.nx))
     log.debug(f'Inferred synthetic shape {shape} from {first}')
     return shape
