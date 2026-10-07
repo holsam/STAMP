@@ -12,7 +12,7 @@ from scipy.ndimage import map_coordinates
 from stamp.schemas.particles import Particle
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampValidationError
-from stamp.utils.io import open_mrc
+from stamp.utils.io import open_mrc, read_mrc
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 
@@ -82,11 +82,10 @@ def box_fits_inside(
 
 # _subtract_one_tomogram: worker entry point to replace membrane voxels with the background median and write a float32 mrc
 def _subtract_one_tomogram(job: _SubtractTomogramJob) -> Path:
-    with mrcfile.open(job.tomogram_path, permissive=True) as mrc:
+    with open_mrc(job.tomogram_path) as mrc:
         tomogram = np.array(mrc.data, dtype=np.float32)  # writable copy
         voxel_size = mrc.voxel_size.copy()
-    with mrcfile.open(job.segmentation_path, permissive=True) as mrc:
-        membrane = np.asarray(mrc.data) > 0
+    membrane = read_mrc(job.segmentation_path) > 0
     if membrane.shape != tomogram.shape:
         raise StampValidationError(f'segmentation shape {membrane.shape} does not match tomogram shape {tomogram.shape} for {job.tomogram_id!r}; they must be the same volume at the same binning')
     # replace membrane voxels with the background median so the class average is not dominated by the membrane slab

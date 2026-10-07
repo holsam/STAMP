@@ -3,7 +3,7 @@ STAMP: consensus picking logic
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np
+import json, numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from skimage import measure
@@ -23,7 +23,7 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import archive_and_remove_directory, load_cached_picks, load_tomogram_manifests, write_sidecar
+from stamp.utils.io import archive_and_remove_directory, load_cached_picks, load_tomogram_manifests, read_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.picks import plot_positions
@@ -132,8 +132,7 @@ class _VesicleSummaryJob:
 
 # _summarise_one_tomogram: multiprocessing worker entry point
 def _summarise_one_tomogram(job: _VesicleSummaryJob) -> list[dict]:
-    with mrcfile.open(str(job.segmentation_path), permissive=True) as mrc:
-        segmentation = np.asarray(mrc.data)
+    segmentation = read_mrc(job.segmentation_path)
     labels = load_vesicle_labels(job.labels_mrc, segmentation.shape)
     vertices, _normals = extract_surface(segmentation)
     _v, faces, _n2, _val = measure.marching_cubes(segmentation.astype(np.float32), level=0.5)

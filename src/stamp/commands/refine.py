@@ -22,7 +22,7 @@ from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, ParticleSet
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
-from stamp.utils.io import resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import read_mrc, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import finish, plot_path
 from stamp.utils.plotting.refine import fsc_curve
@@ -70,8 +70,7 @@ def _run_half(adapter, runner, particles, reference, workdir, parameters, backen
     if backend == 'mock':
         log.debug(f'{workdir.name}: mock backend, synthesising final map from the seed reference')
         # mock backend runs nothing; synthesise a deterministic map from the seed
-        with mrcfile.open(str(reference), permissive=True) as mrc:
-            seed = np.asarray(mrc.data, dtype=np.float32)
+        seed = read_mrc(reference, dtype=np.float32)
         with mrcfile.new(final_map, overwrite=True) as mrc:
             mrc.set_data(seed)
     else:
@@ -153,14 +152,11 @@ def run_refine(
             else:
                 log.info(f'{target}: half B loaded from checkpoint')
 
-            with mrcfile.open(str(final_a), permissive=True) as mrc:
-                map_a = np.asarray(mrc.data, dtype=np.float32)
-            with mrcfile.open(str(final_b), permissive=True) as mrc:
-                map_b = np.asarray(mrc.data, dtype=np.float32)
+            map_a = read_mrc(final_a, dtype=np.float32)
+            map_b = read_mrc(final_b, dtype=np.float32)
             user_mask = None
             if mask is not None:
-                with mrcfile.open(str(mask), permissive=True) as mrc:
-                    user_mask = np.asarray(mrc.data, dtype=np.float32)
+                user_mask = read_mrc(mask, dtype=np.float32)
             log.progress(f'{target}: computing FSC')
             fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape), threshold=threshold)
         except (StampValidationError, StampAdapterError) as exc:

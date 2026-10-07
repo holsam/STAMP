@@ -3,7 +3,7 @@ STAMP: pick/decoy position plots — segmentation/raw overlay, Z-stack QC movie,
 '''
 
 # Import external dependencies
-import matplotlib.pyplot as plt, mrcfile, numpy as np
+import matplotlib.pyplot as plt, numpy as np
 from dataclasses import dataclass
 from matplotlib.animation import FFMpegWriter, FuncAnimation, PillowWriter
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -13,6 +13,7 @@ from typing import Literal
 
 # Import internal STAMP objects
 from stamp.utils.plotting.core import GREEN, GREY, PlotFormat, central_slice, finish, plot_path, show_segmentation
+from stamp.utils.io import read_mrc
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 
@@ -31,8 +32,7 @@ def _ensure_agg_backend() -> None:
 # _render_movie_job: multiprocessing worker entry point
 def _render_movie_job(job: _ZstackJob) -> None:
     _ensure_agg_backend()
-    with mrcfile.open(str(job.volume_path), permissive=True) as mrc:
-        volume = np.asarray(mrc.data)
+    volume = read_mrc(job.volume_path)
     _zstack_movie_for_background(
         job.tomogram_id, job.positions, volume, job.output_dir,
         job.stem_suffix, _RENDER_PLANE_BY_KIND[job.render_kind], job.fps, job.slab_voxels,
@@ -49,8 +49,7 @@ class _SegmentedJob:
 # _render_segmented_job: multiprocessing worker entry point for plot_segmented
 def _render_segmented_job(job: _SegmentedJob) -> None:
     _ensure_agg_backend()
-    with mrcfile.open(str(job.segmentation_path), permissive=True) as mrc:
-        segmentation = central_slice(np.asarray(mrc.data))
+    segmentation = central_slice(read_mrc(job.segmentation_path))
     fig, ax = plt.subplots(figsize=(4.2, 4))
     show_segmentation(ax, segmentation, field_px=segmentation.shape[-1], picks=job.picks)
     ax.set_title(job.tomogram_id, fontsize=9)
@@ -96,8 +95,7 @@ class _RawJob:
 # _render_raw_job: multiprocessing worker entry point for plot_raw
 def _render_raw_job(job: _RawJob) -> None:
     _ensure_agg_backend()
-    with mrcfile.open(str(job.raw_path), permissive=True) as mrc:
-        raw_slice = central_slice(np.asarray(mrc.data))
+    raw_slice = central_slice(read_mrc(job.raw_path))
     fig, ax = plt.subplots(figsize=(4.2, 4))
     ax.imshow(raw_slice, cmap='Greys_r')
     if len(job.picks):
@@ -264,8 +262,7 @@ def _render_3d_job(job: _Scatter3DJob) -> None:
     fig = plt.figure(figsize=(6, 6))
     ax = fig.add_subplot(projection='3d')
     if job.segmentation_path is not None:
-        with mrcfile.open(str(job.segmentation_path), permissive=True) as mrc:
-            segmentation = np.asarray(mrc.data)
+        segmentation = read_mrc(job.segmentation_path)
         # downsample so marching_cubes/rendering stays fast on full-size tomograms
         step = max(1, max(segmentation.shape) // 128)
         membrane = (segmentation[::step, ::step, ::step] == 1).astype(np.float32)

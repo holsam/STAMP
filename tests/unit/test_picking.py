@@ -618,9 +618,9 @@ class TestConsensus:
 # TestVesicle: class containing unit tests for picking/vesicle.py
 class TestVesicle:
     def test_load_vesicle_labels_rejects_shape_mismatch(self, tmp_path: Path) -> None:
-        '''Mismatched shapes raise ValueError rather than silently misattributing'''
+        '''Mismatched shapes raise StampValidationError rather than silently misattributing'''
         _write_mrc(tmp_path / 'labels.mrc', np.zeros((10, 10, 10)))
-        with pytest.raises(ValueError):
+        with pytest.raises(StampValidationError):
             load_vesicle_labels(tmp_path / 'labels.mrc', (20, 20, 20))
 
     def test_load_vesicle_labels_reads_integer_labels(self, tmp_path: Path) -> None:

@@ -25,7 +25,7 @@ from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.errors import StampValidationError
-from stamp.utils.io import cache_tomogram_picks, load_cached_picks
+from stamp.utils.io import cache_tomogram_picks, load_cached_picks, read_mrc
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
@@ -186,8 +186,7 @@ def generate_rejected_surface_decoys(
 
 # _extract_surface_for_manifest: worker entry point, loads segmentation and extracts its surface
 def _extract_surface_for_manifest(manifest: TomogramManifest) -> tuple[tuple[int, ...], np.ndarray, np.ndarray]:
-    with mrcfile.open(str(manifest.segmentation_path), permissive=True) as mrc:
-        segmentation = np.asarray(mrc.data)
+    segmentation = read_mrc(manifest.segmentation_path)
     vertices, normals = extract_surface(segmentation)
     return segmentation.shape, vertices, normals
 
@@ -424,10 +423,8 @@ def generate_synthetic_noise_decoys(
 def _score_surface(
     manifest: TomogramManifest, config: NativePickerConfig
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    with mrcfile.open(str(manifest.segmentation_path), permissive=True) as mrc:
-        segmentation = np.asarray(mrc.data)
-    with mrcfile.open(str(manifest.raw_tomogram_path), permissive=True) as mrc:
-        tomogram = np.asarray(mrc.data)
+    segmentation = read_mrc(manifest.segmentation_path)
+    tomogram = read_mrc(manifest.raw_tomogram_path)
 
     if segmentation.shape != tomogram.shape:
         raise StampValidationError(f'Segmentation and tomogram shapes disagree for {manifest.tomogram_id}')
