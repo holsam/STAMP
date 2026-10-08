@@ -321,6 +321,14 @@ class TestFeatures:
         features = build_feature_matrix(subvols, n_radial_bins=4, max_azimuthal_mode=0)
         assert not features[0].any() and features[1].any()
 
+    def test_degenerate_rows_stay_zero_with_azimuthal_modes(self, tmp_path: Path):
+        '''An empty subvolume is all-zero in every block, including column-standardised modes 1+.'''
+        rng = np.random.default_rng(0)
+        stack = np.concatenate([np.zeros((1, 15, 15, 15)), rng.random((6, 15, 15, 15))])
+        for normalisation in ('none', 'particle', 'tomogram', 'both'):
+            features = build_feature_matrix(_subvols_from_array(tmp_path / normalisation, stack), n_radial_bins=6, max_azimuthal_mode=3, normalisation=normalisation)
+            assert not features[0].any() and features[1:].any(axis=1).all()
+
     def test_feature_checkpoint_skips_recomputation(self, tmp_path: Path, monkeypatch) -> None:
         from stamp.classify import features as features_module
         subvols = _subvols_from_array(tmp_path / 'sv', np.random.default_rng(0).random((6, 11, 11, 11)))
@@ -336,6 +344,41 @@ class TestFeatures:
         # a checkpoint built for different rows is ignored
         with pytest.raises(AssertionError):
             build_feature_matrix(subvols.take([0, 1, 2]), n_radial_bins=4, cache_dir=cache)
+
+    def test_particle_normalisation_removes_amplitude_scale(self, tmp_path: Path) -> None:
+        '''Amplifying one particle's signal disturbs other particles' features if normalisation isn't applied.'''
+        rng = np.random.default_rng(0)
+        base = np.stack([_rotate_in_plane(_c_n_particle(n_fold=4), rng.uniform(0, 360)) + rng.normal(0, 0.05, (25, 25, 25)) for _ in range(8)])
+        loud = base.copy()
+        loud[0] = base[0].mean() + 20.0 * (base[0] - base[0].mean())
+        kwargs = dict(n_radial_bins=8, max_azimuthal_mode=3)
+        shifts = {}
+        for mode in ('none', 'particle'):
+            before = build_feature_matrix(_subvols_from_array(tmp_path / f'{mode}_a', base), normalisation=mode, **kwargs)
+            after = build_feature_matrix(_subvols_from_array(tmp_path / f'{mode}_b', loud), normalisation=mode, **kwargs)
+            shifts[mode] = np.abs(before[1:] - after[1:]).mean()  # the untouched particles
+        assert shifts['particle'] < 0.2 * shifts['none']
+
+    def test_tomogram_normalisation_removes_tomogram_offsets(self, tmp_path: Path) -> None:
+        '''Two tomograms with different mode 1+ levels are centred on each other post-tomogram standardisation.'''
+        rng = np.random.default_rng(0)
+        n, box = 60, 15  # n is at least the per-tomogram minimum, so each tomogram is standardised on its own
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        np.save(tmp_path / 'quiet.npy', rng.normal(0, 0.05, (n, box, box, box)).astype(np.float32))
+        np.save(tmp_path / 'loud.npy', rng.normal(0, 0.5, (n, box, box, box)).astype(np.float32))
+        subvols = Subvolumes(tmp_path, [('quiet', i) for i in range(n)] + [('loud', i) for i in range(n)], box)
+        kwargs = dict(n_radial_bins=6, max_azimuthal_mode=2, min_radius_fraction=0.0)
+        mode0_width = 6 * box
+        population = build_feature_matrix(subvols, normalisation='none', **kwargs)[:, mode0_width:]
+        per_tomogram = build_feature_matrix(subvols, normalisation='tomogram', **kwargs)[:, mode0_width:]
+        gap_population = np.abs(population[:n].mean() - population[n:].mean())
+        gap_tomogram = np.abs(per_tomogram[:n].mean() - per_tomogram[n:].mean())
+        assert gap_tomogram < 0.1 * gap_population
+
+    def test_unknown_normalisation_is_rejected(self, tmp_path: Path) -> None:
+        subvols = _subvols_from_array(tmp_path, np.random.default_rng(0).random((4, 11, 11, 11)))
+        with pytest.raises(ValueError, match='normalisation'):
+            build_feature_matrix(subvols, n_radial_bins=4, normalisation='bogus')
 
 # TestCluster: class containing unit tests for src/stamp/classify/cluster.py
 class TestCluster:

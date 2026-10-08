@@ -16,6 +16,12 @@ from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.log import get_worker_log_config, init_worker_logging, log
 from stamp.utils.parallel import run_parallel_ordered
 
+# FEATURE_NORMALISATIONS: how 1+ modes are made comparable across particles and tomograms
+FEATURE_NORMALISATIONS = ('none', 'particle', 'tomogram', 'both')
+
+# _MIN_TOMOGRAM_PARTICLES: smallest tomogram standardised on its own, smaller ones fall back to population statistics
+_MIN_TOMOGRAM_PARTICLES = 50
+
 # cylindrical_bins: precompute per-voxel radial bin index and validity mask
 def cylindrical_bins(box_voxels: int, n_radial_bins: int) -> tuple[np.ndarray, np.ndarray]:
     half = (box_voxels - 1) / 2.0
@@ -100,12 +106,26 @@ def _standardise_rows(matrix: np.ndarray) -> np.ndarray:
     stds[stds == 0.0] = 1.0
     return (matrix - means) / stds
 
-# _standardise_columns: z-score each column across the particle population
-def _standardise_columns(matrix: np.ndarray) -> np.ndarray:
-    means = matrix.mean(axis=0, keepdims=True)
-    stds = matrix.std(axis=0, keepdims=True)
-    stds[stds == 0.0] = 1.0
-    return (matrix - means) / stds
+# _standardise_columns: z-score each column across the particle population, or within each tomogram of at least _MIN_TOMOGRAM_PARTICLES particles when tomogram_of specified
+def _standardise_columns(matrix: np.ndarray, tomogram_of: np.ndarray | None = None) -> np.ndarray:
+    # _zscore: standardise block using the statistics of reference
+    def _zscore(block: np.ndarray, reference: np.ndarray) -> np.ndarray:
+        stds = reference.std(axis=0, keepdims=True)
+        stds[stds == 0.0] = 1.0
+        return (block - reference.mean(axis=0, keepdims=True)) / stds
+    result = _zscore(matrix, matrix)
+    if tomogram_of is not None:
+        for tomogram in np.unique(tomogram_of):
+            members = tomogram_of == tomogram
+            if members.sum() >= _MIN_TOMOGRAM_PARTICLES:
+                result[members] = _zscore(matrix[members], matrix[members])
+    return result
+
+# _normalise_power: divide a particle's 1+ modes by joint L2 norm (so overall non-axisymmetric amplitude doesn't dominate)
+def _normalise_power(stacked_modes: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(stacked_modes.reshape(stacked_modes.shape[0], -1), axis=1)
+    norms[norms == 0.0] = 1.0
+    return stacked_modes / norms[:, None, None, None]
 
 # _load_cached_magnitudes: one tomogram's cached magnitudes, or None when absent or built for different rows
 def _load_cached_magnitudes(cache_dir: Path | None, tomogram_id: str, rows: list[int]) -> np.ndarray | None:
@@ -130,12 +150,15 @@ def build_feature_matrix(
     *,
     batch_size: int = 512,
     cache_dir: Path | None = None,
+    normalisation: str = 'both',
 ) -> np.ndarray:
     log.debug(f'Building features for {len(subvols)} subvolumes, max_mode={max_azimuthal_mode}')
     if len(subvols) == 0:
         return np.empty((0, 0))
     if not 0.0 <= min_radius_fraction < 1.0:
         raise ValueError('min_radius_fraction must be between [0, 1)')
+    if normalisation not in FEATURE_NORMALISATIONS:
+        raise ValueError(f'normalisation must be one of {FEATURE_NORMALISATIONS}, got {normalisation!r}')
 
     worker = partial(azimuthal_magnitudes, n_radial_bins=n_radial_bins, n_azimuthal_samples=n_azimuthal_samples, max_mode=max_azimuthal_mode)
     magnitudes: list[np.ndarray | None] = [None] * len(subvols)
@@ -186,9 +209,18 @@ def build_feature_matrix(
     # Mode 0: all radial bins, standardised per particle
     blocks = [_standardise_rows(stacked[:, 0].reshape(n_particles, -1))]
 
-    # Modes 1+: outer bins only, standardised per column across particle so weak-but-consistent symmetry signal survives into the PCA
-    for mode in range(1, max_azimuthal_mode + 1):
-        block = stacked[:, mode, first_outer_bin:, :].reshape(n_particles, -1)
-        blocks.append(_standardise_columns(block))
+    # Modes 1+: outer bins only, standardised per column so weak-but-consistent symmetry signal survives into the PCA
+    # 'particle' first divides each particle by its own total 1+ mode power, 'tomogram' standardises columns within each tomogram
+    tomogram_of = np.empty(n_particles, dtype=np.int64)
+    for tomogram_number, local_indices in enumerate(by_tomogram.values()):
+        tomogram_of[local_indices] = tomogram_number
+    outer = stacked[:, 1:, first_outer_bin:, :]
+    if normalisation in ('particle', 'both') and outer.shape[1]:
+        outer = _normalise_power(outer)
+    for mode in range(outer.shape[1]):
+        block = outer[:, mode].reshape(n_particles, -1)
+        blocks.append(_standardise_columns(block, tomogram_of if normalisation in ('tomogram', 'both') else None))
 
-    return np.hstack(blocks)
+    features = np.hstack(blocks)
+    features[~stacked.reshape(n_particles, -1).any(axis=1)] = 0.0  # empty subvolumes stay all-zero (column standardisation gives non-zero rows that aren't recognised as degenerate)
+    return features

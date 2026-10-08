@@ -53,6 +53,7 @@ def run_classify(
     azimuthal_modes = 4,
     min_radius_fraction = 0.25,
     n_azimuthal_samples = 64,
+    feature_normalisation = 'both',
     n_workers: int = 1,
     make_plots: bool = True,
     plot_format: str = 'tiff',
@@ -92,6 +93,7 @@ def run_classify(
         'azimuthal_modes': azimuthal_modes,
         'n_azimuthal_samples': n_azimuthal_samples,
         'min_radius_fraction': min_radius_fraction,
+        'feature_normalisation': feature_normalisation,
         'method': method,
         'min_cluster_size': min_cluster_size,
         'n_clusters': n_clusters,
@@ -124,6 +126,7 @@ def run_classify(
         min_radius_fraction=min_radius_fraction,
         n_workers=n_workers,
         cache_dir=output_dir / 'raw' / 'features',
+        normalisation=feature_normalisation,
     )
     log.progress(f'Feature matrix complete: {features.shape[0]} particles x {features.shape[1]} features (modes 0-{azimuthal_modes})')
 
@@ -199,6 +202,7 @@ def run_classify(
             'azimuthal_modes': azimuthal_modes,
             'n_azimuthal_samples': n_azimuthal_samples,
             'min_radius_fraction': min_radius_fraction,
+            'feature_normalisation': feature_normalisation,
             'n_workers': n_workers,
             'is_decoy': is_decoy,
             'membrane_subtracted': bool(segmentation_paths),
