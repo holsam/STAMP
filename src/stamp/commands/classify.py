@@ -280,9 +280,8 @@ def _resolve_and_apply_inplane(
         n_workers=align_settings['n_workers'],
         checkpoint_dir=checkpoint_dir,
     )
-    rolled = ((index, roll_about_normal(subvols[index], angles.get(index, 0.0))) for index in range(len(subvols)))
+    rolled = ((index, roll_about_normal(subvolume, angles.get(index, 0.0))) for indices, batch in subvols.iter_batches() for index, subvolume in zip(indices, batch))
     return subvols.write_rolled(rolled, rolled_cache_dir), angles
-    return rolled, angles
 
 # _classify_combined: cluster all particles together, then average each half separately
 def _classify_combined(
