@@ -55,19 +55,26 @@ class Subvolumes:
                 rows = [self.index[i][1] for i in chunk]
                 yield chunk, np.asarray(mmap[rows])
 
-    # write_rolled: persist (global_index, subvolume) pairs to a new per-tomogram cache, return the resulting store
+    # write_rolled: persist (global_index, subvolume) pairs to a new per-tomogram cache via preallocated memmaps, return the resulting store
     def write_rolled(self, rolled: Iterator[tuple[int, np.ndarray]], new_cache_dir: Path) -> 'Subvolumes':
         new_cache_dir.mkdir(parents=True, exist_ok=True)
-        buffers: dict[str, list[np.ndarray]] = {}
-        order: dict[str, list[int]] = {}
+        row_counts: dict[str, int] = {}
+        new_index: list[tuple[str, int]] = []
+        for tomogram_id, _row in self.index:
+            new_index.append((tomogram_id, row_counts.get(tomogram_id, 0)))
+            row_counts[tomogram_id] = row_counts.get(tomogram_id, 0) + 1
+        shape = (self.box_voxels,) * 3
+        outputs: dict[str, np.ndarray] = {}
+        written = 0
         for global_index, subvolume in rolled:
-            tomogram_id, _row = self.index[global_index]
-            buffers.setdefault(tomogram_id, []).append(subvolume)
-            order.setdefault(tomogram_id, []).append(global_index)
-        new_index: list[tuple[str, int] | None] = [None] * len(self.index)
-        for tomogram_id, subvolumes in buffers.items():
-            np.save(new_cache_dir / f'{tomogram_id}.npy', np.stack(subvolumes))
-            for row, global_index in enumerate(order[tomogram_id]):
-                new_index[global_index] = (tomogram_id, row)
-        assert all(entry is not None for entry in new_index)  # every particle must be rolled exactly once
-        return Subvolumes(new_cache_dir, new_index, self.box_voxels)  # type: ignore[arg-type]
+            tomogram_id, row = new_index[global_index]
+            if tomogram_id not in outputs:
+                if len(outputs) >= _MAX_OPEN_MMAPS:  # flush and close the oldest to bound open handles
+                    outputs.pop(next(iter(outputs))).flush()
+                outputs[tomogram_id] = np.lib.format.open_memmap(new_cache_dir / f'{tomogram_id}.npy', mode='r+' if (new_cache_dir / f'{tomogram_id}.npy').exists() else 'w+', dtype=np.float32, shape=(row_counts[tomogram_id], *shape))
+            outputs[tomogram_id][row] = subvolume
+            written += 1
+        for output in outputs.values():
+            output.flush()
+        assert written == len(self.index)  # every particle must be rolled exactly once
+        return Subvolumes(new_cache_dir, new_index, self.box_voxels)
