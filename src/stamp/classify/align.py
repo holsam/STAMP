@@ -3,8 +3,7 @@ STAMP: reference-based in-plane (azimuthal) alignment of subvolumes
 '''
 
 # Import external dependencies
-import numpy as np
-import json
+import json, numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from scipy.ndimage import rotate
@@ -14,6 +13,9 @@ from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.checkpoint import atomic_write_json
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
+
+# _BATCH_SIZE: subvolumes read per chunk in a cluster worker
+_BATCH_SIZE = 64
 
 # _ROLL_AXES: box axes spanning the plane perpendicular to the membrane normal
 _ROLL_AXES = (0, 1)
@@ -49,24 +51,32 @@ def _best_angle(
             best_angle, best_score = float(angle), score
     return best_angle
 
-# _AlignClusterJob: one cluster's subvolumes
+# _AlignClusterJob: one cluster's members (lazy view so no subvolume data is held or pickled)
 @dataclass(frozen=True)
 class _AlignClusterJob:
     cluster_id: str
     member_indices: list[int]
-    member_subvolumes: np.ndarray
+    member_subvolumes: Subvolumes  # local index i <-> member_indices[i]
     mask: np.ndarray
     angles: np.ndarray
     iterations: int
 
-# _align_one_cluster: multiprocessing worker entry point
+# _align_one_cluster: multiprocessing worker entry point using streamed batches
 def _align_one_cluster(job: _AlignClusterJob) -> dict[int, float]:
-    current = {local: 0.0 for local in range(len(job.member_indices))}
+    n_members = len(job.member_indices)
+    current = {local: 0.0 for local in range(n_members)}
     for _ in range(max(job.iterations, 1)):
-        reference = np.mean([roll_about_normal(job.member_subvolumes[local], angle) for local, angle in current.items()], axis=0)
-        reference_masked = reference[job.mask]
+        total = np.zeros((job.member_subvolumes.box_voxels,) * 3, dtype=np.float64)
+        for locals_, batch in job.member_subvolumes.iter_batches(_BATCH_SIZE):
+            for local, subvolume in zip(locals_, batch):
+                total += roll_about_normal(subvolume, current[local])
+        reference_masked = (total / n_members)[job.mask]
         reference_masked = reference_masked - reference_masked.mean()
-        current = {local: _best_angle(job.member_subvolumes[local], reference_masked, job.mask, job.angles) for local in current}
+        updated: dict[int, float] = {}
+        for locals_, batch in job.member_subvolumes.iter_batches(_BATCH_SIZE):
+            for local, subvolume in zip(locals_, batch):
+                updated[local] = _best_angle(subvolume, reference_masked, job.mask, job.angles)
+        current = updated
     return {job.member_indices[local]: angle for local, angle in current.items()}
 
 # _load_cluster_checkpoint: saved angles for a cluster, or None when absent or computed for different members
@@ -108,8 +118,7 @@ def align_inplane(
             resolved.update(saved)
             n_resumed += 1
             continue
-        member_subvolumes = np.stack([subvols[i] for i in members])  # bounded to one cluster's members, not the whole dataset
-        jobs.append(_AlignClusterJob(cluster_id, members, member_subvolumes, mask, angles, iterations))
+        jobs.append(_AlignClusterJob(cluster_id, members, subvols.take(members), mask, angles, iterations))
     if n_resumed:
         log.info(f'Resuming in-plane alignment: {n_resumed} cluster(s) loaded from checkpoint')
 
