@@ -3,11 +3,13 @@ STAMP: import per-vesicle labels from an EValuator label MRC and attribute surfa
 '''
 
 # Import external dependencies
-import mrcfile, numpy as np
+import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 
 # Import internal STAMP objects
+from stamp.utils.errors import StampValidationError
+from stamp.utils.io import read_mrc
 from stamp.utils.log import log
 
 # VESICLE_ID_TEMPLATE: '{tomogram_id}:v{label:04d}', built from EValuator's own integer label
@@ -15,11 +17,10 @@ VESICLE_ID_TEMPLATE = '{tomogram_id}:v{label:04d}'
 
 # load_vesicle_labels: read an EValuator labelled MRC and check it matches the segmentation shape
 def load_vesicle_labels(labels_mrc_path: Path, segmentation_shape: tuple[int, ...]) -> np.ndarray:
-    with mrcfile.open(str(labels_mrc_path), permissive=True) as mrc:
-        labels = np.asarray(mrc.data).astype(np.int64)
+    labels = read_mrc(labels_mrc_path, dtype=np.int64)
     if labels.shape != segmentation_shape:
-        raise ValueError(
-            f'Vesicle labels MRC {labels_mrc_path!r} has shape {labels.shape}, '
+        raise StampValidationError(
+            f'Vesicle labels MRC {str(labels_mrc_path)!r} has shape {labels.shape}, '
             f'expected {segmentation_shape} to match the segmentation'
         )
     log.debug(f'Loaded vesicle labels from {labels_mrc_path.name}, {int(labels.max())} label(s)')

@@ -3,32 +3,33 @@ STAMP: filter-picks slice render with per-pick accept/reject (or confidence) col
 '''
 
 # Import external dependencies
-import mrcfile, numpy as np
+import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.schemas.particles import Particle
+from stamp.utils.io import open_mrc
 from stamp.utils.plotting.core import PROTEIN_CMAP, bare, central_slice
 
 # load_central_slice: memory-mapped and downsampled central Z slice of an MRC volume
 def load_central_slice(path: Path, *, max_side_px: int = 1024) -> tuple[np.ndarray, int]:
-    with mrcfile.mmap(str(path), mode='r', permissive=True) as mrc:
+    with open_mrc(path, mmap=True) as mrc:
         plane = np.asarray(central_slice(mrc.data))
     step = max(1, max(plane.shape) // max_side_px)
     return plane[::step, ::step], step
 
 # slice_at: memory-mapped and downsampled slice of an MRC volume at a given Z
 def slice_at(path: Path, z: int, *, max_side_px: int = 1024) -> tuple[np.ndarray, int]:
-    with mrcfile.mmap(str(path), mode='r', permissive=True) as mrc:
+    with open_mrc(path, mmap=True) as mrc:
         plane = np.asarray(mrc.data[z])
     step = max(1, max(plane.shape) // max_side_px)
     return plane[::step, ::step], step
 
 # volume_depth: Z extent of an MRC volume, for slider bounds
 def volume_depth(path: Path) -> int:
-    with mrcfile.mmap(str(path), mode='r', permissive=True) as mrc:
-        return mrc.data.shape[0]
+    with open_mrc(path, header_only=True) as mrc:
+        return int(mrc.header.nz)
 
 # draw_segmentation: dark-theme segmentation render 
 def draw_segmentation(ax, plane: np.ndarray) -> None:

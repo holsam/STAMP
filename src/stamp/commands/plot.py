@@ -9,6 +9,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.utils.errors import StampPipelineError
+from stamp.utils.io import glob_mrc
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 
@@ -51,8 +52,8 @@ def run_plots_pick(
     particles: list[Particle] = [p for p in particle_set.particles if p.tomogram_id in selected]
     log.info(f'Plotting {len(selected)} of {len(all_tomogram_ids)} tomogram(s)')
 
-    segmentation_paths = {path.stem: path for path in sorted(segmentation_dir.glob('*.mrc'))} if segmentation_dir else {}
-    raw_tomogram_paths = {path.stem: path for path in sorted(raw_tomogram_dir.glob('*.mrc'))} if raw_tomogram_dir else {}
+    segmentation_paths = {path.stem: path for path in glob_mrc(segmentation_dir)} if segmentation_dir else {}
+    raw_tomogram_paths = {path.stem: path for path in glob_mrc(raw_tomogram_dir)} if raw_tomogram_dir else {}
 
     output_dir.mkdir(parents=True, exist_ok=True)
     plot_positions(particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)

@@ -3,7 +3,7 @@ STAMP: native membrane-guided, template-free picker
 '''
 
 # Import external dependencies
-import mrcfile, numpy as np
+import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -24,6 +24,7 @@ from stamp.picking.geometry import (
 from stamp.picking.vesicles import load_vesicle_labels, vesicle_ids_at
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampPipelineError, StampValidationError
+from stamp.utils.io import read_mrc
 from stamp.utils.log import log
 
 # PICKER_NAME: name for picker tool
@@ -111,10 +112,8 @@ def pick_tomogram(
     tomogram_id: str,
     config: NativePickerConfig,
 ) -> list[RawPick]:
-    with mrcfile.open(str(segmentation_path), permissive=True) as mrc:
-        segmentation = np.asarray(mrc.data)
-    with mrcfile.open(str(tomogram_path), permissive=True) as mrc:
-        tomogram = np.asarray(mrc.data)
+    segmentation = read_mrc(segmentation_path)
+    tomogram = read_mrc(tomogram_path)
 
     if segmentation.shape != tomogram.shape:
         raise StampValidationError(f'Segmentation shape {segmentation.shape} does not match tomogram shape {tomogram.shape} for {tomogram_id}; they must be the same volume at the same binning')

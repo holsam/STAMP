@@ -3,7 +3,7 @@ STAMP: refinement with enforced half-set independence
 '''
 
 # Import external dependencies
-import json, matplotlib.pyplot as plt, mrcfile, numpy as np
+import json, matplotlib.pyplot as plt, numpy as np
 from pathlib import Path
 
 # Import STAMP objects
@@ -22,7 +22,7 @@ from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, ParticleSet
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
-from stamp.utils.io import resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import glob_mrc, new_mrc, read_mrc, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import finish, plot_path
 from stamp.utils.plotting.refine import fsc_curve
@@ -70,10 +70,8 @@ def _run_half(adapter, runner, particles, reference, workdir, parameters, backen
     if backend == 'mock':
         log.debug(f'{workdir.name}: mock backend, synthesising final map from the seed reference')
         # mock backend runs nothing; synthesise a deterministic map from the seed
-        with mrcfile.open(str(reference), permissive=True) as mrc:
-            seed = np.asarray(mrc.data, dtype=np.float32)
-        with mrcfile.new(final_map, overwrite=True) as mrc:
-            mrc.set_data(seed)
+        seed = read_mrc(reference, dtype=np.float32)
+        new_mrc(final_map, seed)
     else:
         produced = adapter.parse_output(result).parsed['final_map']
         Path(produced).replace(final_map)
@@ -98,7 +96,7 @@ def run_refine(
     plot_format: str = 'tiff',
 ) -> None:
     if voxel_size_angstrom is None:
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(raw_tomogram_dir.glob('*.mrc')))
+        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(raw_tomogram_dir))
         if voxel_size_angstrom is None:
             raise StampValidationError('Voxel size not given and not found in any MRC header in --raw-dir.')
         log.debug(f'Resolved voxel size from MRC headers: {voxel_size_angstrom} Å')
@@ -153,14 +151,11 @@ def run_refine(
             else:
                 log.info(f'{target}: half B loaded from checkpoint')
 
-            with mrcfile.open(str(final_a), permissive=True) as mrc:
-                map_a = np.asarray(mrc.data, dtype=np.float32)
-            with mrcfile.open(str(final_b), permissive=True) as mrc:
-                map_b = np.asarray(mrc.data, dtype=np.float32)
+            map_a = read_mrc(final_a, dtype=np.float32)
+            map_b = read_mrc(final_b, dtype=np.float32)
             user_mask = None
             if mask is not None:
-                with mrcfile.open(str(mask), permissive=True) as mrc:
-                    user_mask = np.asarray(mrc.data, dtype=np.float32)
+                user_mask = read_mrc(mask, dtype=np.float32)
             log.progress(f'{target}: computing FSC')
             fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape), threshold=threshold)
         except (StampValidationError, StampAdapterError) as exc:

@@ -10,6 +10,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.utils.errors import StampPipelineError
+from stamp.utils.io import glob_mrc
 
 # FilterState: a filtering session's data and accept/reject decisions
 @dataclass
@@ -71,7 +72,7 @@ def load_filter_state(
     def _match(directory: Path | None) -> dict[str, Path]:
         if directory is None:
             return {}
-        return {path.stem: path for path in directory.glob('*.mrc') if path.stem in tomogram_ids}
+        return {path.stem: path for path in glob_mrc(directory) if path.stem in tomogram_ids}
 
     state = FilterState(particle_set, _match(segmentation_dir), _match(raw_tomogram_dir))
 

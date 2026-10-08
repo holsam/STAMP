@@ -3,7 +3,7 @@ STAMP: identification against predicted structures
 '''
 
 # Import external dependencies
-import json, matplotlib.pyplot as plt, mrcfile, numpy as np, re, shutil, tomllib
+import json, matplotlib.pyplot as plt, numpy as np, re, shutil, tomllib
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,7 +21,7 @@ from stamp.identify.panel import Candidate, load_candidate_panel
 from stamp.identify.simulate import simulate_density, to_comparable
 from stamp.utils.checkpoint import atomic_write_json, directory_signatures, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import write_sidecar
+from stamp.utils.io import glob_mrc, open_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.core import PlotFormat, finish, plot_path
@@ -41,11 +41,11 @@ def _classify_was_inplane_aligned(classes: Path) -> bool:
 def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
     grouped: dict[str, list[np.ndarray]] = defaultdict(list)
     voxel_sizes: dict[str, float] = {}
-    for path in sorted(directory.glob('*.mrc')):
+    for path in glob_mrc(directory):
         match = _CLASS_ID.match(path.stem)
         if not match:
             continue
-        with mrcfile.open(str(path), permissive=True) as mrc:
+        with open_mrc(path) as mrc:
             grouped[match.group(1)].append(np.transpose(np.asarray(mrc.data), (2, 1, 0)))
             voxel_sizes[match.group(1)] = float(mrc.voxel_size.x)
     if not grouped:

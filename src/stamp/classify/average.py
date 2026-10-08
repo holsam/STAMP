@@ -3,11 +3,12 @@ STAMP: class averages from subvolumes
 '''
 
 # Import external dependencies
-import mrcfile, numpy as np
+import numpy as np
 from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.schemas.subvolumes import Subvolumes
+from stamp.utils.io import new_mrc
 from stamp.utils.log import log
 
 # compute_class_averages: mean subvolume per cluster, streamed in batches
@@ -44,8 +45,6 @@ def write_class_averages(
         suffix = f'_half{half_set_label}' if half_set_label else ''
         path = output_dir / f'{cluster_id}{suffix}_n{count}.mrc'
         log.debug(f'Writing class average {cluster_id} (half-set: {half_set_label})')
-        with mrcfile.new(path, overwrite=True) as mrc:
-            mrc.set_data(np.transpose(average, (2, 1, 0)).astype(np.float32))
-            mrc.voxel_size = voxel_size_angstrom
+        new_mrc(path, np.transpose(average, (2, 1, 0)).astype(np.float32), voxel_size=voxel_size_angstrom)
         written.append(path)
     return written
