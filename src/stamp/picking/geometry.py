@@ -11,26 +11,62 @@ from skimage import measure
 from typing import Literal
 
 # Import internal STAMP objects
+from stamp.picking.blocks import bin_mean
 from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
 
 # Reference axis that a particle's assigned orientation rotates onto the surface normal. +z in (x, y, z) output convention
 REFERENCE_AXIS_XYZ = np.array([0.0, 0.0, 1.0])
 
-# extract_surface: extract a membrane surface from a binary segmentation, returning (vertices, normals)
-def extract_surface(segmentation: np.ndarray, level: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+# extract_surface: extract a membrane surface from a segmentation, returning (vertices, normals)
+def extract_surface(segmentation: np.ndarray, level: float = 0.5, *, bin_factor: int = 1) -> tuple[np.ndarray, np.ndarray]:
     if not np.any(segmentation > level):
         raise StampValidationError('Segmentation contains no voxels above the surface level; nothing to extract')
+    volume = _bin_in_slabs(segmentation, bin_factor) if bin_factor > 1 else segmentation.astype(np.float32)
     try:
-        vertices, faces, normals, _values = measure.marching_cubes(segmentation.astype(np.float32), level=level)
+        vertices, faces, normals, _values = measure.marching_cubes(volume, level=level)
     except (RuntimeError, ValueError) as exc:
         raise StampValidationError(f'Surface extraction failed: {exc}') from exc
     if vertices.shape[0] == 0:
         raise StampValidationError('Surface extraction produced no vertices')
+    if bin_factor > 1:
+        # centre of the binned voxel in full-resolution coordinates
+        vertices = vertices * bin_factor + (bin_factor - 1) / 2
     lengths = np.linalg.norm(normals, axis=1, keepdims=True)
     lengths[lengths == 0.0] = 1.0
     log.debug(f'Extracted surface: {len(vertices)} vertices, {len(faces)} faces')
     return vertices, normals / lengths
+
+# membrane_half_thickness: half the mask thickness through each vertex, by marching into the mask along the vertex normal until leaving it
+def membrane_half_thickness(
+    mask: np.ndarray, vertices_zyx: np.ndarray, normals_zyx: np.ndarray, *, max_voxels: float, step: float = 0.5,
+) -> np.ndarray:
+    n_vertices = len(vertices_zyx)
+    if n_vertices == 0:
+        return np.empty(0, dtype=np.float64)
+    mask_u8 = mask.view(np.uint8) if mask.dtype == bool else (mask > 0).astype(np.uint8)
+
+    # inside: nearest-voxel mask lookup for (N, 3) points
+    def inside(points: np.ndarray) -> np.ndarray:
+        return map_coordinates(mask_u8, points.T, order=0, mode='constant', cval=0) > 0
+
+    direction = np.where(inside(vertices_zyx + 1.5 * normals_zyx)[:, None], normals_zyx, -normals_zyx)
+    thickness = np.full(n_vertices, np.nan)
+    active = inside(vertices_zyx + 1.5 * direction)
+    entered = np.zeros(n_vertices, dtype=bool)
+    # the vertex sits on the boundary, so early samples may be outside; only a leave after entering ends the march
+    for k in range(1, int(np.ceil(max_voxels / step)) + 1):
+        index = np.flatnonzero(active)
+        if len(index) == 0:
+            break
+        now_inside = inside(vertices_zyx[index] + direction[index] * (k * step))
+        entered[index[now_inside]] = True
+        left = index[~now_inside & entered[index]]
+        thickness[left] = (k - 0.5) * step
+        active[left] = False
+    # marching ran out of range: merged bilayers, cap at the maximum
+    thickness[active] = max_voxels
+    return thickness / 2
 
 # downsample_points: voxel-grid downsample keeping one point per cell of side spacing_voxels (so sampling density is set by the requested spacing rather than mesh resolution)
 def downsample_points(points: np.ndarray, normals: np.ndarray, spacing_voxels: float) -> tuple[np.ndarray, np.ndarray]:
@@ -301,3 +337,14 @@ def beam_angle_deviation_degrees(normal_xyz: np.ndarray) -> float:
         raise ValueError('normal_xyz must be non-zero.')
     z_component = abs(normal_xyz[2] / norm)
     return float(np.degrees(np.arcsin(np.clip(z_component, 0.0, 1.0))))
+
+# _bin_in_slabs: mean-bin a boolean or numeric volume
+def _bin_in_slabs(volume: np.ndarray, factor: int) -> np.ndarray:
+    shape = tuple(n // factor for n in volume.shape)
+    binned = np.empty(shape, dtype=np.float32)
+    slab = 8 * factor
+    for start in range(0, shape[0] * factor, slab):
+        stop = min(start + slab, shape[0] * factor)
+        part = volume[start:stop, :shape[1] * factor, :shape[2] * factor].astype(np.float32)
+        binned[start // factor:stop // factor] = bin_mean(part, factor)
+    return binned
