@@ -3,10 +3,13 @@ STAMP: unit tests for picking functions, including geometric primitives, native 
 '''
 
 # Import external dependencies
-import mrcfile, numpy as np, pytest
+import json, mrcfile, numpy as np, pytest, tracemalloc
 from pathlib import Path
+from scipy.spatial import cKDTree
 
 # Import internal STAMP objects
+from stamp.picking.blocks import active_blocks, bin_mean, iter_blocks
+from stamp.picking.candidates import CandidateTable, DetectConfig, detect_candidates
 from stamp.picking.consensus import build_particle_set, reconcile_picks
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.picking.geometry import (
@@ -16,6 +19,7 @@ from stamp.picking.geometry import (
     exclude_near_boundary,
     extract_surface,
     local_normalise,
+    membrane_half_thickness,
     max_order_statistic_offset,
     non_maximum_suppression,
     quaternion_from_reference_to,
@@ -24,6 +28,7 @@ from stamp.picking.geometry import (
     score_membrane_faces
 )
 from stamp.picking.native import NativePickerConfig, pick_tomogram
+from stamp.picking.select import SelectConfig, Selection, _nms, select_candidates
 from stamp.picking.vesicles import (
     load_vesicle_labels,
     summarise_vesicles,
@@ -71,6 +76,54 @@ def _vesicle_with_particles(shape=(60, 60, 60), radius=18.0, thickness=2.0, part
             index[2] - 2 : index[2] + 3,
         ] = -8.0
     return segmentation, tomogram, expected_positions_zyx
+
+# _membrane_scene: plane membrane with a thick mask, planted Gaussian blobs at known midplane offsets, a line, a contaminant, missing-wedge noise
+def _membrane_scene(*, shape=(64, 96, 96), voxel=5.36, seed=0, blobs=True, membrane_density=True) -> tuple[np.ndarray, np.ndarray, dict]:
+    segmentation = np.zeros(shape, dtype=np.float32)
+    segmentation[:, :, 43:53] = 1.0  # 10 voxels, 54 A thick
+    grid = np.stack(np.meshgrid(*[np.arange(n, dtype=np.float32) for n in shape], indexing='ij'))
+    structures = np.zeros(shape, dtype=np.float32)
+    if membrane_density:
+        structures[:, :, 45:52] = -1.0
+    truth: dict = {'blobs': [], 'midplane_x': 48.0}
+    if blobs:
+        # (radius A, midplane offset A, z, y); the last is centred in the membrane face
+        for radius, offset, z, y in ((20, 30, 32, 20), (35, 60, 32, 50), (50, -40, 32, 80), (20, 20, 12, 35)):
+            sigma = radius / (np.sqrt(3.0) * voxel)
+            centre = np.array([z, y, truth['midplane_x'] + offset / voxel])
+            squared = sum((grid[axis] - centre[axis]) ** 2 for axis in range(3))
+            structures += -4.0 * np.exp(-squared / (2 * sigma ** 2)).astype(np.float32)
+            truth['blobs'].append({'centre_zyx': centre, 'radius': radius, 'offset': offset})
+        # line: Gaussian tube along y
+        tube = (grid[0] - 20) ** 2 + (grid[2] - 75) ** 2
+        structures += -4.0 * np.exp(-tube / (2 * 1.5 ** 2)).astype(np.float32)
+        truth['line_axis'] = 'y'
+        # contaminant: a very dark sphere in a corner
+        truth['contaminant_zyx'] = np.array([54.0, 88.0, 85.0])
+        sphere = sum((grid[axis] - truth['contaminant_zyx'][axis]) ** 2 for axis in range(3)) <= 6.0 ** 2
+        structures[sphere] = -40.0
+    # white noise with a missing wedge (tilt axis y: zero where |kz| > |kx| tan 51)
+    noise = np.random.default_rng(seed).normal(size=shape)
+    kz, kx = np.fft.fftfreq(shape[0])[:, None, None], np.fft.fftfreq(shape[2])[None, None, :]
+    wedge = np.abs(kz) <= np.abs(kx) * np.tan(np.radians(51.0))
+    noise = np.fft.ifftn(np.fft.fftn(noise) * wedge).real
+    noise /= noise.std()
+    return segmentation, (structures + noise).astype(np.float32), truth
+
+# _write_scene: write a membrane scene to MRCs under tmp_path, returning (segmentation path, tomogram path, truth)
+def _write_scene(tmp_path: Path, **kwargs) -> tuple[Path, Path, dict]:
+    segmentation, tomogram, truth = _membrane_scene(**kwargs)
+    for name, volume in (('seg', segmentation), ('tomo', tomogram)):
+        with mrcfile.new(tmp_path / f'{name}.mrc', overwrite=True) as mrc:
+            mrc.set_data(volume)
+            mrc.voxel_size = 5.36
+    return tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', truth
+
+# _best_row: index of the highest-zscore table row within max_voxels (2.5: maxima at binned levels sit on a 2-voxel grid) of a position in the anisotropic metric, or None
+def _best_row(table: CandidateTable, position_zyx, elongation: float, max_voxels: float = 2.5) -> int | None:
+    delta = np.stack([table.columns[axis] - position_zyx[i] for i, axis in enumerate('zyx')], axis=1) / np.array([elongation, 1.0, 1.0])
+    near = np.flatnonzero(np.linalg.norm(delta, axis=1) <= max_voxels)
+    return int(near[np.argmax(table.columns['zscore'][near])]) if len(near) else None
 
 # _pick: return a RawPick instance for use in tests
 def _pick(tomogram_id: str, position, picker: str, confidence=0.8, orientation=None) -> RawPick:
@@ -156,6 +209,10 @@ def _count_above_threshold_uncorrected(tmp_path: Path, config: NativePickerConfi
         tomogram, vertices, normals, windows, config.n_samples, config.density_sign, scoring_mode=config.scoring_mode,
     )
     return int(np.sum(scores >= n_mad))
+
+# _scene_config: detection config for the synthetic scene; contamination threshold set from the scene's own outlier scale
+def _scene_config(**overrides) -> DetectConfig:
+    return DetectConfig(voxel_size_angstrom=5.36, contamination_n_mad=30.0, **overrides)
 
 # TestGeometry: class containing unit tests for test_geometry.py
 class TestGeometry:
@@ -757,3 +814,255 @@ class TestVesicle:
             half_set_seed=0,
         )
         assert particle_set.particles[0].vesicle_id == 'tomo000:v0002'
+
+# TestBlocks: class containing unit tests for picking/blocks.py
+class TestBlocks:
+    def test_cores_tile_once(self) -> None:
+        shape = (70, 33, 129)
+        blocks = iter_blocks(shape, 32, 7, align=4)
+        covered = np.zeros(shape, dtype=int)
+        for block in blocks:
+            covered[tuple(slice(lo, hi) for lo, hi in zip(block.core_lo, block.core_hi))] += 1
+            assert all(lo % 4 == 0 and lo >= 0 for lo in block.read_lo)
+            assert all(hi <= n for hi, n in zip(block.read_hi, shape))
+            assert all(r <= c for r, c in zip(block.read_lo, block.core_lo))
+        assert (covered == 1).all()
+
+    def test_small_volume_is_one_block(self) -> None:
+        assert len(iter_blocks((10, 10, 10), 32, 7)) == 1
+
+    def test_active_blocks_near_mask_only(self) -> None:
+        mask = np.zeros((64, 64, 64), dtype=bool)
+        mask[5, 5, 5] = True
+        blocks = iter_blocks(mask.shape, 16, 4)
+        active = active_blocks(mask, blocks, 8.0)
+        assert [block.core_lo for block in active] == [(0, 0, 0)]
+
+    def test_bin_mean_crops_and_averages(self) -> None:
+        volume = np.arange(5 * 4 * 4, dtype=np.float32).reshape(5, 4, 4)
+        binned = bin_mean(volume, 2)
+        assert binned.shape == (2, 2, 2)
+        assert binned[0, 0, 0] == pytest.approx(volume[:2, :2, :2].mean())
+
+# TestGeometry: binned surface extraction and mask thickness
+class TestGeometry:
+    def test_binned_surface_close_to_full(self) -> None:
+        mask = _hollow_sphere((48, 48, 48), radius=14.0, thickness=3.0) > 0
+        full, _ = extract_surface(mask)
+        binned, _ = extract_surface(mask, bin_factor=2)
+        distance, _ = cKDTree(full).query(binned)
+        assert distance.max() < 1.5
+
+    @pytest.mark.parametrize('sign', [1.0, -1.0])
+    def test_half_thickness_of_slab(self, sign: float) -> None:
+        mask = np.zeros((32, 32, 40), dtype=bool)
+        mask[:, :, 15:25] = True
+        vertices, normals = extract_surface(mask)
+        thickness = membrane_half_thickness(mask, vertices, sign * normals, max_voxels=20.0)
+        flat = (vertices[:, 0] > 4) & (vertices[:, 0] < 27) & (vertices[:, 1] > 4) & (vertices[:, 1] < 27)
+        assert np.abs(thickness[flat] - 5.0).max() < 1.0
+
+# TestCandidates: class defining unit tests for picking/candidates.py
+class TestCandidates:
+    def test_planted_blobs_found(self, tmp_path: Path) -> None:
+        segmentation, tomogram, truth = _write_scene(tmp_path)
+        config = _scene_config()
+        table = detect_candidates(segmentation, tomogram, 'scene', config, n_threads=2)
+        for blob in truth['blobs']:
+            row = _best_row(table, blob['centre_zyx'], config.elongation)
+            assert row is not None
+            columns = table.columns
+            assert columns['zscore'][row] > 5
+            assert abs(columns['midplane_distance_angstrom'][row] - abs(blob['offset'])) < 15
+            ratio = columns['radius_angstrom'][row] / blob['radius']
+            assert 1 / 1.6 <= ratio <= 1.6, blob
+            assert columns['contaminated'][row] == 0
+
+    def test_ring_test(self, tmp_path: Path) -> None:
+        segmentation, tomogram, truth = _write_scene(tmp_path)
+        config = _scene_config()
+        table = detect_candidates(segmentation, tomogram, 'scene', config)
+        face = _best_row(table, truth['blobs'][3]['centre_zyx'], config.elongation)
+        assert not table.columns['line'][face] >= 0.3
+        line_position = np.array([20.0, 48.0, 75.0])
+        rows = np.flatnonzero(np.linalg.norm(np.stack([table.columns[a] for a in 'zyx'], axis=1) - line_position, axis=1) < 6)
+        strong = rows[table.columns['zscore'][rows] > 4]
+        assert len(strong) > 0
+        assert all(table.columns['line'][r] >= 0.5 or table.columns['r_mid'][r] < 0.3 for r in strong)
+
+    def test_contaminant_flagged(self, tmp_path: Path) -> None:
+        segmentation, tomogram, truth = _write_scene(tmp_path)
+        table = detect_candidates(segmentation, tomogram, 'scene', _scene_config())
+        positions = np.stack([table.columns[a] for a in 'zyx'], axis=1)
+        near = np.linalg.norm(positions - truth['contaminant_zyx'], axis=1) < 12
+        assert near.any() and (table.columns['contaminated'][near] == 1).all()
+
+    def test_block_size_invariance(self, tmp_path: Path) -> None:
+        segmentation, tomogram, _ = _write_scene(tmp_path)
+        small = detect_candidates(segmentation, tomogram, 'scene', _scene_config(block_size=32))
+        large = detect_candidates(segmentation, tomogram, 'scene', _scene_config(block_size=256))
+        shape = large.meta['shape_zyx']
+        halo = 52
+
+        # interior: rows further than the halo from the volume edges
+        def interior(table: CandidateTable) -> np.ndarray:
+            positions = np.stack([table.columns[a] for a in 'zyx'], axis=1)
+            keep = np.all((positions >= halo) & (positions < np.array(shape) - halo), axis=1) & (table.columns['zscore'] > 3)
+            return np.flatnonzero(keep)
+
+        small_rows, large_rows = interior(small), interior(large)
+        # the scene is 64 voxels in z, so no interior rows exist there; compare in y and x only
+        if len(large_rows) == 0:
+            def lateral(table: CandidateTable) -> np.ndarray:
+                positions = np.stack([table.columns[a] for a in 'zyx'], axis=1)
+                keep = np.all(positions[:, 1:] >= 20, axis=1) & np.all(positions[:, 1:] < np.array(shape[1:]) - 20, axis=1) & (table.columns['zscore'] > 3)
+                return np.flatnonzero(keep)
+            small_rows, large_rows = lateral(small), lateral(large)
+        assert len(large_rows) > 0 and len(small_rows) == len(large_rows)
+        key_small = np.lexsort([small.columns[a][small_rows] for a in 'xyz'])
+        key_large = np.lexsort([large.columns[a][large_rows] for a in 'xyz'])
+        for axis in 'zyx':
+            assert np.allclose(small.columns[axis][small_rows][key_small], large.columns[axis][large_rows][key_large], atol=0.5)
+        assert np.allclose(small.columns['response'][small_rows][key_small], large.columns['response'][large_rows][key_large], rtol=1e-4)
+
+    def test_block_boundary_blob_found_once(self, tmp_path: Path) -> None:
+        # the first planted blob is centred on the z = 32 core edge when block_size = 32
+        segmentation, tomogram, truth = _write_scene(tmp_path)
+        config = _scene_config(block_size=32)
+        table = detect_candidates(segmentation, tomogram, 'scene', config)
+        centre = truth['blobs'][0]['centre_zyx']
+        best = _best_row(table, centre, config.elongation)
+        positions = np.stack([table.columns[a] for a in 'zyx'], axis=1)
+        near = np.linalg.norm((positions - centre) / np.array([config.elongation, 1.0, 1.0]), axis=1) <= 2.0
+        same_scale = near & (table.columns['scale'] == table.columns['scale'][best])
+        assert same_scale.sum() == 1
+
+    def test_pure_noise_matches_null(self, tmp_path: Path) -> None:
+        segmentation, tomogram, _ = _write_scene(tmp_path, blobs=False, membrane_density=False)
+        table = detect_candidates(segmentation, tomogram, 'noise', _scene_config(null_block_fraction=1.0))
+        signal = int((table.columns['zscore'] > 3).sum())
+        null = int((table.null_columns['zscore'] > 3).sum() * table.null_scale)
+        assert signal > 0 and null > 0
+        assert max(signal, null) <= 2 * min(signal, null)
+
+    def test_save_load_round_trip(self, tmp_path: Path) -> None:
+        segmentation, tomogram, _ = _write_scene(tmp_path)
+        table = detect_candidates(segmentation, tomogram, 'scene', _scene_config())
+        table.save(tmp_path / 'table.npz')
+        loaded = CandidateTable.load(tmp_path / 'table.npz')
+        assert set(loaded.columns) == set(table.columns) and set(loaded.null_columns) == set(table.null_columns)
+        for name in table.columns:
+            assert np.array_equal(loaded.columns[name], table.columns[name], equal_nan=True)
+            assert np.array_equal(loaded.null_columns[name], table.null_columns[name], equal_nan=True)
+        assert np.array_equal(loaded.scale_stats, table.scale_stats)
+        assert loaded.null_scale == table.null_scale
+        # JSON turns tuples into lists
+        assert loaded.meta == json.loads(json.dumps(table.meta))
+
+    def test_peak_memory(self, tmp_path: Path) -> None:
+        segmentation, tomogram, _ = _write_scene(tmp_path, shape=(128, 128, 128))
+        config = _scene_config(block_size=64)
+        tracemalloc.start()
+        detect_candidates(segmentation, tomogram, 'scene', config, n_threads=2)
+        _current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        window_bytes = 128 ** 3 * 4  # blocks of 64 with a 52 voxel halo read the whole volume
+        mask_bytes = 128 ** 3
+        # measured peak 41 MB against a bound of 208 MB (the plan's 2 x 12 x window + 3 x mask)
+        assert peak < 2 * 12 * window_bytes + 3 * mask_bytes
+
+    def test_conftest_scene_blobs_found(self, tmp_path: Path) -> None:
+        # mirrors tests/conftest.py::_make_dataset: 60^3 at 13.48 A, one-voxel membrane slab at x = 30, box blobs on N(0, 1) noise
+        rng = np.random.default_rng(0)
+        segmentation = np.zeros((60, 60, 60), dtype=np.float32)
+        segmentation[:, :, 30] = 1.0
+        volume = rng.normal(0, 1, (60, 60, 60)).astype(np.float32)
+        centres = []
+        for x, y in ((13, 13), (13, 35), (35, 13), (35, 35)):
+            volume[x:x + 5, y:y + 5, 33:38] -= 6.0
+            centres.append((x + 2, y + 2, 35))
+        for x, y in ((18, 28), (28, 18), (28, 38), (38, 28)):
+            volume[x:x + 3, y:y + 3, 33:35] -= 4.0
+        for name, data in (('seg', segmentation), ('tomo', volume)):
+            with mrcfile.new(tmp_path / f'{name}.mrc', overwrite=True) as mrc:
+                mrc.set_data(data)
+                mrc.voxel_size = 13.48
+        # a one-voxel slab has no 2x-binned surface at level 0.5, so the surface is extracted unbinned
+        config = DetectConfig(voxel_size_angstrom=13.48, surface_bin=1)
+        table = detect_candidates(tmp_path / 'seg.mrc', tmp_path / 'tomo.mrc', 'fixture', config)
+        for centre in centres:
+            row = _best_row(table, centre, config.elongation, max_voxels=3.0)
+            assert row is not None and table.columns['zscore'][row] > 5
+
+# TestSelect: class defining unit tests for picking/select.py
+class TestSelect:
+    # _table: a candidate table built directly from columns, rows far apart unless positions are given
+    @staticmethod
+    def _table(zscore, *, null_zscore=(), positions=None, null_scale=1.0, **columns) -> CandidateTable:
+        n, m = len(zscore), len(null_zscore)
+
+        # build: fill every column with benign defaults, overridden by the given values
+        def build(count: int, scores, extra: dict) -> dict[str, np.ndarray]:
+            spread = np.arange(count, dtype=np.float32) * 1000.0
+            values = {
+                'z': np.zeros(count, np.float32), 'y': np.zeros(count, np.float32), 'x': spread,
+                'zscore': np.asarray(scores, np.float32), 'sigma_voxels': np.full(count, 2.0, np.float32),
+                'midplane_distance_angstrom': np.full(count, 100.0, np.float32), 'inside_membrane': np.zeros(count, np.int8),
+                'r_mid': np.full(count, 0.8, np.float32), 'line': np.full(count, 0.1, np.float32),
+                'contaminated': np.zeros(count, np.int8), 'source': np.zeros(count, np.int8),
+            }
+            values.update({key: np.asarray(value, values[key].dtype) for key, value in extra.items()})
+            return values
+
+        signal = build(n, zscore, columns)
+        if positions is not None:
+            signal['z'], signal['y'], signal['x'] = (np.asarray(positions, np.float32)[:, i] for i in range(3))
+        meta = {'voxel_size_angstrom': 1.0, 'elongation': 1.85}
+        return CandidateTable(signal, build(m, null_zscore, {}), null_scale, np.zeros((1, 3)), meta)
+
+    def test_nms_elongation(self) -> None:
+        positions = np.array([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
+        scores = np.array([2.0, 1.0])
+        radii = np.array([2.0, 2.0])
+        assert len(_nms(positions, scores, radii, 1.85)) == 1
+        assert len(_nms(positions, scores, radii, 1.0)) == 2
+
+    def test_filters(self) -> None:
+        config = SelectConfig(target_fdr=1.0, min_zscore=3.0, min_particle_distance_angstrom=1.0)
+        zscore = [10.0] * 9
+        table = self._table(
+            zscore,
+            midplane_distance_angstrom=[100, 400, 100, 100, 100, 100, 100, 100, 100],
+            inside_membrane=[0, 0, 1, 0, 0, 0, 0, 0, 0],
+            r_mid=[0.8, 0.8, 0.8, 0.1, np.nan, 0.8, 0.8, 0.8, 0.8],
+            line=[0.1, 0.1, 0.1, 0.1, 0.1, 0.9, np.nan, 0.1, 0.1],
+            contaminated=[0, 0, 0, 0, 0, 0, 0, 1, 0],
+            source=[0, 0, 0, 0, 0, 0, 0, 0, 1],
+        )
+        # row 0 passes; 1 outside shell; 2 inside membrane (allowed by default); 3 and 4 fail r_mid; 5 fails line; 6 nan line passes; 7 contaminated; 8 lattice source
+        selection = select_candidates(table, config)
+        assert list(selection.indices) == [0, 2, 6, 8]
+        strict = select_candidates(table, SelectConfig(target_fdr=1.0, include_inside_membrane=False, sources=('dog',), min_particle_distance_angstrom=1.0))
+        assert list(strict.indices) == [0, 6]
+        unshelled = select_candidates(table, SelectConfig(target_fdr=1.0, shell_angstrom=None, min_particle_distance_angstrom=1.0))
+        assert 1 in unshelled.indices
+
+    def test_fdr_threshold(self) -> None:
+        signal_z, null_z = np.linspace(3, 10, 100), np.linspace(3, 5, 20)
+        table = self._table(signal_z, null_zscore=null_z)
+        selection = select_candidates(table, SelectConfig(target_fdr=0.05, min_particle_distance_angstrom=1.0))
+        assert 4.5 < selection.zscore_threshold <= 4.8
+        assert np.array_equal(selection.indices, np.flatnonzero(signal_z >= selection.zscore_threshold))
+        assert len(selection.indices) == 75
+
+    def test_no_threshold_gives_empty_selection(self) -> None:
+        table = self._table(np.linspace(3, 5, 20), null_zscore=np.linspace(3, 6, 60))
+        selection = select_candidates(table, SelectConfig(target_fdr=0.01))
+        assert len(selection.indices) == 0 and np.isinf(selection.zscore_threshold)
+
+    def test_deterministic_ties(self) -> None:
+        table = self._table([8.0, 8.0, 8.0], positions=[[0, 0, 0], [0, 0, 1], [0, 0, 2]], sigma_voxels=[0.1, 0.1, 0.1])
+        config = SelectConfig(target_fdr=1.0, min_particle_distance_angstrom=1.5)
+        first, second = select_candidates(table, config), select_candidates(table, config)
+        assert np.array_equal(first.indices, second.indices)
+        assert list(first.indices) == [0, 2]
