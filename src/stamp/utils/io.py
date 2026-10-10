@@ -63,6 +63,26 @@ def read_mrc(path: Path | str, *, dtype: type | None = None) -> np.ndarray:
         data = np.asarray(mrc.data)
     return data if dtype is None else data.astype(dtype, copy=False)
 
+# read_mrc_shape: (z, y, x) shape of an MRC from its header
+def read_mrc_shape(path: Path | str) -> tuple[int, int, int]:
+    with open_mrc(path, header_only=True) as mrc:
+        header = mrc.header
+        return int(header.nz), int(header.ny), int(header.nx)
+
+# read_mrc_block: one (z, y, x) block [lo, hi) of an MRC as float32, read through a memory map
+def read_mrc_block(path: Path | str, lo_zyx: tuple[int, int, int], hi_zyx: tuple[int, int, int]) -> np.ndarray:
+    with open_mrc(path, mmap=True) as mrc:
+        return np.array(mrc.data[tuple(slice(lo, hi) for lo, hi in zip(lo_zyx, hi_zyx))], dtype=np.float32)
+
+# read_mrc_mask: an MRC as a boolean mask (data > 0)
+def read_mrc_mask(path: Path | str, *, slab: int = 32) -> np.ndarray:
+    mask = np.empty(read_mrc_shape(path), dtype=bool)
+    for start in range(0, mask.shape[0], slab):
+        stop = min(start + slab, mask.shape[0])
+        with open_mrc(path, mmap=True) as mrc:
+            mask[start:stop] = mrc.data[start:stop] > 0
+    return mask
+
 # new_mrc: write an array (and optional voxel size) to a new MRC, raising IO failures as StampValidationError
 def new_mrc(path: Path | str, data: np.ndarray, *, voxel_size: Any = None) -> None:
     path = Path(path)

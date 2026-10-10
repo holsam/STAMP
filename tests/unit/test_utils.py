@@ -289,6 +289,16 @@ class TestIoMrc:
         assert io_utils.read_mrc(path, dtype=np.float32).dtype == np.float32
         assert io_utils.read_mrc(path, dtype=np.float64).dtype == np.float64
 
+    def test_block_mask_and_shape_readers(self, tmp_path: Path) -> None:
+        path = tmp_path / 'a.mrc'
+        data = np.random.default_rng(0).normal(size=(7, 9, 11)).astype(np.float32)
+        io_utils.new_mrc(path, data)
+        assert io_utils.read_mrc_shape(path) == (7, 9, 11)
+        assert np.array_equal(io_utils.read_mrc_block(path, (1, 2, 3), (5, 9, 8)), data[1:5, 2:9, 3:8])
+        assert io_utils.read_mrc_block(path, (0, 0, 0), (2, 2, 2)).dtype == np.float32
+        mask = io_utils.read_mrc_mask(path, slab=3)
+        assert mask.dtype == bool and np.array_equal(mask, io_utils.read_mrc(path) > 0)
+
     def test_missing_file(self, tmp_path: Path) -> None:
         with pytest.raises(StampValidationError, match='not found'):
             io_utils.read_mrc(tmp_path / 'nope.mrc')
