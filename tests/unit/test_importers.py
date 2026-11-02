@@ -3,14 +3,16 @@ STAMP: unit tests for the picks importer
 '''
 
 # Import external dependencies
-import json, pandas as pd, pytest, starfile
+import json, numpy as np, pandas as pd, pytest, starfile
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.picking.importers import map_tomogram_ids, read_picks
+from stamp.picking.geometry import quaternion_from_reference_to
+from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampValidationError
+from stamp.utils.io import new_mrc
 
 # _manifest: a manifest with placeholder paths
 def _manifest(tomogram_id: str) -> TomogramManifest:
@@ -19,6 +21,18 @@ def _manifest(tomogram_id: str) -> TomogramManifest:
 # _raw: a RawPick for id mapping tests
 def _raw(tomogram_id: str) -> RawPick:
     return RawPick(tomogram_id=tomogram_id, position=(0.0, 0.0, 0.0), source_picker='mine')
+
+# _slab_manifest: flat one-voxel membrane at x=30 in a 60^3 volume, voxel size 10 Å
+def _slab_manifest(tmp_path: Path) -> TomogramManifest:
+    segmentation = np.zeros((60, 60, 60), dtype=np.float32)
+    segmentation[:, :, 30] = 1.0
+    new_mrc(tmp_path / 't00.mrc', segmentation)
+    new_mrc(tmp_path / 't00_raw.mrc', np.zeros_like(segmentation))
+    return TomogramManifest(tomogram_id='t00', segmentation_path=tmp_path / 't00.mrc', raw_tomogram_path=tmp_path / 't00_raw.mrc', voxel_size_angstrom=10.0)
+
+# _at: a RawPick at an (x, y, z) position in t00
+def _at(position: tuple[float, float, float], **fields) -> RawPick:
+    return RawPick(tomogram_id='t00', position=position, source_picker='mine', **fields)
 
 # TestReadPicks: class containing tests for read_picks
 class TestReadPicks:
@@ -111,3 +125,37 @@ class TestMapTomogramIds:
     def test_unknown_ids_are_listed(self) -> None:
         with pytest.raises(StampValidationError, match="'nope'"):
             map_tomogram_ids([_raw('t00'), _raw('nope')], [_manifest('t00')])
+
+# TestInferOrientations: class containing tests for infer_orientations
+class TestInferOrientations:
+    def test_normal_points_from_surface_towards_the_pick(self, tmp_path: Path) -> None:
+        manifest = _slab_manifest(tmp_path)
+        right, left = infer_orientations([_at((35.0, 20.0, 20.0)), _at((25.0, 20.0, 20.0))], [manifest])
+        assert np.allclose(right.orientation, quaternion_from_reference_to(np.array([1.0, 0.0, 0.0])), atol=1e-6)
+        assert np.allclose(left.orientation, quaternion_from_reference_to(np.array([-1.0, 0.0, 0.0])), atol=1e-6)
+        assert right.beam_angle_deviation_degrees == pytest.approx(0.0, abs=1e-6)  # normal in the xy plane
+
+    def test_picks_beyond_max_distance_stay_unoriented(self, tmp_path: Path) -> None:
+        manifest = _slab_manifest(tmp_path)
+        near, far = infer_orientations([_at((32.0, 20.0, 20.0)), _at((50.0, 20.0, 20.0))], [manifest], max_surface_distance_angstrom=50.0)
+        assert near.orientation is not None and far.orientation is None
+
+    def test_supplied_quaternion_is_kept_and_sets_beam_angle(self, tmp_path: Path) -> None:
+        manifest = _slab_manifest(tmp_path)
+        (pick,) = infer_orientations([_at((35.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0))], [manifest])
+        assert pick.orientation == (1.0, 0.0, 0.0, 0.0)
+        assert pick.beam_angle_deviation_degrees == pytest.approx(90.0)  # +z is beam-aligned
+
+    def test_vesicle_id_is_filled_from_labels(self, tmp_path: Path) -> None:
+        manifest = _slab_manifest(tmp_path)
+        labels = np.zeros((60, 60, 60), dtype=np.int16)
+        labels[:, :, 29:32] = 3
+        new_mrc(tmp_path / 't00_labelled.mrc', labels)
+        (pick,) = infer_orientations([_at((35.0, 20.0, 20.0))], [manifest], vesicle_labels_by_tomogram={'t00': tmp_path / 't00_labelled.mrc'})
+        assert pick.vesicle_id == 't00:v0003'
+
+    def test_empty_segmentation_leaves_picks_untouched(self, tmp_path: Path) -> None:
+        manifest = _slab_manifest(tmp_path)
+        new_mrc(manifest.segmentation_path, np.zeros((60, 60, 60), dtype=np.float32))
+        (pick,) = infer_orientations([_at((35.0, 20.0, 20.0))], [manifest])
+        assert pick.orientation is None

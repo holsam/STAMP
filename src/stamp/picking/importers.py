@@ -3,13 +3,18 @@ STAMP: import externally generated picks (CSV, RELION STAR, JSON) and infer miss
 '''
 
 # Import external dependencies
-import csv, json, starfile
+import csv, json, numpy as np, starfile
 from pathlib import Path
+from scipy.spatial import cKDTree
 
 # Import internal STAMP objects
+from stamp.picking.geometry import beam_angle_deviation_degrees, extract_surface, quaternion_from_reference_to
+from stamp.picking.vesicles import load_vesicle_labels, vesicle_ids_at
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampError, StampValidationError
+from stamp.utils.io import read_mrc
+from stamp.utils.log import log
 
 # CSV_REQUIRED: columns every CSV picks file must carry
 CSV_REQUIRED = ('tomogram_id', 'x', 'y', 'z')
@@ -43,6 +48,68 @@ def map_tomogram_ids(picks: list[RawPick], manifests: list[TomogramManifest]) ->
     if unknown:
         raise StampValidationError(f'picks reference tomogram id(s) with no matching segmentation/tomogram pair: {unknown}; known ids: {sorted(by_key.values())}')
     return [pick.model_copy(update={'tomogram_id': by_key[_id_key(pick.tomogram_id)]}) for pick in picks]
+
+# infer_orientations: fill missing orientation, beam angle and vesicle id from the nearest segmentation surface
+def infer_orientations(
+    picks: list[RawPick],
+    manifests: list[TomogramManifest],
+    *,
+    vesicle_labels_by_tomogram: dict[str, Path] | None = None,
+    max_surface_distance_angstrom: float = 300.0,
+) -> list[RawPick]:
+    labels_by_tomogram = vesicle_labels_by_tomogram or {}
+    manifest_by_id = {manifest.tomogram_id: manifest for manifest in manifests}
+    indices_by_tomogram: dict[str, list[int]] = {}
+    for index, pick in enumerate(picks):
+        indices_by_tomogram.setdefault(pick.tomogram_id, []).append(index)
+    result = list(picks)
+    # TODO: parallelise?
+    for tomogram_id, indices in indices_by_tomogram.items():
+        manifest = manifest_by_id[tomogram_id]
+        labels_path = labels_by_tomogram.get(tomogram_id)
+        todo = [index for index in indices if _needs_inference(picks[index], labels_path is not None)]
+        if not todo:
+            continue
+        segmentation = read_mrc(manifest.segmentation_path)
+        try:
+            vertices_zyx, normals_zyx = extract_surface(segmentation)
+        except StampValidationError as exc:
+            log.warning(f'{tomogram_id}: cannot infer orientations ({exc})')
+            continue
+        positions_xyz = np.array([picks[index].position for index in todo])
+        distances, nearest = cKDTree(vertices_zyx).query(positions_xyz[:, ::-1])  # surface is (z, y, x), picks are (x, y, z)
+        within = distances * manifest.voxel_size_angstrom <= max_surface_distance_angstrom
+        nearest_xyz = vertices_zyx[nearest][:, ::-1]
+        normals_xyz = normals_zyx[nearest][:, ::-1]
+        # the particle sits on the side it was picked from, so point the normal at the pick
+        flip = np.einsum('ij,ij->i', normals_xyz, positions_xyz - nearest_xyz) < 0
+        normals_xyz = np.where(flip[:, None], -normals_xyz, normals_xyz)
+        vesicle_ids = vesicle_ids_at(load_vesicle_labels(labels_path, segmentation.shape), vertices_zyx[nearest], tomogram_id) if labels_path is not None else None
+        for position, index in enumerate(todo):
+            pick = picks[index]
+            updates: dict = {}
+            normal = None if pick.orientation is None else _normal_from_quaternion(pick.orientation)  # a supplied quaternion always wins
+            if pick.orientation is None and within[position]:
+                normal = normals_xyz[position]
+                updates['orientation'] = quaternion_from_reference_to(normal)
+            if pick.beam_angle_deviation_degrees is None and normal is not None:
+                updates['beam_angle_deviation_degrees'] = beam_angle_deviation_degrees(normal)
+            if vesicle_ids is not None and pick.vesicle_id is None and within[position] and vesicle_ids[position]:
+                updates['vesicle_id'] = vesicle_ids[position]
+            result[index] = pick.model_copy(update=updates)
+    n_missing = sum(pick.orientation is None for pick in result)
+    if n_missing:
+        log.warning(f'{n_missing} of {len(result)} picks have no orientation (further than {max_surface_distance_angstrom} Å from any surface, or no usable segmentation); classify will skip them')
+    return result
+
+# _needs_inference: True when a pick lacks something infer_orientations can fill
+def _needs_inference(pick: RawPick, want_vesicle_id: bool) -> bool:
+    return pick.orientation is None or pick.beam_angle_deviation_degrees is None or (want_vesicle_id and pick.vesicle_id is None)
+
+# _normal_from_quaternion: the image of +z under a (w, x, y, z) unit quaternion
+def _normal_from_quaternion(quaternion: tuple[float, float, float, float]) -> np.ndarray:
+    w, x, y, z = quaternion
+    return np.array([2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)])
 
 # _id_key: comparison key for a tomogram id
 def _id_key(tomogram_id: str) -> str:
