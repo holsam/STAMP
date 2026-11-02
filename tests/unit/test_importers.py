@@ -7,8 +7,18 @@ import json, pandas as pd, pytest, starfile
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.picking.importers import read_picks
+from stamp.picking.importers import map_tomogram_ids, read_picks
+from stamp.schemas.manifest import TomogramManifest
+from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampValidationError
+
+# _manifest: a manifest with placeholder paths
+def _manifest(tomogram_id: str) -> TomogramManifest:
+    return TomogramManifest(tomogram_id=tomogram_id, segmentation_path=Path(f'{tomogram_id}.mrc'), raw_tomogram_path=Path('raw.mrc'), voxel_size_angstrom=10.0)
+
+# _raw: a RawPick for id mapping tests
+def _raw(tomogram_id: str) -> RawPick:
+    return RawPick(tomogram_id=tomogram_id, position=(0.0, 0.0, 0.0), source_picker='mine')
 
 # TestReadPicks: class containing tests for read_picks
 class TestReadPicks:
@@ -87,3 +97,17 @@ class TestReadPicks:
         (tmp_path / 'empty.csv').write_text('tomogram_id,x,y,z\n')
         with pytest.raises(StampValidationError, match='no picks'):
             read_picks(tmp_path / 'empty.csv', source_picker='mine')
+
+# TestMapTomogramIds: class containing tests for map_tomogram_ids
+class TestMapTomogramIds:
+    def test_exact_match_is_unchanged(self) -> None:
+        assert map_tomogram_ids([_raw('t00')], [_manifest('t00')])[0].tomogram_id == 't00'
+
+    def test_segmented_suffix_is_ignored_on_either_side(self) -> None:
+        manifests = [_manifest('a_segmented'), _manifest('b')]
+        mapped = map_tomogram_ids([_raw('a'), _raw('b_segmented')], manifests)
+        assert [p.tomogram_id for p in mapped] == ['a_segmented', 'b']
+
+    def test_unknown_ids_are_listed(self) -> None:
+        with pytest.raises(StampValidationError, match="'nope'"):
+            map_tomogram_ids([_raw('t00'), _raw('nope')], [_manifest('t00')])

@@ -7,6 +7,7 @@ import csv, json, starfile
 from pathlib import Path
 
 # Import internal STAMP objects
+from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampError, StampValidationError
 
@@ -22,13 +23,8 @@ STAR_COLUMNS = ('rlnTomoName', 'rlnCoordinateX', 'rlnCoordinateY', 'rlnCoordinat
 # STAR_CONFIDENCE: optional RELION column mapped onto RawPick.confidence
 STAR_CONFIDENCE = 'rlnAutopickFigureOfMerit'
 
-# _READERS: picks file reader per lowercase suffix
-_READERS = {
-    '.csv': _read_csv,
-    '.star': _read_star,
-    '.json': _read_json,
-    '.jsonl': _read_json,
-}
+# TOMOGRAM_ID_SUFFIX: segmentation filename suffix ignored when matching pick ids to manifests
+TOMOGRAM_ID_SUFFIX = '_segmented'
 
 # read_picks: RawPicks from a CSV, STAR, JSON or JSONL picks file, tagged with source_picker
 def read_picks(path: Path, *, source_picker: str) -> list[RawPick]:
@@ -39,6 +35,18 @@ def read_picks(path: Path, *, source_picker: str) -> list[RawPick]:
     if not picks:
         raise StampValidationError(f'{str(path)!r} contains no picks')
     return picks
+
+# map_tomogram_ids: rewrite pick ids onto manifest ids (ignoring trailings suffix on either side), raising on ids with no manifest
+def map_tomogram_ids(picks: list[RawPick], manifests: list[TomogramManifest]) -> list[RawPick]:
+    by_key = {_id_key(manifest.tomogram_id): manifest.tomogram_id for manifest in manifests}
+    unknown = sorted({pick.tomogram_id for pick in picks if _id_key(pick.tomogram_id) not in by_key})
+    if unknown:
+        raise StampValidationError(f'picks reference tomogram id(s) with no matching segmentation/tomogram pair: {unknown}; known ids: {sorted(by_key.values())}')
+    return [pick.model_copy(update={'tomogram_id': by_key[_id_key(pick.tomogram_id)]}) for pick in picks]
+
+# _id_key: comparison key for a tomogram id
+def _id_key(tomogram_id: str) -> str:
+    return tomogram_id.removesuffix(TOMOGRAM_ID_SUFFIX)
 
 # _cell: stripped string value of a CSV cell, '' when absent
 def _cell(row: dict, key: str) -> str:
@@ -105,3 +113,11 @@ def _read_json(path: Path, source_picker: str) -> list[RawPick]:
         return [RawPick.model_validate({**record, 'source_picker': source_picker}) for record in records]
     except (ValueError, TypeError, StampError) as exc:
         raise StampValidationError(f'{str(path)!r}: {exc}') from exc
+
+# _READERS: picks file reader per lowercase suffix
+_READERS = {
+    '.csv': _read_csv,
+    '.star': _read_star,
+    '.json': _read_json,
+    '.jsonl': _read_json,
+}
