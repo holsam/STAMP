@@ -98,6 +98,10 @@ def classify(
         int,
         typer.Option(help='Azimuthal sampling points (must be at least 2*(modes+1)).', rich_help_panel = 'Subvolume extraction'),
     ] = 64,
+    feature_normalisation: Annotated[
+        Literal['none', 'particle', 'tomogram', 'both'],
+        typer.Option('--feature-normalisation', help='Method for azimuthal mode (above 0) normalisation.', rich_help_panel = 'Subvolume extraction'),
+    ] = 'both',
     n_workers: Annotated[
         int,
         typer.Option('-n', '--n-processes', help='Number of processes to use for per-cluster in-plane alignment (1 = sequential).'),
@@ -139,6 +143,7 @@ def classify(
         azimuthal_modes=azimuthal_modes,
         min_radius_fraction=min_radius_fraction,
         n_azimuthal_samples=n_azimuthal_samples,
+        feature_normalisation=feature_normalisation,
         make_plots=make_plots,
         plot_format=plot_format,
         keep_raw=keep_raw,
