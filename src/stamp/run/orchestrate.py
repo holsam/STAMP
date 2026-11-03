@@ -12,7 +12,7 @@ from stamp.backends.factory import check_backend_supports
 from stamp.commands.classify import run_classify
 from stamp.commands.decoy import run_decoy
 from stamp.commands.identify import run_identify
-from stamp.commands.pick import REAL_ADAPTERS, run_pick
+from stamp.commands.pick import run_pick
 from stamp.commands.refine import _ADAPTERS as REFINE_ADAPTERS, run_refine
 from stamp.run.state import STAGE_ORDER, is_complete, mark_complete, stage_dir, stages_to_run
 from stamp.schemas.config import RunConfig
@@ -34,17 +34,18 @@ class RunOutcome:
 def _real_pick(config: RunConfig, output_dir: Path) -> Path:
     target = stage_dir(output_dir, 'real', 'pick')
     run_pick(
-        picker_names=config.stage.pick.pickers,
+        picks_files=config.stage.pick.picks_files,
+        picker_names=config.stage.pick.picker_names,
         segmentation_dir=config.run.segmentation_dir,
         raw_tomogram_dir=config.run.raw_tomogram_dir,
         output_dir=target,
         voxel_size_angstrom=config.run.voxel_size_angstrom,
-        extra_params={},
         consensus_rule=config.stage.pick.consensus_rule,
         distance_threshold=config.stage.pick.distance_threshold,
         half_set_seed=config.stage.pick.half_set_seed,
-        backend=config.stage.pick.backend,
+        max_surface_distance_angstrom=config.stage.pick.max_surface_distance_angstrom,
         n_workers=config.stage.pick.n_workers,
+        keep_raw=config.stage.pick.keep_raw,
     )
     return target / 'particle_set.json'
 
@@ -112,11 +113,6 @@ def _classify_track(config: RunConfig, output_dir: Path, track: str, particles: 
 
 # _guard_backends: raise before any stage runs if a stage's backend can't run its adapter
 def _guard_backends(config: RunConfig) -> None:
-    for picker in config.stage.pick.pickers:
-        adapter = REAL_ADAPTERS.get(picker)
-        if adapter is not None:
-            log.debug(f'Checking backend {config.stage.pick.backend or config.run.backend!r} supports pick adapter {picker!r}')
-            check_backend_supports(adapter, config.stage.pick.backend or config.run.backend)
     refine_adapter = REFINE_ADAPTERS.get(config.stage.refine.tool)
     if refine_adapter is not None:
         log.debug(f'Checking backend {config.stage.refine.backend or config.run.backend!r} supports refine adapter {config.stage.refine.tool!r}')

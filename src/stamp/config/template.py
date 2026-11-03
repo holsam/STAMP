@@ -36,13 +36,15 @@ pick_zstack_movie = true
 pick_plot_3d = false
 
 [stage.pick]
-pickers = ["stamp-native"]
+picks_files = ["data/picks.csv"]            # positional picks files (.csv|.star|.json|.jsonl), one picker per file
+# picker_names = ["picker-a"]               # --name  (one per file, unique; default = file stems)
 consensus_rule = "intersection"             # --consensus-rule  (union|intersection)
 distance_threshold = 15.0                   # --distance-threshold
 half_set_seed = 0                           # --half-set-seed
+max_surface_distance_angstrom = 300.0       # --max-surface-distance-a
 n_workers = 1
 keep_raw = false
-backend = ""                                # blank = defaults to [run].backend
+backend = ""                                # inert for pick; blank = defaults to [run].backend
 
 [stage.classify]
 method = "hdbscan"                          # --method  (hdbscan|kmeans)

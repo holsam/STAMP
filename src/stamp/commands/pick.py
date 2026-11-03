@@ -271,8 +271,11 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--consensus-rule', config.stage.pick.consensus_rule,
         '--distance-threshold', str(config.stage.pick.distance_threshold),
         '--half-set-seed', str(config.stage.pick.half_set_seed),
+        '--max-surface-distance-a', str(config.stage.pick.max_surface_distance_angstrom),
         '--n-processes', str(config.stage.pick.n_workers),
     ]
+    for name in config.stage.pick.picker_names or []:
+        argv += ['--name', name]
     if config.plots.enabled:
         argv.append('--plots')
         argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
