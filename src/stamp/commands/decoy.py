@@ -4,7 +4,6 @@ STAMP: decoy dataset generation logic
 
 # Import external dependencies
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -12,11 +11,11 @@ from stamp.backends.base import ToolCommand
 from stamp.decoy.generate import (
     METHOD_SHIFTED,
     METHOD_SYNTHETIC_NOISE,
+    DecoyGeometry,
     generate_shifted_decoys,
     generate_synthetic_noise_decoys,
 )
 from stamp.decoy.validate import assert_comparable
-from stamp.picking.native import NativePickerConfig
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
@@ -32,7 +31,6 @@ METHODS = (METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE)
 def run_decoy(
     output_dir,
     method,
-    parameters,
     real_particle_set,
     segmentation_dir,
     raw_tomogram_dir,
@@ -45,6 +43,7 @@ def run_decoy(
     n_synthetic_tomograms,
     synthetic_shape,
     seed,
+    density_sign: int = -1,
     n_workers: int = 1,
     keep_raw: bool = False,
     make_plots: bool = False,
@@ -58,21 +57,14 @@ def run_decoy(
         _HEADER_DIR = raw_tomogram_dir or segmentation_dir
         voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(_HEADER_DIR))
     log.progress(f'Generating decoy dataset ({method})')
-    config_fields = {
-        key: value
-        for key, value in parameters.items()
-        if key in NativePickerConfig.__dataclass_fields__
-    }
-    config = NativePickerConfig(voxel_size_angstrom=voxel_size_angstrom, **config_fields)
-
+    config = DecoyGeometry(voxel_size_angstrom=voxel_size_angstrom, density_sign=density_sign)
     output_dir.mkdir(parents=True, exist_ok=True)
-
     # everything that changes decoy positions; workers, plots and keep_raw are left out so a run can resume with different resources
     uses_real_data = method != METHOD_SYNTHETIC_NOISE
     fingerprint = {
         'method': method,
         'seed': seed,
-        'picker_config': asdict(config),
+        'density_sign': density_sign,
         'n_decoys_per_tomogram': n_decoys_per_tomogram,
         'min_distance_from_real_angstrom': min_distance_from_real_angstrom,
         'min_shift_angstrom': min_shift_angstrom,
@@ -154,7 +146,7 @@ def run_decoy(
             'n_synthetic_tomograms': n_synthetic_tomograms,
             'synthetic_shape': synthetic_shape,
             'seed': seed,
-            'picker_params': parameters,
+            'density_sign': density_sign,
         },
         inputs=(
             [('particle_set', real_particle_set)] if real_particle_set else []

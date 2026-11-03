@@ -3,7 +3,7 @@ STAMP: decoy dataset generation CLI
 '''
 
 # Import external dependencies
-import json, typer
+import typer
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -46,11 +46,11 @@ def decoy(
         Path | None,
         typer.Option('-r', '--raw-dir', help='Raw tomogram directory. Required unless using --method synthetic-noise.', rich_help_panel = 'Inputs'),
     ] = None,
-    picker_params: Annotated[
-        str,
-        typer.Option('--picker-params', help='JSON of native-picker parameters. Must match the values used for `stamp pick`, or decoys won\'t be drawn from the same candidate pool.', rich_help_panel = 'Inputs'),
-    ] = '{}',
-        n_decoys_per_tomogram: Annotated[
+    density_sign: Annotated[
+        int,
+        typer.Option('--density-sign', help='+1 if the synthetic membrane shell is brighter than background, -1 if darker.', rich_help_panel = 'Synthetic noise decoy'),
+    ] = -1,
+    n_decoys_per_tomogram: Annotated[
         int | None,
         typer.Option('--n-decoys-per-tomogram', help='Decoy positions per noise volume. Required for --method synthetic-noise; shifted places one decoy per real pick.', rich_help_panel = 'Decoy placement'),
     ] = None,
@@ -113,11 +113,8 @@ def decoy(
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data.'''
     log_started('decoy generation')
-    # Validate picker parameters
-    try:
-        parameters = json.loads(picker_params)
-    except json.JSONDecodeError as exc:
-        raise typer.BadParameter(f'--picker-params is not valid JSON: {exc}') from None
+    if density_sign not in (1, -1):
+        raise typer.BadParameter('--density-sign must be 1 or -1.')
 
     # Validate method requirements
     if method in ['rejected-surface', 'shifted']:
@@ -131,7 +128,6 @@ def decoy(
     decoyfuncs.run_decoy(
         output_dir=resolve_output_dir(output_dir, 'decoy'),
         method=method,
-        parameters=parameters,
         real_particle_set=real_particle_set,
         segmentation_dir=segmentation_dir,
         raw_tomogram_dir=raw_tomogram_dir,
@@ -144,6 +140,7 @@ def decoy(
         n_synthetic_tomograms=n_synthetic_tomograms,
         synthetic_shape=synthetic_shape,
         seed=seed,
+        density_sign=density_sign,
         n_workers=n_workers,
         keep_raw=keep_raw,
         make_plots=make_plots,

@@ -11,7 +11,6 @@ from scipy.spatial import cKDTree
 # Import internal STAMP objects
 from stamp.utils.halfset import assign_half_sets
 from stamp.picking.geometry import extract_surface, quaternion_from_reference_to
-from stamp.picking.native import NativePickerConfig
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
@@ -25,6 +24,23 @@ from stamp.utils.parallel import run_parallel, run_parallel_ordered
 METHOD_SHIFTED = 'shifted'
 METHOD_SYNTHETIC_NOISE = 'synthetic-noise'
 DECOY_SOURCE_PREFIX = 'decoy-'
+
+# DecoyGeometry: voxel size and density sign shared by the decoy generators
+@dataclass(frozen=True)
+class DecoyGeometry:
+    voxel_size_angstrom: float
+    # +1 if the synthetic membrane shell is brighter than background, -1 if darker
+    density_sign: int = -1
+
+    def __post_init__(self) -> None:
+        if self.voxel_size_angstrom <= 0:
+            raise StampValidationError('voxel_size_angstrom must be positive.')
+        if self.density_sign not in (1, -1):
+            raise StampValidationError('density_sign must be +1 or -1.')
+
+    # to_voxels: convert a distance in Angstrom to voxels
+    def to_voxels(self, angstrom: float) -> float:
+        return angstrom / self.voxel_size_angstrom
 
 # _extract_surface_for_manifest: worker entry point, loads segmentation and extracts its surface
 def _extract_surface_for_manifest(manifest: TomogramManifest) -> tuple[tuple[int, ...], np.ndarray, np.ndarray]:
@@ -51,7 +67,7 @@ def _load_cached_surface(surfaces_dir: Path | None, tomogram_id: str) -> tuple[t
 def generate_shifted_decoys(
     real_particle_set: ParticleSet,
     manifests: list[TomogramManifest],
-    config: NativePickerConfig,
+    config: DecoyGeometry,
     min_shift_angstrom: float,
     max_shift_angstrom: float,
     min_distance_from_surface_angstrom: float,
@@ -169,7 +185,7 @@ class _SyntheticNoiseJob:
     centre: np.ndarray
     segmentation_dir: Path
     tomogram_dir: Path
-    config: NativePickerConfig
+    config: DecoyGeometry
     seed: int
     n_decoys_per_tomogram: int
     cache_dir: Path | None = None
@@ -228,7 +244,7 @@ def generate_synthetic_noise_decoys(
     n_tomograms: int,
     n_decoys_per_tomogram: int | None,
     output_dir: Path,
-    config: NativePickerConfig,
+    config: DecoyGeometry,
     seed: int,
     *,
     n_workers: int = 1,

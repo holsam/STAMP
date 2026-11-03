@@ -89,7 +89,7 @@ backend = "local"
 method = "kmeans"
 n_clusters = 2
 n_components = 3
-box_angstrom = 300
+box_angstrom = 120
 
 [stage.identify]
 candidates = "candidates.yaml"

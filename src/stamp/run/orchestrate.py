@@ -69,7 +69,6 @@ def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) ->
     run_decoy(
         output_dir=target,
         method=config.decoy.method,
-        parameters={},
         real_particle_set=real_particle_set,
         segmentation_dir=config.run.segmentation_dir,
         raw_tomogram_dir=config.run.raw_tomogram_dir,
