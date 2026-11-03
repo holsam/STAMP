@@ -1,5 +1,5 @@
 '''
-STAMP: small geometry helpers shared by the scene, pick and native stages
+STAMP: small geometry helpers shared by the scene and pick stages
 '''
 
 # Import external dependencies

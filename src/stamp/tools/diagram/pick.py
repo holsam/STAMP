@@ -57,7 +57,7 @@ def plot_consensus(run, ax):
     frame(ax, w.field_px, 'reconcile: keep points both pickers agree on')
     ax.legend(fontsize=6, loc='upper right', framealpha=0.4)
 
-# plot_halfsets: half-set split (whole vesicle to one half) with rejected-surface decoys
+# plot_halfsets: half-set split (whole vesicle to one half) with decoys
 def plot_halfsets(run, ax):
     w = run.w
     draw_vesicles(ax, w.vesicles, colour='0.7', lw=0.6)
@@ -66,7 +66,7 @@ def plot_halfsets(run, ax):
         if sel.any():
             ax.scatter(w.consensus[sel, 0], w.consensus[sel, 1], s=24, c=colour, label=f'half {half + 1} (n={int(sel.sum())})')
     if len(w.decoy_points):
-        ax.scatter(w.decoy_points[:, 0], w.decoy_points[:, 1], s=30, c='0.5', marker='x', label=f'rejected-surface decoys (n={len(w.decoy_points)})')
+        ax.scatter(w.decoy_points[:, 0], w.decoy_points[:, 1], s=30, c='0.5', marker='x', label=f'decoys (n={len(w.decoy_points)})')
     frame(ax, w.field_px, 'half-set split (whole vesicle -> one half) + decoys')
     ax.legend(fontsize=6, loc='upper right', framealpha=0.4)
 

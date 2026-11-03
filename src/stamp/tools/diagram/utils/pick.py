@@ -8,7 +8,7 @@ import numpy as np
 # Import internal STAMP objects
 from stamp.tools.diagram.utils.geometry import UnionFind
 
-# sample_membrane_surface: points walked around each vesicle membrane, as a native picker would score surface positions
+# sample_membrane_surface: points walked around each vesicle membrane, as a picker would score surface positions
 def sample_membrane_surface(vesicles, rng, spacing_deg=5.0, jitter_px=1.5):
     points, owner = [], []
     for index, v in enumerate(vesicles):
