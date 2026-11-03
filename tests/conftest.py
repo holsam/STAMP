@@ -79,7 +79,7 @@ backend = "mock"
 
 [decoy]
 enabled = {str(overrides.get('decoy_enabled', True)).lower()}
-method = "rejected-surface"
+method = "shifted"
 
 [stage.pick]
 picks_files = ["picks.csv"]

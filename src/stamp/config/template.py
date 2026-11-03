@@ -18,8 +18,8 @@ stop_after = ""                             # optional; blank|pick|classify|iden
 
 [decoy]
 enabled = true                              # --no-decoy
-method = "rejected-surface"                 # --method  (rejected-surface|shifted|synthetic-noise)
-n_decoys_per_tomogram = 50
+method = "shifted"                          # --method  (shifted|synthetic-noise)
+n_decoys_per_tomogram = 50                  # synthetic-noise only
 min_distance_from_real_angstrom = 100.0
 min_distance_from_picks_angstrom = 60.0
 min_shift_angstrom = 200.0

@@ -31,9 +31,9 @@ def decoy(
         typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
     ] = Path('.'),
     method: Annotated[
-        Literal['rejected-surface', 'shifted', 'synthetic-noise'],
+        Literal['shifted', 'synthetic-noise'],
         typer.Option('--method', help='Decoy method to use.'),
-    ] = 'rejected-surface',
+    ] = 'shifted',
     real_particle_set: Annotated[
         Path | None,
         typer.Option('--real-particle-set', help='particle_set.json from `stamp pick`. Required unless using --method synthetic-noise.', rich_help_panel = 'Inputs'),
@@ -50,13 +50,13 @@ def decoy(
         str,
         typer.Option('--picker-params', help='JSON of native-picker parameters. Must match the values used for `stamp pick`, or decoys won\'t be drawn from the same candidate pool.', rich_help_panel = 'Inputs'),
     ] = '{}',
-    n_decoys_per_tomogram: Annotated[
+        n_decoys_per_tomogram: Annotated[
         int | None,
-        typer.Option('--n-decoys-per-tomogram', help='Decoy positions per tomogram. Omit for adaptive targeting (matches real pick count per tomogram).', rich_help_panel = 'Decoy placement'),
+        typer.Option('--n-decoys-per-tomogram', help='Decoy positions per noise volume. Required for --method synthetic-noise; shifted places one decoy per real pick.', rich_help_panel = 'Decoy placement'),
     ] = None,
     min_distance_from_real_angstrom: Annotated[
         float,
-        typer.Option('--min-distance-from-real-a', help='Minimum separation from any real pick.', rich_help_panel = 'Rejected surface decoy'),
+        typer.Option('--min-distance-from-real-a', help='Minimum distance from the membrane surface.', rich_help_panel = 'Shifted decoy'),
     ] = 100.0,
     min_distance_from_picks_angstrom: Annotated[
         float,
@@ -122,7 +122,7 @@ def decoy(
     # Validate method requirements
     if method in ['rejected-surface', 'shifted']:
         if any([real_particle_set is None, segmentation_dir is None, raw_tomogram_dir is None]):
-            raise StampPipelineError(f'--method {method} requires --real-particle-set, --segmentation-dir and --raw-tomogram-dir')
+            raise StampPipelineError(f'--method {method} requires --real-particle-set, -s/--seg-dir and -r/--raw--dir')
     else:
         if all([voxel_size_angstrom is None, segmentation_dir is None, raw_tomogram_dir is None]):
             raise StampPipelineError(f'--method {method} requires one of --voxel-size-a, -s/--seg-dir or -r/--raw-dir to be set.')

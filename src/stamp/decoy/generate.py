@@ -10,15 +10,7 @@ from scipy.spatial import cKDTree
 
 # Import internal STAMP objects
 from stamp.utils.halfset import assign_half_sets
-from stamp.picking.geometry import (
-    downsample_points,
-    exclude_near_boundary,
-    extract_surface,
-    quaternion_from_reference_to,
-    robust_normalise,
-    sample_along_normals,
-    score_membrane_faces
-)
+from stamp.picking.geometry import extract_surface, quaternion_from_reference_to
 from stamp.picking.native import NativePickerConfig
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import Particle, ParticleSet
@@ -30,159 +22,9 @@ from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
 # Define constants
-METHOD_REJECTED_SURFACE = 'rejected-surface'
 METHOD_SHIFTED = 'shifted'
 METHOD_SYNTHETIC_NOISE = 'synthetic-noise'
 DECOY_SOURCE_PREFIX = 'decoy-'
-
-# _RejectedSurfaceJob: one manifest's scoring inputs
-@dataclass(frozen=True)
-class _RejectedSurfaceJob:
-    manifest: TomogramManifest
-    config: NativePickerConfig
-
-# _ScoreSurfaceResult: type alias for _score_surface's return shape
-_ScoreSurfaceResult = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-
-# _adaptive_decoy_count: target decoy count derived from a tomogram's real pick count
-def _adaptive_decoy_count(n_real_picks: int, *, target_ratio: float = 1.0) -> int:
-    return max(1, round(n_real_picks * target_ratio))
-
-# _score_one_tomogram: worker entry point, isolates StampValidationError per tomogram for on_error
-def _score_one_tomogram(job: _RejectedSurfaceJob) -> _ScoreSurfaceResult:
-    return _score_surface(job.manifest, job.config)
-
-# _SCORE_FIELDS: names under which _score_surface's six arrays are stored
-_SCORE_FIELDS = ('points', 'normals', 'scores', 'winning_window', 'mean_scores', 'profile_scores')
-
-# _save_cached_scores: checkpoint one tomogram's surface scores
-def _save_cached_scores(scores_dir: Path, tomogram_id: str, result: _ScoreSurfaceResult) -> None:
-    atomic_save_npz(scores_dir / f'{tomogram_id}.npz', **dict(zip(_SCORE_FIELDS, result)))
-
-# _load_cached_scores: one tomogram's checkpointed surface scores, or None when absent or unreadable
-def _load_cached_scores(scores_dir: Path | None, tomogram_id: str) -> _ScoreSurfaceResult | None:
-    if scores_dir is None:
-        return None
-    try:
-        with np.load(scores_dir / f'{tomogram_id}.npz') as cached:
-            return tuple(cached[name] for name in _SCORE_FIELDS)  # type: ignore[return-value]
-    except (OSError, ValueError, KeyError):
-        return None
-
-# generate_rejected_surface_decoys: sample decoys from surface points the native picker scored and rejected
-def generate_rejected_surface_decoys(
-    real_particle_set: ParticleSet,
-    manifests: list[TomogramManifest],
-    config: NativePickerConfig,
-    n_decoys_per_tomogram: int | None,
-    min_distance_from_real_angstrom: float,
-    seed: int,
-    *,
-    n_workers: int = 1,
-    output_dir: Path | None = None,
-) -> ParticleSet | None:
-    log.progress(f'Generating rejected-surface decoys ({n_decoys_per_tomogram or "adaptive n"}/tomogram)')
-    rng = np.random.default_rng(seed)
-    real_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
-    for particle in real_particle_set.particles:
-        real_by_tomogram.setdefault(particle.tomogram_id, []).append(particle.position)
-
-    min_distance_voxels = config.to_voxels(min_distance_from_real_angstrom)
-    raw_picks: list[RawPick] = []
-    cache_dir = output_dir / 'raw' / METHOD_REJECTED_SURFACE if output_dir is not None else None
-    tomogram_ids = []
-
-    scores_dir = cache_dir / 'scores' if cache_dir is not None else None
-
-    # run surface scoring in a pool but keep rng-driven sampling sequential and in manifest order so results stay reproducible for a given seed
-    result_by_tomogram: dict[str, _ScoreSurfaceResult] = {}
-
-    def _on_success(job: _RejectedSurfaceJob, result: _ScoreSurfaceResult) -> None:
-        result_by_tomogram[job.manifest.tomogram_id] = result
-        if scores_dir is not None:
-            _save_cached_scores(scores_dir, job.manifest.tomogram_id, result)
-
-    def _on_error(job: _RejectedSurfaceJob, exc: Exception) -> None:
-        if isinstance(exc, StampValidationError):
-            log.warning(f'{job.manifest.tomogram_id}: skipped ({exc})')
-        else:
-            raise exc
-
-    jobs: list[_RejectedSurfaceJob] = []
-    for manifest in manifests:
-        cached = _load_cached_scores(scores_dir, manifest.tomogram_id)
-        if cached is None:
-            jobs.append(_RejectedSurfaceJob(manifest, config))
-        else:
-            result_by_tomogram[manifest.tomogram_id] = cached
-    if len(jobs) < len(manifests):
-        log.info(f'Resuming rejected-surface decoys: {len(manifests) - len(jobs)} tomogram(s) loaded from checkpoint')
-    run_parallel(jobs, _score_one_tomogram, max_workers=n_workers, label='decoy-surface-score', on_success=_on_success, on_error=_on_error)
-
-    for manifest in manifests:
-        result = result_by_tomogram.get(manifest.tomogram_id)
-        if result is None:
-            continue
-        points_zyx, normals_zyx, scores, winning_window, mean_scores, profile_scores = result
-        if points_zyx.shape[0] == 0:
-            continue
-
-        # only use points the picker rejected
-        rejected = scores < config.effective_n_mad
-        points_zyx, normals_zyx, scores, winning_window, mean_scores, profile_scores = (
-            points_zyx[rejected], normals_zyx[rejected], scores[rejected], winning_window[rejected],
-            mean_scores[rejected], profile_scores[rejected],
-        )
-        if points_zyx.shape[0] == 0:
-            continue
-
-        # convert positions (z, y, x) to position (x, y, z)
-        points_xyz = points_zyx[:, ::-1]
-        real_positions = real_by_tomogram.get(manifest.tomogram_id, [])
-        if real_positions:
-            tree = cKDTree(np.array(real_positions))
-            far_enough = (
-                tree.query(points_xyz, k=1)[0] >= min_distance_voxels
-            )
-            points_xyz, points_zyx, normals_zyx, scores, winning_window, mean_scores, profile_scores = (
-                points_xyz[far_enough], points_zyx[far_enough],
-                normals_zyx[far_enough], scores[far_enough], winning_window[far_enough],
-                mean_scores[far_enough], profile_scores[far_enough],
-            )
-        if points_xyz.shape[0] == 0:
-            continue
-
-        # prefer the most confidently empty positions, but jitter the choice so decoys aren't all clustered in one flat region
-        target = n_decoys_per_tomogram if n_decoys_per_tomogram is not None else _adaptive_decoy_count(len(real_positions))
-        n_to_take = min(target, points_xyz.shape[0])
-        candidate_pool = min(points_xyz.shape[0], n_to_take * 5)
-        lowest_first = np.argsort(scores)[:candidate_pool]
-        chosen = rng.choice(lowest_first, size=n_to_take, replace=False)
-
-        tomogram_picks = [
-            RawPick(
-                tomogram_id=manifest.tomogram_id,
-                position=tuple(float(c) for c in points_xyz[index]),
-                orientation=quaternion_from_reference_to(np.asarray(normals_zyx[index][::-1])),
-                confidence=float(scores[index]),
-                source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_REJECTED_SURFACE}',
-                offset_window_angstrom=config.offset_windows_angstrom[int(winning_window[index])],
-                mean_score=float(mean_scores[index]),
-                profile_score=float(profile_scores[index]),
-            )
-            for index in chosen
-        ]
-        if cache_dir is not None:
-            cache_tomogram_picks(cache_dir, manifest.tomogram_id, tomogram_picks)
-            tomogram_ids.append(manifest.tomogram_id)
-        else:
-            raw_picks.extend(tomogram_picks)
-
-    if cache_dir is not None:
-        raw_picks = load_cached_picks(cache_dir, tomogram_ids)
-    decoys = _finalise(raw_picks, seed, METHOD_REJECTED_SURFACE)
-    log.info(f'Generated {len(raw_picks)} decoy particles')
-    return decoys
 
 # _extract_surface_for_manifest: worker entry point, loads segmentation and extracts its surface
 def _extract_surface_for_manifest(manifest: TomogramManifest) -> tuple[tuple[int, ...], np.ndarray, np.ndarray]:
@@ -416,46 +258,6 @@ def generate_synthetic_noise_decoys(
     decoys = _finalise(raw_picks, seed, METHOD_SYNTHETIC_NOISE)
     log.info(f'Generated {len(raw_picks)} decoy particles')
     return decoys, manifests
-
-# _score_surface: re-run the native picker's surface scoring for one tomogram
-def _score_surface(
-    manifest: TomogramManifest, config: NativePickerConfig
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    segmentation = read_mrc(manifest.segmentation_path)
-    tomogram = read_mrc(manifest.raw_tomogram_path)
-
-    if segmentation.shape != tomogram.shape:
-        raise StampValidationError(f'Segmentation and tomogram shapes disagree for {manifest.tomogram_id}')
-
-    try:
-        vertices, normals = extract_surface(segmentation)
-    except ValueError as exc:
-        log.warning(f'{manifest.tomogram_id}: skipped ({exc})')
-        empty = np.empty((0, 3))
-        return empty, empty, np.empty(0), np.empty(0, dtype=np.int64), np.empty(0), np.empty(0)
-
-    vertices, normals = downsample_points(
-        vertices, normals, config.to_voxels(config.surface_spacing_angstrom)
-    )
-    margin = (
-        config.boundary_margin_angstrom
-        if config.boundary_margin_angstrom is not None
-        else config.max_offset_angstrom
-    )
-    inside = exclude_near_boundary(vertices, segmentation.shape, config.to_voxels(margin))
-    vertices, normals = vertices[inside], normals[inside]
-    if vertices.shape[0] == 0:
-        empty = np.empty((0, 3))
-        return empty, empty, np.empty(0), np.empty(0, dtype=np.int64), np.empty(0), np.empty(0)
-
-    offset_windows_voxels = [(config.to_voxels(offset_min), config.to_voxels(offset_max)) for offset_min, offset_max in config.offset_windows_angstrom]
-    profile_width_voxels = (config.to_voxels(config.profile_width_angstrom) if config.profile_width_angstrom is not None else None)
-
-    points, normals_out, scores, winning_window, _used_fallback, mean_scores, profile_scores = score_membrane_faces(
-        tomogram, vertices, normals, offset_windows_voxels, config.n_samples, config.density_sign,
-        scoring_mode=config.scoring_mode, profile_width_voxels=profile_width_voxels,
-    )
-    return points, normals_out, scores, winning_window, mean_scores, profile_scores
 
 # _finalise: assign decoy particle IDs and half-sets, returning a decoy ParticleSet or None if no decoys were generated
 def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet | None:

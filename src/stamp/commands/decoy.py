@@ -10,10 +10,8 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.backends.base import ToolCommand
 from stamp.decoy.generate import (
-    METHOD_REJECTED_SURFACE,
     METHOD_SHIFTED,
     METHOD_SYNTHETIC_NOISE,
-    generate_rejected_surface_decoys,
     generate_shifted_decoys,
     generate_synthetic_noise_decoys,
 )
@@ -28,7 +26,7 @@ from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 
 # METHODS: decoy generation methods
-METHODS = (METHOD_REJECTED_SURFACE, METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE)
+METHODS = (METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE)
 
 # run_decoy: generate a decoy dataset to run through STAMP alongside real data
 def run_decoy(
@@ -113,34 +111,21 @@ def run_decoy(
         manifests = load_tomogram_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
         if not manifests:
             raise StampPipelineError('No matched segmentation/tomogram pairs found')
-
-        if method == METHOD_REJECTED_SURFACE:
-            decoy_set = generate_rejected_surface_decoys(
-                real_particle_set=real_set,
-                manifests=manifests,
-                config=config,
-                n_decoys_per_tomogram=n_decoys_per_tomogram,
-                min_distance_from_real_angstrom=min_distance_from_real_angstrom,
-                seed=seed,
-                n_workers=n_workers,
-                output_dir=output_dir,
-            )
-        else:
-            decoy_set = generate_shifted_decoys(
-                real_particle_set=real_set,
-                manifests=manifests,
-                config=config,
-                min_shift_angstrom=min_shift_angstrom,
-                max_shift_angstrom=max_shift_angstrom,
-                min_distance_from_surface_angstrom=min_distance_from_real_angstrom,
-                min_pick_distance=min_distance_from_picks_angstrom,
-                seed=seed,
-                n_workers=n_workers,
-                output_dir=output_dir,
-            )
+        decoy_set = generate_shifted_decoys(
+            real_particle_set=real_set,
+            manifests=manifests,
+            config=config,
+            min_shift_angstrom=min_shift_angstrom,
+            max_shift_angstrom=max_shift_angstrom,
+            min_distance_from_surface_angstrom=min_distance_from_real_angstrom,
+            min_pick_distance=min_distance_from_picks_angstrom,
+            seed=seed,
+            n_workers=n_workers,
+            output_dir=output_dir,
+        )
 
     if decoy_set is None or not decoy_set.particles:
-        raise StampPipelineError('No decoy positions generated. For rejected-surface, check that --min-distance-from-real-angstrom isn\'t excluding the whole surface; for shifted, check that the shift range fits inside the volume.')
+        raise StampPipelineError('No decoy positions generated. For shifted, check that the shift range fits inside the volume.')
 
     if method != METHOD_SYNTHETIC_NOISE and real_particle_set is not None:
         assert_comparable(real_set, decoy_set)

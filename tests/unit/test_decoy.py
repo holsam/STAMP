@@ -7,18 +7,13 @@ import mrcfile, numpy as np, pytest
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.decoy.generate import (
-    _adaptive_decoy_count,
-    generate_rejected_surface_decoys,
-    generate_shifted_decoys,
-    generate_synthetic_noise_decoys,
-)
+from stamp.decoy.generate import generate_shifted_decoys, generate_synthetic_noise_decoys
 from stamp.decoy.validate import (
     assert_comparable,
     check_manifest_purity,
     is_decoy_particle_set,
 )
-from stamp.picking.native import NativePickerConfig, pick_tomogram
+from stamp.picking.native import NativePickerConfig
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import HalfSet, Particle, ParticleSet
 from stamp.utils.errors import StampPipelineError, StampValidationError
@@ -49,87 +44,31 @@ def _write_vesicle_pair(tmp_path: Path, tomogram_id: str = 'tomo000') -> Tomogra
         voxel_size_angstrom=10.0,
     )
 
-# _real_set_from_picker: run the native picker over a manifest and wrap its picks in a ParticleSet
-def _real_set_from_picker(manifest: TomogramManifest, config: NativePickerConfig) -> ParticleSet:
-    picks = pick_tomogram(
-        manifest.segmentation_path, manifest.raw_tomogram_path, manifest.tomogram_id, config
-    )
+# _real_set: six fixed real particles inside the vesicle, 14 voxels from its centre
+def _real_set(tomogram_id: str = 'tomo000') -> ParticleSet:
+    positions = ((30, 30, 44), (30, 30, 16), (30, 44, 30), (30, 16, 30), (44, 30, 30), (16, 30, 30))
     return ParticleSet(
         particles=[
             Particle(
                 particle_id=f'p{index:06d}',
-                tomogram_id=pick.tomogram_id,
-                position=pick.position,
-                orientation=pick.orientation,
-                source_picker=pick.source_picker,
-                confidence=pick.confidence,
+                tomogram_id=tomogram_id,
+                position=tuple(float(c) for c in position),
+                source_picker='mine',
                 half_set=HalfSet.A,
             )
-            for index, pick in enumerate(picks)
+            for index, position in enumerate(positions)
         ],
         consensus_rule='union',
-        contributing_pickers=['stamp-native'],
+        contributing_pickers=['mine'],
     )
 
 # TestDecoyGenerate: class containing unit tests for decoy/generate.py
 class TestDecoyGenerate:
-    def test_rejected_surface_decoys_avoid_real_picks(self, tmp_path: Path) -> None:
-        '''Every decoy is kept clear of real picks'''
-        manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
-        real_set = _real_set_from_picker(manifest, config)
-        assert real_set.particles, 'fixture produced no real picks'
-
-        decoy_set = generate_rejected_surface_decoys(
-            real_particle_set=real_set,
-            manifests=[manifest],
-            config=config,
-            n_decoys_per_tomogram=10,
-            min_distance_from_real_angstrom=100.0,
-            seed=1,
-        )
-
-        assert decoy_set.particles
-        real_positions = np.array([p.position for p in real_set.particles])
-        for particle in decoy_set.particles:
-            distances = np.linalg.norm(real_positions - np.array(particle.position), axis=1)
-            assert distances.min() >= 10.0  # 100 Angstrom at 10 A/voxel
-            assert particle.source_picker == 'decoy-rejected-surface'
-
-    def test_rejected_surface_decoys_score_below_threshold(self, tmp_path: Path) -> None:
-        '''Decoys must come from points the picker rejected'''
-        manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
-        real_set = _real_set_from_picker(manifest, config)
-
-        decoy_set = generate_rejected_surface_decoys(
-            real_particle_set=real_set, manifests=[manifest], config=config,
-            n_decoys_per_tomogram=10, min_distance_from_real_angstrom=100.0, seed=1,
-        )
-        for particle in decoy_set.particles:
-            assert particle.confidence is not None
-            assert particle.confidence < config.n_mad
-
-    def test_rejected_surface_decoys_are_deterministic(self, tmp_path: Path) -> None:
-        '''Same seed and parameters reproduce the same decoys'''
-        manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
-        real_set = _real_set_from_picker(manifest, config)
-
-        kwargs = dict(
-            real_particle_set=real_set, manifests=[manifest], config=config,
-            n_decoys_per_tomogram=10, min_distance_from_real_angstrom=100.0, seed=7,
-        )
-        first = generate_rejected_surface_decoys(**kwargs)
-        second = generate_rejected_surface_decoys(**kwargs)
-        assert [p.position for p in first.particles] == [p.position for p in second.particles]
-
     def test_shifted_decoys_stay_away_from_surface(self, tmp_path: Path) -> None:
         '''Shifted decoys stay inside the volume and off the surface'''
         manifest = _write_vesicle_pair(tmp_path)
         config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
-        real_set = _real_set_from_picker(manifest, config)
-
+        real_set = _real_set()
         decoy_set = generate_shifted_decoys(
             real_particle_set=real_set, manifests=[manifest], config=config,
             min_shift_angstrom=100.0, max_shift_angstrom=200.0,
@@ -144,7 +83,7 @@ class TestDecoyGenerate:
         '''Shifted decoys have defined orientation.'''
         manifest = _write_vesicle_pair(tmp_path)
         config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
-        real_set = _real_set_from_picker(manifest, config)
+        real_set = _real_set()
         decoy_set = generate_shifted_decoys(
             real_particle_set=real_set, manifests=[manifest], config=config,
             min_shift_angstrom=100.0, max_shift_angstrom=200.0,
@@ -152,6 +91,19 @@ class TestDecoyGenerate:
         )
         for particle in decoy_set.particles:
             assert particle.orientation is not None
+
+    def test_shifted_decoys_are_deterministic(self, tmp_path: Path) -> None:
+        '''Same seed and parameters reproduce the same decoys'''
+        manifest = _write_vesicle_pair(tmp_path)
+        config = NativePickerConfig(voxel_size_angstrom=10.0)
+        kwargs = dict(
+            real_particle_set=_real_set(), manifests=[manifest], config=config,
+            min_shift_angstrom=100.0, max_shift_angstrom=200.0,
+            min_distance_from_surface_angstrom=50.0, min_pick_distance=60.0, seed=7,
+        )
+        first = generate_shifted_decoys(**kwargs)
+        second = generate_shifted_decoys(**kwargs)
+        assert [p.position for p in first.particles] == [p.position for p in second.particles]
 
     def test_synthetic_noise_writes_matched_pairs(self, tmp_path: Path) -> None:
         '''Synthetic-noise writes matched segmentation/tomogram pairs'''
@@ -178,43 +130,10 @@ class TestDecoyGenerate:
         )
         assert all(p.orientation is not None for p in decoy_set.particles)
 
-    def test__adaptive_decoy_count_matches_real_picks(self):
-        '''Default ratio targets the same count as real picks.'''
-        assert _adaptive_decoy_count(20) == 20
-        assert _adaptive_decoy_count(7) == 7
-
-    def test__adaptive_decoy_count_floors_at_one(self):
-        '''Zero picks still requests at least one decoy.'''
-        assert _adaptive_decoy_count(0) >= 1
-
-    def test__adaptive_decoy_count_respects_custom_ratio(self):
-        '''target_ratio scales the target decoys returned.'''
-        assert _adaptive_decoy_count(10, target_ratio=0.5) == 5
-
-    def test_generate_rejected_surface_decoys_adaptive_default(self, tmp_path):
-        '''Derive count from real picks per tomogram.'''
-        manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
-        real_set = _real_set_from_picker(manifest, config)
-        assert real_set.particles, 'fixture produced no real picks'
-
-        decoy_set = generate_rejected_surface_decoys(
-            real_particle_set=real_set,
-            manifests=[manifest],
-            config=config,
-            n_decoys_per_tomogram=None,
-            min_distance_from_real_angstrom=100.0,
-            seed=1,
-        )
-        assert decoy_set is not None
-        assert len(decoy_set.particles) <= len(real_set.particles)
-
     def test_generate_synthetic_noise_decoys_requires_explicit_count(self, tmp_path):
         '''n_decoys_per_tomogram=None raises for synthetic noise decoys.'''
-        manifest = _write_vesicle_pair(tmp_path)
-        config = NativePickerConfig(voxel_size_angstrom=10.0, n_mad=2.5, offset_windows_angstrom=((20.0, 80.0),))
-        real_set = _real_set_from_picker(manifest, config)
-        assert real_set.particles, 'fixture produced no real picks'
+        config = NativePickerConfig(voxel_size_angstrom=10.0)
+        real_set = _real_set()
         with pytest.raises(StampValidationError):
             generate_synthetic_noise_decoys(
                 tomogram_shape=(40, 40, 40),
