@@ -41,16 +41,6 @@ def _canned_picks_for(_name: str) -> dict:
 
 # MOCK_ADAPTERS: instantiate a MockAdapter class for each external tool
 MOCK_ADAPTERS: dict[str, MockAdapter] = {
-    'stamp-native': MockAdapter(
-        'stamp-native',
-        stage='pick',
-        mac_compatible=True,
-        requires_gpu=False,
-        automatable=True,
-        batches_natively=True,
-        runs_in_process=False,
-        canned_parsed=_canned_picks_for('stamp-native'),
-    ),
     'membrain-pick': MockAdapter(
         'membrain-pick',
         stage='pick',
