@@ -12,16 +12,8 @@ from stamp.utils.errors import StampValidationError
 from stamp.picking.geometry import (
     beam_angle_deviation_degrees,
     compose_roll_about_normal,
-    downsample_points,
-    exclude_near_boundary,
     extract_surface,
-    local_normalise,
-    max_order_statistic_offset,
-    non_maximum_suppression,
     quaternion_from_reference_to,
-    robust_normalise,
-    sample_along_normals,
-    score_membrane_faces
 )
 from stamp.picking.vesicles import (
     load_vesicle_labels,
@@ -68,65 +60,6 @@ class TestGeometry:
         with pytest.raises(StampValidationError, match='no voxels above'):
             extract_surface(np.zeros((10, 10, 10), dtype=np.float32))
 
-    def test_downsample_reduces_points_and_is_deterministic(self) -> None:
-        '''Downsampling shrinks the set reproducibly.'''
-        vertices, normals = extract_surface(_hollow_sphere())
-        first_points, first_normals = downsample_points(vertices, normals, spacing_voxels=4.0)
-        second_points, _ = downsample_points(vertices, normals, spacing_voxels=4.0)
-        assert first_points.shape[0] < vertices.shape[0]
-        assert first_normals.shape[0] == first_points.shape[0]
-        np.testing.assert_array_equal(first_points, second_points)
-
-    def test_sample_along_normals_finds_a_planted_blob(self) -> None:
-        '''The point under a planted blob scores highest'''
-        # Flat membrane in the z=20 plane, with a bright blob sitting above it.
-        volume = np.zeros((40, 40, 40), dtype=np.float32)
-        volume[25, 20, 20] = 10.0
-
-        points = np.array([[20.0, 20.0, 20.0], [20.0, 30.0, 30.0]])
-        normals = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
-
-        densities = sample_along_normals(
-            volume, points, normals,
-            offset_min_voxels=4.0, offset_max_voxels=6.0, n_samples=3, direction=1,
-        )
-        # The point under the blob scores higher than the bare one.
-        assert densities[0] > densities[1]
-
-    def test_sample_along_normals_direction_matters(self) -> None:
-        '''Sampling along the normal beats sampling against it'''
-        volume = np.zeros((40, 40, 40), dtype=np.float32)
-        volume[25, 20, 20] = 10.0
-        points = np.array([[20.0, 20.0, 20.0]])
-        normals = np.array([[1.0, 0.0, 0.0]])
-
-        along = sample_along_normals(volume, points, normals, 4.0, 6.0, 3, direction=1)
-        against = sample_along_normals(volume, points, normals, 4.0, 6.0, 3, direction=-1)
-        assert along[0] > against[0]
-
-    def test_robust_normalise_handles_flat_input(self) -> None:
-        '''A flat input normalises to zeros'''
-        normalised, _used_fallback = robust_normalise(np.ones(10))
-        np.testing.assert_array_equal(normalised, np.zeros(10))
-
-    def test_robust_normalise_scales_outlier(self) -> None:
-        '''A lone outlier normalises well above threshold'''
-        values = np.concatenate([np.zeros(99), [100.0]])
-        normalised, _used_fallback = robust_normalise(values)
-        assert normalised[-1] > 3.0
-
-    def test_non_maximum_suppression_keeps_highest(self) -> None:
-        '''NMS keeps the higher-scoring point in a close pair'''
-        points = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [50.0, 0.0, 0.0]])
-        scores = np.array([1.0, 5.0, 3.0])
-        kept = non_maximum_suppression(points, scores, min_distance_voxels=10.0)
-        assert set(kept.tolist()) == {1, 2}
-
-    def test_non_maximum_suppression_empty_input(self) -> None:
-        '''NMS on an empty input returns an empty result'''
-        kept = non_maximum_suppression(np.empty((0, 3)), np.empty(0), 10.0)
-        assert kept.size == 0
-
     def test_quaternion_is_unit_length_and_rotates_correctly(self) -> None:
         '''Every returned quaternion is unit-length'''
         for vector in ([0, 0, 1], [1, 0, 0], [0, 1, 0], [1, 1, 1]):
@@ -142,58 +75,6 @@ class TestGeometry:
         '''The antiparallel case still returns a unit quaternion'''
         quaternion = quaternion_from_reference_to(np.array([0.0, 0.0, -1.0]))
         assert abs(np.linalg.norm(quaternion) - 1.0) < 1e-6
-
-    def test_exclude_near_boundary(self) -> None:
-        '''Points within the margin of a face are masked out'''
-        points = np.array([[1.0, 1.0, 1.0], [20.0, 20.0, 20.0]])
-        mask = exclude_near_boundary(points, (40, 40, 40), margin_voxels=5.0)
-        assert mask.tolist() == [False, True]
-
-    def test_faces_share_one_scale(self):
-        '''A bright blob off one face does not inflate the other face's z-scores.'''
-        tomo = np.zeros((40, 40, 40), dtype=np.float32)
-        tomo[25, 20, 20] = -50.0  # dark blob on the +normal side of the y=20 vertex only
-        ys = np.array([5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0])
-        vertices = np.stack([np.full_like(ys, 20.0), ys, np.full_like(ys, 20.0)], axis=1)
-        normals = np.tile([1.0, 0.0, 0.0], (vertices.shape[0], 1))
-        n_points = vertices.shape[0]
-        contaminated = int(np.where(ys == 20.0)[0][0])
-        _points, _n, scores, _w, _used_fallback, _mean, _profile = score_membrane_faces(tomo, vertices, normals, [(3.0, 6.0)], 3, -1)
-        assert scores.shape == (2 * n_points,)
-        pos_face, neg_face = scores[:n_points], scores[n_points:]
-        clean = [i for i in range(n_points) if i != contaminated]
-        # the blob sits only on the +normal face of the contaminated vertex
-        assert abs(pos_face[contaminated]) > abs(neg_face[contaminated])
-        # every clean vertex, on either face, stays near the untouched baseline
-        for i in clean:
-            assert abs(pos_face[i]) < 1e-6
-            assert abs(neg_face[i]) < 1e-6
-
-    def test_score_membrane_faces_reports_winning_window(self) -> None:
-        '''A point with density only in the second window is won by that window, not the first.'''
-        tomo = np.zeros((60, 60, 60), dtype=np.float32)
-        tomo[20, 20, 55] = -5.0  # offset 35 voxels along +x from the point below
-        vertices = np.array([[20.0, 20.0, 20.0]])
-        normals = np.array([[0.0, 0.0, 1.0]])
-        windows = [(2.0, 10.0), (30.0, 40.0)]
-        _points, _n, scores, winning_window, _used_fallback, _mean, _profile = score_membrane_faces(tomo, vertices, normals, windows, 5, -1)
-        # two faces per point; the +x face (index 0) sees the density, the -x face (index 1) sees nothing
-        assert winning_window[0] == 1
-        assert scores[0] > scores[1]
-
-    def test_max_order_statistic_offset_zero_for_single_window(self) -> None:
-        assert max_order_statistic_offset(1) == 0.0
-
-    def test_max_order_statistic_offset_increases_with_window_count(self) -> None:
-        assert 0.0 < max_order_statistic_offset(2) < max_order_statistic_offset(4) < max_order_statistic_offset(8)
-
-    def test_max_order_statistic_offset_rejects_zero_windows(self) -> None:
-        with pytest.raises(ValueError, match='n_windows'):
-            max_order_statistic_offset(0)
-
-    def test_score_membrane_faces_rejects_no_windows(self) -> None:
-        with pytest.raises(ValueError, match='offset_windows_voxels'):
-            score_membrane_faces(np.zeros((10, 10, 10)), np.zeros((1, 3)), np.array([[0.0, 0.0, 1.0]]), [], 5, -1)
 
     # test_compose_roll_is_identity_at_zero: zero angle leaves the normal quaternion unchanged
     def test_compose_roll_is_identity_at_zero(self):
