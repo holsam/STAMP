@@ -61,10 +61,11 @@ File | Covers
 `test_classify.py` |  Extraction, coordinate-convention correctness, rotational/azimuthal features, clustering, class averages
 `test_cli.py` | Typer app wiring
 `test_config.py` | Configuration management functions (`init_config`, `edit_config`, `show_config`), `_resolve_config_path`
-`test_decoy.py` | Decoy generation methods (`rejected-surface`, `shifted`, `synthetic-noise`), `assert_comparable`
+`test_decoy.py` | Decoy generation methods (`shifted`, `synthetic-noise`), `assert_comparable`
 `test_filter.py` | Particle set filter state functions
 `test_identify.py` | Candidate panel loading, fitting, ranking, decoy-control evaluation
-`test_picking.py` | Native picker geometry: surface extraction, ray sampling, scoring, normalisation, NMS, quaternion orientation, coordinate-order correctness
+`test_importers.py` | Pick file readers (CSV, STAR, JSON), tomogram id mapping, orientation inference
+`test_picking.py` | Surface extraction, quaternion orientation, beam angle, consensus reconciliation, vesicle labelling
 `test_refine.py` | Half-set splitting/guards, FSC computation, refine output tree
 `test_run.py` | Overall orchestration: stage sequencing, resume/`--force`/`--from`, decoy track wiring
 `test_schemas.py` | Pydantic model validation (`Particle`, `RawPick`, `RunConfig`, etc.), including rejection of bad input
