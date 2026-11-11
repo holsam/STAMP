@@ -43,8 +43,8 @@ class PlotSettings(_Strict):
 # DecoySettings: the [decoy] table
 class DecoySettings(_Strict):
     enabled: bool = True
-    method: Literal['rejected-surface', 'shifted', 'synthetic-noise'] = 'rejected-surface'
-    n_decoys_per_tomogram: int | None = None    # None = adaptive (target same N as real picks)
+    method: Literal['shifted', 'synthetic-noise'] = 'shifted'
+    n_decoys_per_tomogram: int | None = None    # synthetic-noise only
     min_distance_from_real_angstrom: float = 100.0
     min_distance_from_picks_angstrom: float = 60.0
     min_shift_angstrom: float = 200.0
@@ -56,11 +56,13 @@ class DecoySettings(_Strict):
 
 # Per-stage tables mirror each command's options
 class PickStage(_Strict):
-    pickers: list[str] = ['stamp-native']
+    picks_files: list[Path]
+    picker_names: list[str] | None = None  # defaults to file stems
     consensus_rule: Literal['union', 'intersection'] = 'intersection'
     distance_threshold: float = 15.0
     half_set_seed: int = 0
-    backend: Literal['local', 'mock', 'cluster'] | None = None
+    max_surface_distance_angstrom: float = 300.0
+    backend: Literal['local', 'mock', 'cluster'] | None = None  # inert for pick, kept so run.backend inheritance is uniform
     n_workers: int = 1
     keep_raw: bool = False
 
@@ -97,7 +99,7 @@ class RefineStage(_Strict):
 
 # StageConfigs: the [stage.*] tables
 class StageConfigs(_Strict):
-    pick: PickStage = PickStage()
+    pick: PickStage
     classify: ClassifyStage = ClassifyStage()
     identify: IdentifyStage
     refine: RefineStage = RefineStage()
@@ -130,6 +132,7 @@ def load_run_config(path: Path) -> RunConfig:
     config.stage.identify.candidates = (base / config.stage.identify.candidates).resolve()
     if config.stage.refine.mask is not None:
         config.stage.refine.mask = (base / config.stage.refine.mask).resolve()
+    config.stage.pick.picks_files = [(base / path).resolve() for path in config.stage.pick.picks_files]
     if config.stage.pick.backend is None:
         log.debug(f'stage.pick.backend not set, inheriting run.backend={config.run.backend!r}')
         config.stage.pick.backend = config.run.backend

@@ -51,21 +51,21 @@ If a command's inputs or parameters differ, any old partial output is discarded 
 ## `stamp pick`
 
 ```
-stamp pick <pickers> -s SEG_DIR -r RAW_DIR [options]
+stamp pick <picks_files...> -s SEG_DIR -r RAW_DIR [options]
 ```
 
 Argument/Option | Default | Use
 -- | -- | --
-`pickers` (positional) | *n/a (required)* | Comma-separated names of pickers to use
+`picks_files` | *n/a (required)* | One or more files containing picks (`.csv`, `.star`, `.json`), one file from each picker
 `-s, --seg-dir` | *n/a (required)* | Directory containing segmented MRC files
 `-r, --raw-dir` | *n/a (required)* | Directory of raw tomogram MRCs
 `-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/pick`)
 `--voxel-size-a` | `None` *(read from MRC file header)* | Voxel size in Å
-`--picker-params` | `'{}'` | JSON of per-picker parameters, e.g. `'{"stamp-native": {"n_mad": 3.5}}'`
+`--name` | `None` *(derived from file stems)* |	Picker name for each file, in order (repeatable)
 `--consensus-rule` | `union` | Rule to use for reconciling picks (`union` or `intersection`)
 `--distance-threshold` | `15.0` | Voxel distance within which picks are merged
+`--max-surface-distance-a` | `300.0` | Distance (Å) from a segmentation surface that a pick can be before STAMP no longer infers its orientation
 `--half-set-seed` | `0` | Seed for half-set assignment
-`--backend` | `local` | Backend to use for picking (`local` or `mock`)
 `--plots/--no-plots` | `--plots` | Write consensus-pick position plots
 `--pick-plot-style` | `segmented` | Style of consensus-pick position plots (`segmented` or `none`)
 `--plot-format` | `tiff` | Consensus-pick position plot file format (`png` or `jpg` or `tiff` or `svg`)
@@ -73,9 +73,21 @@ Argument/Option | Default | Use
 `--pick-plot-3d/--no-pick-plot-3d` | `--no-pick-plot-3d` | Write a static 3D pick visualisation per tomogram
 `--max-beam-angle-deviation` | `None` | Drop particles whose normal deviates from the beam-orthogonal plane by more than this many degrees
 `--vesicle-labels-mrc` | `None` | Path to an MRC file produced by EValuator's `label` command, or a directory to be matched by filename stem
-`--normalise-per-vesicle` | `False` | Normalise `stamp-native` scores per vesicle instead of per tomogram
-`-n, --n-processes` | `1` | Processes to use for the `stamp-native` picker (1 = sequential)
+`-n, --n-processes` | `1` | Processes to use for reconciliation, vesicle summary and plots
 `--keep-raw` | `False` | Keep the raw intermediate output instead of archiving it to `raw.tar.gz`
+
+### Picks file formats
+Pick supports pick files in the following formats:
+- **CSV** (`.csv`). Requires data to follow header format: `tomogram_id,x,y,z[,confidence][,qw,qx,qy,qz]`
+- **RELION STAR** (`.star`). Requires columns `rlnTomoName`, `rlnCoordinateX`, `rlnCoordinateY`, `rlnCoordinateZ` in pixels, plus optional `rlnAutopickFigureOfMerit` as confidence. RELION5 centred-Angstrom columns are not yet supported.
+-- **JSON / JSONL** (`.json`, `.jsonl`). Requires picks to be consistent with STAMPs internal raw pick class (`tomogram_id`, `position`, optional `orientation`, `confidence`).
+
+For each file, positions must be voxels in (x, y, z) order, at the same voxel size of the tomograms in `--raw-dir`. `tomogram_id` must equal the segmentation filename stem; a trailing `_segmented` on either side is ignored. Unknown ids will raise an error.
+
+### Orientation inference
+
+Where a quaternion is not provided for a pick, `stamp pick` will find the segmentation surface and normal pointing towards the pick, storing the quaternion after rotating +z onto it. It will also fill `beam_angle_deviation_degrees` and, with `--vesicle-labels-mrc`, `vesicle_id`. Quaternions supplied in the pick file are kept as is. Picks further than `--max-surface-distance-a` from any surface are left without an orientation, with a warning giving the count.
+
 
 <br>
 
@@ -89,13 +101,13 @@ Option | Default | Use
 -- | -- | --
 `--voxel-size-a` | *n/a (required)* | Voxel size in Å
 `-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/decoy`)
-`--method` | `rejected-surface` | Decoy generation method to use (`rejected-surface` or `shifted` or `synthetic-noise`) *[(see below)](#stamp-decoy-methods)*
+`--method` | `shifted` | Decoy generation method to use (`shifted` or `synthetic-noise`) *[(see below)](#stamp-decoy-methods)*
 `--real-particle-set` | *n/a (required unless `--method synthetic-noise`)* | Path to `particle_set.json` from `stamp pick`
 `-s, --seg-dir` | *n/a (required unless `--method synthetic-noise`)* | Directory containing segmented MRC files
 `-r, --raw-dir` | *n/a (required unless `--method synthetic-noise`)* | Directory of raw tomogram MRCs
-`--picker-params` | `'{}'` | JSON of native-picker parameters (must match the values used for `stamp pick` so decoys are drawn from the same candidate pool)
-`--n-decoys-per-tomogram` | `None` *(adaptive: matches the real pick count per tomogram)* | Number of decoy positions to pick per tomogram (required for `--method synthetic-noise`)
-`--min-distance-from-real-a` | `100.0` | Minimum distance in Å from a real pick for `--method rejected-surface`, or from the membrane surface for `--method shifted`
+`--density-sign` | `-1` | `+1` if the synthetic membrane shell is brighter than background, `-1` if darker (`--method synthetic-noise` only)
+`--n-decoys-per-tomogram` | `None` *(adaptive: matches the real pick count per tomogram)* | Decoy positions per noise volume (required for `--method synthetic-noise`), shifted places one decoy per real pick
+`--min-distance-from-real-a` | `100.0` | Minimum distance in Å from the membrane surface for `--method shifted`
 `--min-pick-distance-a` | `60.0` | Minimum distance from a real pick in Å for `--method shifted`
 `--min-shift-a` | `200.0` | Minimum displacement in Å for `--method shifted`
 `--max-shift-a` | `600.0` | Maximum displacement in Å for `--method shifted`
@@ -112,12 +124,11 @@ Option | Default | Use
 `--keep-raw` | `False` | Keep the raw intermediate output instead of archiving it to `raw.tar.gz`
 
 ### `stamp decoy` methods
-`stamp decoy` provides three methods for generating decoy picks:
+`stamp decoy` provides two methods for generating decoy picks:
 
 Method | What it controls for | Notes
 -- | -- | --
-`rejected-surface` (default) | Structure emerging from real membrane positions with no particle | Reuses pick-stage geometry
-`shifted` | Structure emerging from the tomogram at large, independent of the membrane |
+`shifted` (default) | Structure emerging from the tomogram at large, independent of the membrane |
 `synthetic-noise` | Structure emerging from pure noise |
 
 <br>

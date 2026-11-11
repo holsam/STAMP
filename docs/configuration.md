@@ -17,7 +17,7 @@ stop_after = "refine"                           # pick | classify | identify | r
 
 [decoy]
 enabled = true
-method = "rejected-surface"                     # rejected-surface | shifted | synthetic-noise
+method = "shifted"                              # shifted | synthetic-noise
 # n_decoys_per_tomogram = 50                    # omit for adaptive n
 min_distance_from_real_angstrom = 100.0
 min_distance_from_picks_angstrom = 60.0
@@ -35,7 +35,7 @@ pick_zstack_movie = false
 pick_plot_3d = false
 
 [stage.pick]
-pickers = ["stamp-native"]
+picks_files = ["data/picks.csv"]
 consensus_rule = "intersection"                 # union | intersection
 distance_threshold = 15.0
 half_set_seed = 0
@@ -95,7 +95,7 @@ Key | Type | Default
 Key | Type | Default
 -- | -- | --
 `enabled` | bool | `True`
-`method` | `rejected-surface`\|`shifted`\|`synthetic-noise` | `rejected-surface`
+`method` | `shifted`\|`synthetic-noise` | `shifted`
 `n_decoys_per_tomogram` | int\|`None` | `None`
 `min_distance_from_real_angstrom` | float | `100.0`
 `min_distance_from_picks_angstrom` | float | `60.0`
@@ -119,11 +119,11 @@ Key | Type | Default
 
 Key | Type | Default
 -- | -- | --
-`pickers` | `list[str]` | `['stamp-native']`
+`picks_files` | `list[Path]` | *n/a (required)*
 `consensus_rule` | `union`\|`intersection` | `intersection`
 `distance_threshold` | float | `15.0`
 `half_set_seed` | int | `0`
-`backend` | `local`\|`mock`\|`cluster`\|`None` | `None` (inherits `[run].backend`)
+`backend` | `local`\|`mock`\|`cluster`\|`None` | `None` (inherits `[run].backend`), has no effect on picking
 `n_workers` | int | `1`
 
 ### `[stage.classify]`

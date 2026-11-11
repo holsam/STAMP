@@ -31,6 +31,7 @@ def _make_dataset(root: Path) -> Path:
     seg.mkdir(parents=True)
     tomo.mkdir(parents=True)
     rng = np.random.default_rng(0)
+    picks = ['tomogram_id,x,y,z']
     for index in range(12):
         shape = (60, 60, 60)
         segmentation = np.zeros(shape, dtype=np.float32)
@@ -38,17 +39,19 @@ def _make_dataset(root: Path) -> Path:
         volume = rng.normal(0, 1, shape).astype(np.float32)
         # several large and small blobs, spread out, so each picker/cluster has enough
         # particles to survive the half-A/half-B split during refine
-        # keep blobs clear of the membrane plane itself (index 30), within the picker's
-        # 20-80 Angstrom (~1.5-6 voxel) offset window on one side of the surface
-        # picker default is density_sign=-1 (dark-protein contrast), so blobs are dips
+        # blobs sit clear of the membrane plane (x=30); picks.csv points at their centres
         for x, y in ((13, 13), (13, 35), (35, 13), (35, 35)):
             volume[x:x + 5, y:y + 5, 33:38] -= 6.0   # large blob
         for x, y in ((18, 28), (28, 18), (28, 38), (38, 28)):
             volume[x:x + 3, y:y + 3, 33:35] -= 4.0   # small blob
+        # picks at the planted blob centres, (x, y, z); blobs index as volume[z, y, x]
+        picks += [f't{index:02d},35,{y + 2},{x + 2}' for x, y in ((13, 13), (13, 35), (35, 13), (35, 35))]
+        picks += [f't{index:02d},33.5,{y + 1},{x + 1}' for x, y in ((18, 28), (28, 18), (28, 38), (38, 28))]
         for directory, data in ((seg, segmentation), (tomo, volume)):
             with mrcfile.new(directory / f't{index:02d}.mrc', overwrite=True) as mrc:
                 mrc.set_data(data)
                 mrc.voxel_size = 13.48
+    (root / 'picks.csv').write_text('\n'.join(picks) + '\n')
     (root / 'small.pdb').write_text('ATOM      1  CA  ALA A   1      0.000   0.000   0.000  1.00  0.00           C\n')
     (root / 'large.pdb').write_text(
         '\n'.join(
@@ -76,16 +79,17 @@ backend = "mock"
 
 [decoy]
 enabled = {str(overrides.get('decoy_enabled', True)).lower()}
-method = "rejected-surface"
+method = "shifted"
 
 [stage.pick]
+picks_files = ["picks.csv"]
 backend = "local"
 
 [stage.classify]
 method = "kmeans"
 n_clusters = 2
 n_components = 3
-box_angstrom = 300
+box_angstrom = 120
 
 [stage.identify]
 candidates = "candidates.yaml"

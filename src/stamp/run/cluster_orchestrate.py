@@ -27,16 +27,11 @@ class ClusterJob:
     depends_on: list[str] = field(default_factory=list)
     requires_gpu: bool = False
 
-# _pick_needs_gpu: True if any configured picker adapter wants a GPU
-def _pick_needs_gpu(config) -> bool:
-    from stamp.commands.pick import REAL_ADAPTERS
-    return any(getattr(REAL_ADAPTERS.get(name), 'requires_gpu', False) for name in config.stage.pick.pickers)
-
 # plan_pipeline_jobs: planned pipeline, skipping stages stages_to_run() excludes
 def plan_pipeline_jobs(config, output_dir: Path, planned_stages: list[str]) -> list[ClusterJob]:
     jobs = []
     if 'pick' in planned_stages:
-        jobs.append(ClusterJob('real.pick', 'real', 'pick', build_pick_commands(config, output_dir), requires_gpu=_pick_needs_gpu(config)))
+        jobs.append(ClusterJob('real.pick', 'real', 'pick', build_pick_commands(config, output_dir)))
         if config.decoy.enabled:
             jobs.append(ClusterJob('decoy.pick', 'decoy', 'pick', build_decoy_commands(config, output_dir)))
     if 'classify' in planned_stages:

@@ -9,96 +9,49 @@ from pathlib import Path
 from skimage import measure
 
 # Import internal STAMP objects
-from stamp.adapters.base import AdapterInputs, ToolAdapter
-from stamp.adapters.mock import get_mock_adapter
-from stamp.adapters.native import NativePickerAdapter
-from stamp.backends.base import Runner, ToolCommand
-from stamp.backends.factory import check_backend_supports, select_runner
+from stamp.backends.base import ToolCommand
 from stamp.picking.consensus import build_particle_set, reconcile_picks_for_tomograms
 from stamp.picking.geometry import extract_surface
-from stamp.picking.native import PICKER_NAME as NATIVE_PICKER_NAME
+from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks
 from stamp.picking.vesicles import load_vesicle_labels, summarise_vesicles, vesicle_surface_area_angstrom2
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.picks import RawPick
-from stamp.utils.checkpoint import signatures, sync_checkpoint
+from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import archive_and_remove_directory, glob_mrc, load_cached_picks, load_tomogram_manifests, read_mrc, write_sidecar
+from stamp.utils.io import archive_and_remove_directory, cache_tomogram_picks, glob_mrc, load_cached_picks, load_tomogram_manifests, read_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.picks import plot_positions
 from stamp.utils.reporting import report_beam_angle_distribution
 
-# REAL_ADAPTERS: dictionary containing all implemented pickers
-REAL_ADAPTERS: dict[str, ToolAdapter] = {
-    NATIVE_PICKER_NAME: NativePickerAdapter(),
-}
-
-# _execute: build a command, run it, and parse the resulting RawPicks
-def _execute(adapter: ToolAdapter, inputs: AdapterInputs, runner: Runner) -> list[RawPick]:
-    command = adapter.build_command(inputs)
-    log.debug(f'{adapter.name}: dispatching {" ".join(command.argv)}')
-    result = runner.run(command)
-    if not result.succeeded:
-        raise StampPipelineError(f'{adapter.name} failed (exit {result.exit_code}): {result.stderr}')
-    output = adapter.parse_output(result)
-    return [RawPick(**raw) for raw in output.parsed.get('picks', [])]
-
-# _select_adapter: return the adapter for a picker name, guarding it against the chosen backend
-def _select_adapter(picker_name: str, backend: str) -> ToolAdapter:
-    if backend == 'mock':
-        log.debug(f'{picker_name}: using mock adapter (backend=mock)')
-        return get_mock_adapter(picker_name)
-
-    adapter = REAL_ADAPTERS.get(picker_name)
-    if adapter is None:
-        raise StampPipelineError(f'Unknown picker {picker_name!r}')
-    check_backend_supports(adapter, backend)
-    return adapter
-
-# _run_picker: dispatch to the in-process, batched, or per-tomogram path
-def _run_picker(
-    adapter: ToolAdapter,
+# _import_picker: read one picks file, infer orientations per tomogram, cache under cache_dir and return the cached picks
+def _import_picker(
+    path: Path,
+    name: str,
     manifests: list[TomogramManifest],
-    picker_output_dir: Path,
-    parameters: dict,
-    runner: Runner,
-    backend: str,
+    vesicle_labels_by_tomogram: dict[str, Path],
+    max_surface_distance_angstrom: float,
+    cache_dir: Path,
 ) -> list[RawPick]:
-    if backend != 'mock' and getattr(adapter, 'runs_in_process', False):
-        log.debug(f'{adapter.name}: dispatching in-process for {len(manifests)} tomogram(s)')
-        inputs = AdapterInputs(
-            input_paths=[m.segmentation_path for m in manifests],
-            raw_tomogram_paths=[m.raw_tomogram_path for m in manifests],
-            tomogram_ids=[m.tomogram_id for m in manifests],
-            output_directory=picker_output_dir,
-            parameters=parameters,
-        )
-        return adapter.run_in_process(inputs)  # type: ignore[attr-defined]
+    picks_by_tomogram: dict[str, list[RawPick]] = {}
+    for pick in map_tomogram_ids(read_picks(path, source_picker=name), manifests):
+        picks_by_tomogram.setdefault(pick.tomogram_id, []).append(pick)
+    manifest_by_id = {manifest.tomogram_id: manifest for manifest in manifests}
 
-    if backend == 'mock' or adapter.batches_natively:
-        log.debug(f'{adapter.name}: dispatching as a single batched command for {len(manifests)} tomogram(s)')
-        inputs = AdapterInputs(
-            input_paths=[m.segmentation_path for m in manifests],
-            raw_tomogram_paths=[m.raw_tomogram_path for m in manifests],
-            tomogram_ids=[m.tomogram_id for m in manifests],
-            output_directory=picker_output_dir,
-            parameters=parameters,
+    # a tomogram's cache file is written atomically on completion, so its presence means it is done
+    pending = [tomogram_id for tomogram_id in picks_by_tomogram if not (cache_dir / f'{tomogram_id}.json').is_file()]
+    if len(pending) < len(picks_by_tomogram):
+        log.info(f'Resuming {name}: {len(picks_by_tomogram) - len(pending)} tomogram(s) loaded from checkpoint')
+    for tomogram_id in pending:
+        oriented = infer_orientations(
+            picks_by_tomogram[tomogram_id],
+            [manifest_by_id[tomogram_id]],
+            vesicle_labels_by_tomogram=vesicle_labels_by_tomogram,
+            max_surface_distance_angstrom=max_surface_distance_angstrom,
         )
-        return _execute(adapter, inputs, runner)
-
-    log.debug(f'{adapter.name}: dispatching one command per tomogram for {len(manifests)} tomogram(s)')
-    collected: list[RawPick] = []
-    for manifest in manifests:
-        inputs = AdapterInputs(
-            input_paths=[manifest.segmentation_path],
-            raw_tomogram_paths=[manifest.raw_tomogram_path],
-            tomogram_ids=[manifest.tomogram_id],
-            output_directory=picker_output_dir / manifest.tomogram_id,
-            parameters=parameters,
-        )
-        collected.extend(_execute(adapter, inputs, runner))
-    return collected
+        cache_tomogram_picks(cache_dir, tomogram_id, oriented)
+    return load_cached_picks(cache_dir, list(picks_by_tomogram))
 
 # _resolve_vesicle_labels: match --vesicle-labels-mrc (file or directory) to manifests by tomogram_id, warning per unmatched tomogram
 def _resolve_vesicle_labels(vesicle_labels_mrc: Path | None, manifests: list[TomogramManifest]) -> dict[str, Path]:
@@ -183,16 +136,15 @@ def _write_vesicle_summary(
 
 # run_pick: pick command orchestration
 def run_pick(
-    picker_names,
-    segmentation_dir,
-    raw_tomogram_dir,
-    output_dir,
-    voxel_size_angstrom,
-    extra_params,
-    consensus_rule,
-    distance_threshold,
-    half_set_seed,
-    backend,
+    picks_files: list[Path],
+    segmentation_dir: Path,
+    raw_tomogram_dir: Path,
+    output_dir: Path,
+    voxel_size_angstrom: float | None,
+    consensus_rule: str,
+    distance_threshold: float,
+    half_set_seed: int,
+    picker_names: list[str] | None = None,
     n_workers: int = 1,
     make_plots: bool = False,
     pick_plot_style: str = 'segmented',
@@ -201,9 +153,15 @@ def run_pick(
     pick_plot_3d: bool = False,
     max_beam_angle_deviation: float | None = None,
     vesicle_labels_mrc: Path | None = None,
-    normalise_per_vesicle: bool = False,
+    max_surface_distance_angstrom: float = 300.0,
     keep_raw: bool = False,
 ) -> None:
+    names = picker_names or [path.stem for path in picks_files]
+    if len(names) != len(picks_files):
+        raise StampPipelineError(f'{len(picks_files)} picks file(s) but {len(names)} picker name(s)')
+    if len(set(names)) != len(names):
+        raise StampPipelineError(f'picker names must be unique, got {names!r}; use --name to disambiguate files with the same stem')
+
     # Load manifests to check for matching files
     manifests = load_tomogram_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
     if not manifests:
@@ -212,44 +170,26 @@ def run_pick(
     resolved_voxel_size_angstrom = manifests[0].voxel_size_angstrom
     log.debug(f'Resolved voxel size: {resolved_voxel_size_angstrom} Å')
 
-    runner = select_runner(backend)
     output_dir.mkdir(parents=True, exist_ok=True)
-
     vesicle_labels_mrc_by_tomogram = _resolve_vesicle_labels(vesicle_labels_mrc, manifests)
-    if normalise_per_vesicle and not vesicle_labels_mrc_by_tomogram:
-        raise StampPipelineError('--normalise-per-vesicle requires --vesicle-labels-mrc to resolve to at least one tomogram')
 
-    # everything that changes raw picks; consensus, seed, beam filter, workers and plots are left out so they can change between runs
+    # everything that changes imported picks; consensus, seed, beam filter, workers and plots are left out so they can change between runs
     fingerprint = {
-        'pickers': list(picker_names),
+        'picks': {name: file_signature(path, content=True) for name, path in zip(names, picks_files)},
         'segmentation': signatures({m.tomogram_id: m.segmentation_path for m in manifests}),
         'raw': signatures({m.tomogram_id: m.raw_tomogram_path for m in manifests}),
         'vesicle_labels': signatures(vesicle_labels_mrc_by_tomogram),
-        'normalise_per_vesicle': normalise_per_vesicle,
         'voxel_size_angstrom': resolved_voxel_size_angstrom,
-        'picker_params': extra_params,
-        'backend': backend,
+        'max_surface_distance_angstrom': max_surface_distance_angstrom,
     }
     if sync_checkpoint(output_dir / 'raw', fingerprint):
         log.info('Found matching partial output, resuming')
 
     picks_by_picker: dict[str, list[RawPick]] = {}
-    for picker_name in picker_names:
-        adapter = _select_adapter(picker_name, backend)
-        picker_output_dir = output_dir / 'raw' / picker_name
-        parameters = {
-            'voxel_size_angstrom': resolved_voxel_size_angstrom,
-            **extra_params.get(picker_name, {}),
-        }
-        if picker_name == NATIVE_PICKER_NAME:
-            parameters.setdefault('n_workers', n_workers)
-            if vesicle_labels_mrc_by_tomogram:
-                parameters['vesicle_labels_mrc_by_tomogram'] = {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()}
-                parameters.setdefault('normalise_per_vesicle', normalise_per_vesicle)
-
-        log.progress(f'Running {picker_name}...')
-        picks_by_picker[picker_name] = _run_picker(adapter, manifests, picker_output_dir, parameters, runner, backend)
-        log.info(f'{picker_name}: {len(picks_by_picker[picker_name])} raw picks')
+    for name, path in zip(names, picks_files):
+        log.progress(f'Importing {name} from {path.name}...')
+        picks_by_picker[name] = _import_picker(path, name, manifests, vesicle_labels_mrc_by_tomogram, max_surface_distance_angstrom, output_dir / 'raw' / name)
+        log.info(f'{name}: {len(picks_by_picker[name])} raw picks')
 
     log.progress(f'Reconciling picks...')
     all_reconciled = reconcile_picks_for_tomograms(
@@ -260,13 +200,13 @@ def run_pick(
         n_workers=n_workers,
     )
     if not all_reconciled:
-        raise StampPipelineError('No particles survived reconciliation. If using stamp-native, try lowering n_mad or check density_sign matches your tomograms (-1 for conventional dark-protein contrast).')
+        raise StampPipelineError('No particles survived reconciliation. With --consensus-rule intersection, every picks file must have a pick within --distance-threshold voxels of each particle.')
 
     log.progress(f'Building particle set and determining beam angle distribution')
     particle_set = build_particle_set(
         reconciled_picks=all_reconciled,
         consensus_rule=consensus_rule,  # type: ignore[arg-type]
-        contributing_pickers=picker_names,
+        contributing_pickers=names,
         half_set_seed=half_set_seed,
     )
     if max_beam_angle_deviation is not None:
@@ -290,19 +230,21 @@ def run_pick(
     write_sidecar(
         output_dir,
         stage='pick',
-        tool='+'.join(picker_names),
+        tool='+'.join(names),
         tool_version=None,
         parameters={
-            'pickers': picker_names,
+            'pickers': names,
+            'picks_files': [str(path) for path in picks_files],
             'consensus_rule': consensus_rule,
             'distance_threshold': distance_threshold,
             'half_set_seed': half_set_seed,
             'voxel_size_angstrom': resolved_voxel_size_angstrom,
-            'backend': backend,
-            'picker_params': extra_params,
+            'max_surface_distance_angstrom': max_surface_distance_angstrom,
             'vesicle_labels_mrc': {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()},
         },
-        inputs=[(f'segmentation:{m.tomogram_id}', m.segmentation_path) for m in manifests] + [(f'raw_tomogram:{m.tomogram_id}', m.raw_tomogram_path) for m in manifests],
+        inputs=[(f'picks:{name}', path) for name, path in zip(names, picks_files)]
+        + [(f'segmentation:{m.tomogram_id}', m.segmentation_path) for m in manifests]
+        + [(f'raw_tomogram:{m.tomogram_id}', m.raw_tomogram_path) for m in manifests],
     )
 
     log.progress(f'Rendering plots...')
@@ -315,13 +257,13 @@ def run_pick(
         raw_dir = output_dir / 'raw'
         if raw_dir.is_dir():
             archive_path = archive_and_remove_directory(raw_dir)
-            log.info(f'Archived raw picker output to {archive_path}')
+            log.info(f'Archived imported pick cache to {archive_path}')
 
 # build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
 def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
     target = stage_dir(output_dir, 'real', 'pick')
     argv = [
-        'stamp', 'pick', ','.join(config.stage.pick.pickers),
+        'stamp', 'pick', *[str(path) for path in config.stage.pick.picks_files],
         '--seg-dir', str(config.run.segmentation_dir),
         '--raw-dir', str(config.run.raw_tomogram_dir),
         '--out-dir', str(output_dir),
@@ -329,9 +271,11 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--consensus-rule', config.stage.pick.consensus_rule,
         '--distance-threshold', str(config.stage.pick.distance_threshold),
         '--half-set-seed', str(config.stage.pick.half_set_seed),
-        '--backend', 'local',
+        '--max-surface-distance-a', str(config.stage.pick.max_surface_distance_angstrom),
         '--n-processes', str(config.stage.pick.n_workers),
     ]
+    for name in config.stage.pick.picker_names or []:
+        argv += ['--name', name]
     if config.plots.enabled:
         argv.append('--plots')
         argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]

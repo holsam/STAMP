@@ -10,7 +10,6 @@ from typing import Annotated, Callable
 # Import diagram stage renderers
 from stamp.tools.diagram import classify as classify_diagram
 from stamp.tools.diagram import identify as identify_diagram
-from stamp.tools.diagram import native as native_diagram
 from stamp.tools.diagram import overview as overview_diagram
 from stamp.tools.diagram import pick as pick_diagram
 from stamp.tools.diagram.utils.config import DiagramConfig
@@ -153,70 +152,6 @@ def pick_subcommand(
         pixel_size=pixel_size,
         field_px=field_px,
         n_vesicles=n_vesicles,
-        seed=seed,
-    )
-
-# Define native diagram command
-@diagramCli.command('native', rich_help_panel='Command Diagrams')
-def native_subcommand(
-    target: TargetArg,
-    distractor: DistractorArg,
-    output_dir: OutDirOpt = Path('out/diagrams/native'),
-    also: AlsoOpt = None,
-    n_synthetic_unknowns: UnknownsOpt = 2,
-    box_size: BoxOpt = 64,
-    pixel_size: PixelOpt = 3.0,
-    field_px: FieldPxOpt = 760,
-    n_vesicles: NVesiclesOpt = 10,
-    offset_min_a: Annotated[
-        float,
-        typer.Option('--offset-min-a', help='Shell inner offset from the membrane, in Å.'),
-    ] = 20.0,
-    offset_max_a: Annotated[
-        float,
-        typer.Option('--offset-max-a', help='Shell outer offset from the membrane, in Å.'),
-    ] = 80.0,
-    n_samples: Annotated[
-        int,
-        typer.Option('--n-samples', help='Samples along each normal.'),
-    ] = 5,
-    surface_spacing_a: Annotated[
-        float,
-        typer.Option('--surface-spacing-a', help='Surface point spacing, in Å.'),
-    ] = 20.0,
-    min_particle_distance_a: Annotated[
-        float,
-        typer.Option('--min-particle-distance-a', help='NMS minimum separation, in Å.'),
-    ] = 60.0,
-    n_mad: Annotated[
-        float,
-        typer.Option('--n-mad', help='Robust-score threshold, in MAD units.'),
-    ] = 3.0,
-    density_sign: Annotated[
-        int,
-        typer.Option('--density-sign', help='+1: protein brighter than background (this mock); -1: protein darker (real cryo-ET).'),
-    ] = 1,
-    seed: SeedOpt = 0,
-) -> None:
-    '''Generate a diagram of the template-free native picker workflow.'''
-    _run(
-        native_diagram.render,
-        target,
-        distractor,
-        also,
-        output_dir,
-        n_synthetic_unknowns=n_synthetic_unknowns,
-        box_size=box_size,
-        pixel_size=pixel_size,
-        field_px=field_px,
-        n_vesicles=n_vesicles,
-        offset_min_a=offset_min_a,
-        offset_max_a=offset_max_a,
-        n_samples=n_samples,
-        surface_spacing_a=surface_spacing_a,
-        min_particle_distance_a=min_particle_distance_a,
-        n_mad=n_mad,
-        density_sign=density_sign,
         seed=seed,
     )
 

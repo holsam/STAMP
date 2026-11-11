@@ -8,7 +8,7 @@ A workflow for Sub-Tomogram Averaging Membrane Proteins.
 Given a directory of segmented MRC volumes (i.e. as produced by [MemBrain-seg](https://github.com/teamtomo/membrain-seg)), `STAMP` runs the following workflow:
 \# | Stage | Description
 -- | -- | --
-1 | **Picking** | Finds candidate particle positions on the membrane surface, with consensus results returned across multiple pickers
+1 | **Picking** | Imports candidate particle positions from external pickers, infers membrane normal orientations and returns consensus results across multiple pickers
 2 | **Classification** | Group similar candidate particles by structural similarity (via unsupervised clustering) and produce class averages
 3 | **Identification** | Score each class average against a panel of predicted protein structures from proteomics experiments
 4 | **Refinement** | Iteratively refine particle orientations and measure resolution
@@ -53,8 +53,8 @@ uv sync --group dev
 ### Quickstart
 Given a directory of membrane segmentations (`seg/`) and matching raw tomograms (`tomo/`):
 ```sh
-# 1. Pick candidate particles using STAMP's native picker
-stamp pick stamp-native -s seg/ -r tomo/ --voxel-size-a 5.38
+# 1. Import candidate particle picks
+stamp pick data/picks.csv -s seg/ -r tomo/ --voxel-size-a 5.38
 
 # 2. Group picks and generate class averages
 stamp classify --particles stamp/pick/particle_set.json -r tomo/ --voxel-size-a 13.48

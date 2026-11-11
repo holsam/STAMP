@@ -123,7 +123,7 @@ class Walkthrough:
             self.consensus_class = np.array([], dtype=int)
             self.consensus_nearest = np.array([], dtype=int)
 
-        # rejected-surface decoys: low-scoring points picked by neither
+        # decoys: surface points picked by neither picker
         idle = ~(self.picker_a_mask | self.picker_b_mask) & \
             (self.surface_nearest > capture_px)
         idle_points = self.surface_points[idle]

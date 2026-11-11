@@ -27,6 +27,7 @@ _CONFIG_DICT = {
     },
     'decoy': {'enabled': True},
     'stage': {
+        'pick': {'picks_files': ['picks.csv']},
         'identify': {'candidates': 'candidates.yaml', 'resolution': 25.0},
         'refine': {'tool': 'relion', 'backend': 'local'},
     },

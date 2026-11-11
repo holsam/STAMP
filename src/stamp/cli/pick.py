@@ -3,7 +3,7 @@ STAMP: consensus picking CLI
 '''
 
 # Import external dependencies
-import json, typer
+import typer
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -21,13 +21,13 @@ pickCli = typer.Typer(
 # Define pick command
 @pickCli.command()
 def pick(
-    pickers: Annotated[
-        str,
-        typer.Argument(help='Comma-separated pickers to use.')
+    picks_files: Annotated[
+        list[Path],
+        typer.Argument(exists=True, dir_okay=False, readable=True, help='Picks files to import (.csv, .star, .json, .jsonl); one picker per file.'),
     ],
     segmentation_dir: Annotated[
         Path,
-        typer.Option('-s', '--seg-dir', exists=True, file_okay=False, help='Directory of segmented MRC files; filename stems are tomogram IDs.'),
+        typer.Option('-s', '--seg-dir', exists=True, file_okay=False, help='Directory of segmented MRC files; filename stems are tomogram IDs. Used to infer orientations.'),
     ],
     raw_tomogram_dir: Annotated[
         Path,
@@ -41,10 +41,10 @@ def pick(
         float | None,
         typer.Option('--voxel-size-a', help='Voxel size of the input tomograms, in Angstrom.')
     ] = None,
-    picker_params: Annotated[
-        str,
-        typer.Option('--picker-params', help='JSON of per-picker parameters.', rich_help_panel = 'Consensus'),
-    ] = '{}',
+    names: Annotated[
+        list[str] | None,
+        typer.Option('--name', help='Picker name for each picks file, in order (repeatable). Defaults to the file stem.', rich_help_panel = 'Consensus'),
+    ] = None,
     consensus_rule: Annotated[
         Literal['union', 'intersection'],
         typer.Option('--consensus-rule', help='Rule to use for consensus reconciliation.', rich_help_panel = 'Consensus'),
@@ -57,26 +57,22 @@ def pick(
         int,
         typer.Option('--half-set-seed', help='Seed for half-set assignment.', rich_help_panel = 'Consensus'),
     ] = 0,
-    backend: Annotated[
-        Literal['local', 'mock'],
-        typer.Option('--backend', help='Backend to use for processing.', rich_help_panel = 'Backend'),
-    ] = 'local',
     n_workers: Annotated[
         int,
-        typer.Option('-n', '--n-processes', help='Processes to use for stamp-native picker (1 = sequential).', rich_help_panel = 'Backend'),
+        typer.Option('-n', '--n-processes', help='Processes to use for reconciliation, the vesicle summary and plots (1 = sequential).', rich_help_panel = 'Backend'),
     ] = 1,
     max_beam_angle_deviation: Annotated[
         float | None,
         typer.Option('--max-beam-angle-deviation', help='Normal deviation from beam-orthogonal plane to drop particles.', rich_help_panel = 'Filtering'),
     ] = None,
+    max_surface_distance_angstrom: Annotated[
+        float,
+        typer.Option('--max-surface-distance-a', help='Picks further than this from any segmentation surface get no inferred orientation (classify skips them).', rich_help_panel = 'Filtering'),
+    ] = 300.0,
     vesicle_labels_mrc: Annotated[
         Path | None,
         typer.Option('--vesicle-labels-mrc', help='Path to an EValuator labelled MRC, or a directory to be matched by filename stem.', exists=True, readable=True, rich_help_panel = 'Filtering'),
     ] = None,
-    normalise_per_vesicle: Annotated[
-        bool,
-        typer.Option('--normalise-per-vesicle', help='Normalise stamp-native scores per vesicle instead of per tomogram.', rich_help_panel = 'Filtering'),
-    ] = False,
     make_plots: Annotated[
         bool,
         typer.Option('--plots', help='Write consensus-pick position plots.', rich_help_panel = 'Plotting'),
@@ -99,37 +95,21 @@ def pick(
     ] = False,
     keep_raw: Annotated[
         bool,
-        typer.Option('--keep-raw', help='Keep the raw per-picker output directory instead of archiving it to raw.tar.gz.', rich_help_panel = 'Backend'),
+        typer.Option('--keep-raw', help='Keep the per-picker import cache instead of archiving it to raw.tar.gz.', rich_help_panel = 'Backend'),
     ] = False,
 ) -> None:
-    '''Run particle picking, reconcile across pickers, and assign half-sets.'''
+    '''Import external picks, infer orientations, reconcile across pickers, and assign half-sets.'''
     log_started('picking')
-    # Validate provided pickers
-    picker_names = [name.strip() for name in pickers.split(',') if name.strip()]
-    if not picker_names:
-        raise typer.BadParameter('At least one picker must be provided.')
-    for name in picker_names:
-        if name not in pickfuncs.REAL_ADAPTERS:
-            raise typer.BadParameter(f'Picker "{name}" not recognised.')
-
-    # Validate picker parameters
-    try:
-        extra_params: dict[str, dict] = json.loads(picker_params)
-    except json.JSONDecodeError as exc:
-        raise typer.BadParameter(f'--picker-params is not valid JSON: {exc}') from None
-
-    # Run picking
     pickfuncs.run_pick(
-        picker_names=picker_names,
+        picks_files=picks_files,
+        picker_names=names,
         segmentation_dir=segmentation_dir,
         raw_tomogram_dir=raw_tomogram_dir,
         output_dir=resolve_output_dir(output_dir, 'pick'),
         voxel_size_angstrom=voxel_size_angstrom,
-        extra_params=extra_params,
         consensus_rule=consensus_rule,
         distance_threshold=distance_threshold,
         half_set_seed=half_set_seed,
-        backend=backend,
         n_workers=n_workers,
         make_plots=make_plots,
         pick_plot_style=pick_plot_style,
@@ -138,6 +118,6 @@ def pick(
         pick_plot_3d=pick_plot_3d,
         max_beam_angle_deviation=max_beam_angle_deviation,
         vesicle_labels_mrc=vesicle_labels_mrc,
-        normalise_per_vesicle=normalise_per_vesicle,
+        max_surface_distance_angstrom=max_surface_distance_angstrom,
         keep_raw=keep_raw,
     )
