@@ -12,7 +12,7 @@ This document contains information about STAMP's architecture and implementation
 - [Coordinate conventions](#coordinate-conventions)
 - [Picking implementation](#picking-implementation)
     - [Geometric primitives](#geometric-primitives)
-    - [`NativePickerConfig`](#nativepickerconfig)
+    - [Picks importer](#picks-importer)
     - [Vesicle labelling](#vesicle-labelling)
     - [Halfset assignment](#halfset-assignment)
 
@@ -25,9 +25,9 @@ src/stamp/
   cli/            CLI Typer definitions (parse args then call commands)
   commands/       per-stage run orchestration via a run_<stage>() function, called by cli/ and run/
   schemas/        pydantic models: config, particles, picks, manifest, provenance, cluster_profile
-  adapters/       ToolAdapter implementations: native, relion, m_refine, mock, (base protocol)
+  adapters/       ToolAdapter implementations: relion, m_refine, mock, (base protocol)
   backends/       Runner implementations: local, cluster, mock, (base protocol) + factory
-  picking/        pick command scripts: geometry primitives, native picker, vesicle labelling, consensus reconciliation
+  picking/        pick command scripts: picks importer, geometry primitives, vesicle labelling, consensus reconciliation
   decoy/          decoy dataset generation and comparability checks
   classify/       subvolume extraction, feature engineering, clustering, class averaging
   identify/       candidate panel loading, shape fitting, decoy-control statistics
@@ -56,8 +56,8 @@ commands/<stage>.py   orchestration: selects adapter + backend, drives the stage
 
 Command | Work directory | Unit checkpointed
 -- | -- | --
-`pick` | `raw/<picker>/` | tomogram picks (`<id>.json`)
-`decoy` | `raw/<method>/` | rejected-surface: surface scores (`scores/<id>.npz`); shifted: surfaces (`surfaces/<id>.npz`); synthetic-noise: volumes and picks
+`pick` | `raw/<picker>/` | tomogram picks with inferred orientation (`<id>.json`)
+`decoy` | `raw/<method>/` | shifted: surfaces (`surfaces/<id>.npz`); synthetic-noise: volumes and picks
 `classify` | `raw/` | subvolumes, per-tomogram features, per-cluster alignment angles
 `identify` | `raw/{real,decoy}/` | one fit score per (class, candidate)
 `refine` | `<out>/<class>/` | finished half-maps
@@ -91,7 +91,6 @@ class ToolAdapter(Protocol):
 Available adapters:
 Adapter | File (`src/stamp/adapters/`) | Stage | `mac_compatible` | `requires_gpu` | `runs_in_process`
 -- | -- | -- | -- | -- | --
-`NativePickerAdapter` (`stamp-native`) | `native.py` | Pick | ✔ | ✘ | ✔
 `RelionRefineAdapter` (`relion`) | `relion.py` | Refine | ✘ | ✔ | ✘
 `MRefineAdapter` (`m`) | `m_refine.py` | Refine | ✘ | ✔ | ✘
 `MockAdapter` | `mock.py` | Any (test adapter) | Configurable | Configurable | Configurable
@@ -128,48 +127,26 @@ Two conventions for tomogram coordinates are used throughout STAMP:
 
 ## Picking implementation 
 ### Geometric primitives
-`src/stamp/picking/geometry.py` contains several geometric primitives, used by STAMP's native picker:
+`src/stamp/picking/geometry.py` contains several geometric primitives, used by STAMP's pick importer and refine command:
 
 Function | Role
 -- | --
 `extract_surface(segmentation, level=0.5)` | Uses marching cubes to convert a binary segmentation into `(vertices, normals)`
-`downsample_points(points, normals, spacing_voxels)` | Downsamples a voxel-grid to a target spacing
-`sample_along_normals(...)` | Calculates mean tomogram density in a shell offset along each point's normal; `direction` is `+1`/`-1`; out-of-volume samples clamp to the nearest edge (`map_coordinates(mode='nearest')`)
-`profile_correlation_scores(...)` | Calculates Pearson correlation of a sign-corrected radial profile against a Gaussian bump at the window's own midpoint
-`robust_normalise(...)` | Calculates median/MAD normalisation, global per tomogram
-`local_normalise(...)` | Calculates median/MAD normalisation over a k-d tree neighbourhood (`local_radius_angstrom`) if a point has more than `min_local_neighbours` (otherwise falls back to global estimate)
-`vesicle_normalise(values, vesicle_ids)` | Calculates per-vesicle median/MAD normalisation if vesicle labels are available (otherwise falls back to pooled/global estimate)
-`non_maximum_suppression(...)` | Uses greedy NMS, highest score first, k-d tree exclusion radius
 `quaternion_from_reference_to(vector_xyz)` | Constructs a unit quaternion rotating +z onto a given outward vector
 `compose_roll_about_normal(...)` | Constructs a quaternion for "roll by angle, then map +z onto the normal"
-`exclude_near_boundary(points, shape, margin_voxels)` | Drops points too close to a volume face to sample cleanly
-`score_membrane_faces(...)` | Composes above functions to sample both faces across every offset window, scores using both modes, normalise scores, and return per-point results including which window won
-`max_order_statistic_offset(n_windows)` | Applies an upward-bias correction for taking the max of `n_windows` independent scores
 `beam_angle_deviation_degrees(normal_xyz)` | Derives the angle between an outward normal and the beam-orthogonal (xy) plane; 0 = beam-orthogonal, 90 = beam-aligned (used to flag/drop picks whose orientation the missing wedge makes unreliable)
 
-### `NativePickerConfig`
-`picking/native.py` uses a dataclass to store the configuration options for STAMP's native picker. All distances are in Å and are converted to voxels via `config.to_voxels()`.
+### Picks importer
+`picking/importers.py`:
 
-Field | Default | Meaning
--- | -- | --
-`voxel_size_angstrom` | *n/a (required)* | Voxel size of input tomograms in Å
-`offset_windows_angstrom` | `((20,50),(40,80),(70,110),(100,160))` | Radial windows searched outward from the surface
-`n_samples` | 5 | Number of samples taken per point within each window
-`surface_spacing_angstrom` | 20.0 | Target vertex spacing after downsampling
-`min_particle_distance_angstrom` | 60.0 | NMS exclusion radius
-`n_mad` | 3.0 | Threshold, in robust standard deviations, before the multi-window correction
-`density_sign` | -1 | +1 if protein is brighter than background, -1 if darker
-`boundary_margin_angstrom` | `None` | Drop points closer than this to a volume face; defaults to the widest window's outer edge
-`normalisation` | `'global'` | MAD normalisation method (`'global'` or `'local'`)
-`local_radius_angstrom` | 150.0 | Neighbourhood radius for local normalisation
-`min_local_neighbours` | 20 | Minimum neighbours before falling back to global
-`scoring_mode` | `'mean'` | Scoring mode to use (`'mean'` or `'profile'`)
-`profile_width_angstrom` | `None` | Width of the expected profile bump (`None` defaults to a quarter of each window's own range)
-`vesicle_labels_mrc` | `None` | Path to EValuator's `label` command output MRC, enabling per-vesicle attribution
-`normalise_per_vesicle` | `False` | Normalise scores per vesicle instead of per tomogram (requires `vesicle_labels_mrc`)
+Function | Role
+-- | --
+`read_picks(path, *, source_picker)` | Reads a CSV, STAR, JSON or JSONL file into `RawPick` instances
+`map_tomogram_ids(picks, manifests)` | Rewrites pick ids onto manifest ids (ignoring a trailing `_segmented`), raising error on unknown ids
+`infer_orientations(picks, manifests, ...)` | Fills missing `orientation`, `beam_angle_deviation_degrees` and `vesicle_id` from the nearest surface vertex, with any picks beyond `max_surface_distance_angstrom` remaining unoriented
 
 ### Vesicle labelling
-`picking/vesicles.py` adds per-vesicle QC and normalisation when provided with an output MRC from EValuator's `label` command. 
+`picking/vesicles.py` adds per-vesicle QC when provided with an output MRC from EValuator's `label` command. 
 
 Function | Role
 -- | --
@@ -178,7 +155,7 @@ Function | Role
 `vesicle_surface_area_angstrom2(...)` | Per-vesicle membrane surface area, computed from marching-cubes triangle face areas assigned to their nearest labelled voxel (by face centroid)
 `summarise_vesicles(picks, areas_by_vesicle, tomogram_id)` | builds a `VesicleSummary` (frozen dataclass: `vesicle_id`, `tomogram_id`, `n_picks`, `surface_area_angstrom2`, `picks_per_1000_angstrom2`) per vesicle
 
-Every kept `RawPick` will contain `vesicle_id`, which is kept through downstream stages.
+Every `RawPick` oriented with `--vesicle-labels-mrc` contains `vesicle_id`, which is kept through downstream stages.
 
 ### Consensus reconciliation
 `picking/consensus.py` contains the function `reconcile_picks(...)` for grouping picks across pickers by proximity (complete-linkage agglomerative clustering via a `cKDTree`-backed near-linear implementation). Two modes are available: 
@@ -187,7 +164,7 @@ Every kept `RawPick` will contain `vesicle_id`, which is kept through downstream
 
 Each reconciled pick's position is the centroid of its group, and `source_picker` records all contributing pickers (joined with '+').
 
-With the current single picker (STAMP's native picker), `reconcile_picks(...)` is reduced to deduplicating near-identical picks within `distance_threshold`.
+With a single picks file, `reconcile_picks(...)` is reduced to deduplicating near-identical picks within `distance_threshold`.
 
 ### Halfset assignment
 `utils/halfset.py` contains functions for implementing the half-set separation:
