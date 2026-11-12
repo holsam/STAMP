@@ -25,13 +25,18 @@ from stamp.classify.extract import (
     quaternion_to_matrix,
 )
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
-from stamp.classify.frames import rotate_density
+from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density
+from stamp.classify.match import align_to_reference, rank_rotations, wedge_filter
 from stamp.classify.search import rotated_bank, search_space
+from stamp.classify.wedge import apply_wedge, box_wedge
 from stamp.commands.classify import _classify_combined
 from stamp.picking.geometry import quaternion_from_reference_to
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
-from synthetic import asymmetric_object
+from synthetic import asymmetric_object, make_particle, rod_object
+
+# _BOX: working box edge for alignment tests
+_BOX = 25
 
 # _subvols_from_array: write a dense subvolume stack to a single-tomogram cache and wrap it as a Subvolumes subvols
 def _subvols_from_array(tmp_path: Path, array: np.ndarray) -> Subvolumes:
@@ -72,6 +77,16 @@ def _asymmetric_blob(box: int) -> np.ndarray:
     volume[box // 2 + 4, box // 2, box // 2] = 1.0
     volume[box // 2, box // 2, box // 2] = 1.0
     return gaussian_filter(volume, 1.5)
+
+# _random_orientation: unit quaternion mapping +z onto a random direction within 60 degrees of the beam-orthogonal plane
+def _random_orientation(rng: np.random.Generator) -> tuple[float, float, float, float]:
+    vector = rng.normal(size=3)
+    vector[2] *= 0.5
+    return quaternion_from_reference_to(vector / np.linalg.norm(vector))
+
+# _angle_error: absolute difference of two angles in degrees, wrapped to [0, 180]
+def _angle_error(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return np.abs((a - b + 180.0) % 360.0 - 180.0)
 
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
@@ -501,6 +516,70 @@ class TestAlign:
         subvols = _subvols_from_array(tmp_path, stack)
         angles = align_inplane(subvols, ['noise', 'noise', 'c00', 'c00'])
         assert set(angles) == {2, 3}
+
+# TestMatch: class containing unit tests for prior-aware particle alignment to reference
+class TestMatch:
+    # test_rank_rotations_matches_masked_bank: the shared-bank score equals the brute-force score against a bank masked with each particle's own wedge
+    def test_rank_rotations_matches_masked_bank(self) -> None:
+        rng = np.random.default_rng(0)
+        reference = asymmetric_object(_BOX, 1)
+        space = search_space(OrientationPrior.NORMAL, _BOX, angular_step_degrees=60.0)
+        bank = rotated_bank(reference, space.rotations)
+        orientations = [_random_orientation(rng) for _ in range(3)]
+        wedges = np.stack([box_wedge(_BOX, o, 60.0, 90.0) for o in orientations])
+        particles = np.stack([apply_wedge(rng.normal(size=(_BOX,) * 3), w) for w in wedges])
+        fast, _norms = rank_rotations(wedge_filter(particles, wedges), wedges, bank, _BOX)
+        for i, wedge in enumerate(wedges):
+            for r, rotated in enumerate(bank):
+                masked = apply_wedge(rotated.reshape((_BOX,) * 3), wedge).ravel()
+                expected = (particles[i].ravel() @ masked) / (np.linalg.norm(particles[i]) * np.linalg.norm(masked))
+                assert abs(fast[i, r] - expected) < 1e-3
+
+    # test_normal_prior_recovers_azimuth: azimuth error against known rotation, with a different wedge per particle and small shifts
+    def test_normal_prior_recovers_azimuth(self) -> None:
+        rng = np.random.default_rng(3)
+        reference = asymmetric_object(_BOX, 5)
+        space = search_space(OrientationPrior.NORMAL, _BOX, angular_step_degrees=10.0, shift_range_voxels=2)
+        truth = rng.uniform(0, 360, 40)
+        shifts = rng.integers(-1, 2, (40, 3))
+        wedges = np.stack([box_wedge(_BOX, _random_orientation(rng), 60.0, 90.0) for _ in truth])
+        particles = np.stack([make_particle(reference, azimuth_matrix(a), tuple(s), w, 0.05, rng) for a, s, w in zip(truth, shifts, wedges)])
+        result = align_to_reference(particles, wedges, reference, space)
+        found = np.array([azimuth_degrees(space.rotations[i]) for i in result.rotation_index])
+        error = _angle_error(found, truth)
+        assert np.median(error) <= 5.0 and np.percentile(error, 90) <= 10.0
+        assert (result.shift == shifts).all(axis=1).mean() > 0.9
+
+    # test_axis_prior_recovers_azimuth_polarity_and_shift: rods with random polarity and axial offsets
+    def test_axis_prior_recovers_azimuth_polarity_and_shift(self) -> None:
+        rng = np.random.default_rng(4)
+        reference = rod_object(_BOX, 6, repeat=_BOX)    # no helical degeneracy inside the box
+        space = search_space(OrientationPrior.AXIS, _BOX, angular_step_degrees=15.0)
+        n = 30
+        azimuth = rng.uniform(0, 360, n)
+        flipped = rng.random(n) < 0.5
+        axial = rng.integers(-5, 6, n)
+        wedges = np.stack([box_wedge(_BOX, _random_orientation(rng), 60.0, 90.0) for _ in range(n)])
+        particles = np.stack([
+            make_particle(reference, azimuth_matrix(a) @ (flip_matrix() if f else np.eye(3)), (0, 0, z), w, 0.05, rng)
+            for a, f, z, w in zip(azimuth, flipped, axial, wedges)
+        ])
+        result = align_to_reference(particles, wedges, reference, space)
+        found_flip = space.polarity[result.rotation_index] < 0
+        assert (found_flip == flipped).mean() >= 0.95
+        assert (np.abs(result.shift[:, 2] - axial) <= 1).mean() >= 0.9
+        found_azimuth = np.array([azimuth_degrees(space.rotations[i] @ (flip_matrix() if f else np.eye(3))) for i, f in zip(result.rotation_index, found_flip)])
+        assert np.median(_angle_error(found_azimuth, azimuth)) <= 8.0
+
+    # test_none_prior_recovers_bank_rotation: a wedged rotated copy finds its own rotation in a noiseless bank (regression for the original brute-force search)
+    def test_none_prior_recovers_bank_rotation(self) -> None:
+        reference = asymmetric_object(_BOX, 7)
+        space = search_space(OrientationPrior.NONE, _BOX, n_rotations=200, shift_range_voxels=1)
+        wedge = box_wedge(_BOX, None, 60.0, 90.0)
+        target = 123
+        particle = apply_wedge(rotate_density(reference, space.rotations[target]), wedge)
+        result = align_to_reference(particle[None], wedge[None], reference, space, top=5)
+        assert result.rotation_index[0] == target and result.cc[0] > 0.95 and not result.shift.any()
 
 # TestSearch: class containing unit tests for per-prior alignment search space
 class TestSearch:
