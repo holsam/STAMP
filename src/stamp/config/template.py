@@ -47,7 +47,7 @@ keep_raw = false
 backend = ""                                # inert for pick; blank = defaults to [run].backend
 
 [stage.classify]
-method = "hdbscan"                          # --method  (hdbscan|kmeans)
+method = "leiden"                           # --method  (leiden|hdbscan|kmeans)
 min_cluster_size = 20
 n_clusters = 5
 n_components = 20

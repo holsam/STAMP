@@ -211,6 +211,22 @@ class TestCluster:
         assert label_to_cluster_id(-1) == 'noise'
         assert label_to_cluster_id(3) == 'c03'
 
+    # test_leiden_finds_blobs_and_applies_min_size: three well separated blobs give three clusters, and communities under min_cluster_size are noise
+    def test_leiden_finds_blobs_and_applies_min_size(self) -> None:
+        rng = np.random.default_rng(0)
+        centres = np.array([[0.0] * 5, [8.0] * 5, [-8.0, 8.0, -8.0, 8.0, -8.0]])
+        features = np.vstack([rng.normal(c, 1.0, (40, 5)) for c in centres])
+        result = reduce_and_cluster(features, ClusteringConfig(method='leiden', n_components=5, min_cluster_size=10))
+        assert result.labels.max() == 2 and all(len(set(result.labels[i * 40:(i + 1) * 40])) == 1 for i in range(3))
+        assert set(result.centroids) == {0, 1, 2}
+        assert (reduce_and_cluster(features, ClusteringConfig(method='leiden', n_components=5, min_cluster_size=50)).labels == -1).all()
+
+    # test_leiden_is_reproducible: same seed, same partition
+    def test_leiden_is_reproducible(self) -> None:
+        features = np.random.default_rng(1).normal(size=(120, 6))
+        config = ClusteringConfig(method='leiden', n_components=4, min_cluster_size=5, random_state=3)
+        assert np.array_equal(reduce_and_cluster(features, config).labels, reduce_and_cluster(features, config).labels)
+
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
     def test_identity_quaternion_gives_identity_matrix(self) -> None:

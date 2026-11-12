@@ -71,7 +71,7 @@ class PickStage(_Strict):
     keep_raw: bool = False
 
 class ClassifyStage(_Strict):
-    method: Literal['hdbscan', 'kmeans'] = 'hdbscan'
+    method: Literal['leiden', 'hdbscan', 'kmeans'] = 'leiden'
     min_cluster_size: int = 20
     n_clusters: int = 5
     n_components: int = 20

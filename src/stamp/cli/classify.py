@@ -53,12 +53,12 @@ def classify(
         typer.Option('--n-bins', help='Radial bins in the rotational average.', rich_help_panel = 'Subvolume extraction'),
     ] = 12,
     method: Annotated[
-        Literal['hdbscan', 'kmeans'],
+        Literal['leiden', 'hdbscan', 'kmeans'],
         typer.Option('--method', help='Clustering method to use.', rich_help_panel = 'Clustering'),
-    ] = 'hdbscan',
+    ] = 'leiden',
     min_cluster_size: Annotated[
         int,
-        typer.Option('--min-cluster-size', help='Minimum cluster size (used by HDBSCAN).', rich_help_panel = 'Clustering'),
+        typer.Option('--min-cluster-size', help='Minimum cluster size (used by HDBSCAN and Leiden, and the smallest seed the polish step refines).', rich_help_panel = 'Clustering'),
     ] = 20,
     n_clusters: Annotated[
         int,
