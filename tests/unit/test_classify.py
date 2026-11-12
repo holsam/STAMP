@@ -142,6 +142,12 @@ def _three_blobs(n_per_group: int = 40, seed: int = 0) -> np.ndarray:
         [rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres]
     )
 
+# _nearest_neighbour_accuracy: fraction of rows whose nearest other row has the same label
+def _nearest_neighbour_accuracy(features: np.ndarray, labels: np.ndarray) -> float:
+    distances = np.linalg.norm(features[:, None] - features[None], axis=2)
+    np.fill_diagonal(distances, np.inf)
+    return float((labels[distances.argmin(axis=1)] == labels).mean())
+
 # TestAverage: class containing tests for subvolume averages
 class TestAverage:
     # test_weighted_average_beats_plain_mean: on wedged particles of known pose the coverage-corrected average is closer to the truth than the plain mean of the aligned particles, for every prior
@@ -536,6 +542,17 @@ class TestFeatures:
         subvols = _subvols_from_array(tmp_path, np.random.default_rng(0).random((4, 11, 11, 11)))
         with pytest.raises(ValueError, match='normalisation'):
             build_feature_matrix(subvols, n_radial_bins=4, normalisation='bogus')
+
+    # test_axial_features_ignore_azimuth_and_axial_shift: rods of two kinds at random azimuth and axial position group by kind with axial_invariant, and by position without it
+    def test_axial_features_ignore_azimuth_and_axial_shift(self, tmp_path: Path) -> None:
+        box, rng = 25, np.random.default_rng(0)
+        rods = [rod_object(box, seed, repeat=box) for seed in (3, 4)]
+        labels = np.repeat([0, 1], 15)
+        volumes = [roll_about_normal(np.roll(rods[k], int(rng.integers(0, box)), axis=2), float(rng.uniform(0, 360))) for k in labels]
+        subvols = _subvols_from_array(tmp_path, np.stack(volumes))
+        kwargs = dict(n_radial_bins=6, max_azimuthal_mode=3, n_azimuthal_samples=32, normalisation='both')
+        assert _nearest_neighbour_accuracy(build_feature_matrix(subvols, axial_invariant=True, **kwargs), labels) >= 0.95
+        assert _nearest_neighbour_accuracy(build_feature_matrix(subvols, **kwargs), labels) < 0.9
 
 # TestFrames: class containing tests for frame and rotation conventions
 class TestFrames:

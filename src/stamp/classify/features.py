@@ -139,7 +139,7 @@ def _load_cached_magnitudes(cache_dir: Path | None, tomogram_id: str, rows: list
         pass
     return None
 
-# build_feature_matrix: feature matrix for a Subvolumes instance, read in per-tomogram batches, per-tomogram magnitudes cached in cache_dir when given
+# build_feature_matrix: feature matrix for a Subvolumes instance (axial_invariant swaps the z profile of each azimuthal mode for its magnitude spectrum, for filaments), read in per-tomogram batches, per-tomogram magnitudes cached in cache_dir when given
 def build_feature_matrix(
     subvols: Subvolumes,
     n_radial_bins: int = 12,
@@ -151,6 +151,7 @@ def build_feature_matrix(
     batch_size: int = 512,
     cache_dir: Path | None = None,
     normalisation: str = 'both',
+    axial_invariant: bool = False,
 ) -> np.ndarray:
     log.debug(f'Building features for {len(subvols)} subvolumes, max_mode={max_azimuthal_mode}')
     if len(subvols) == 0:
@@ -202,6 +203,8 @@ def build_feature_matrix(
     if n_resumed:
         log.info(f'Resuming feature extraction: {n_resumed}/{len(by_tomogram)} tomogram(s) loaded from checkpoint')
     stacked = np.stack(magnitudes)  # (n_particles, n_modes, n_radial_bins, box_voxels)
+    if axial_invariant:
+        stacked = np.abs(np.fft.rfft(stacked, axis=-1))   # axis prior: a filament's position along z is arbitrary, so keep only the spectrum along z
 
     n_particles = stacked.shape[0]
     first_outer_bin = int(np.floor(min_radius_fraction * n_radial_bins))
