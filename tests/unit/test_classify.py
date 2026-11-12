@@ -28,6 +28,7 @@ from stamp.classify.extract import (
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
 from stamp.classify.match import align_to_reference, rank_rotations, wedge_filter
+from stamp.classify.prepare import fourier_bin, normalise, prepare_particle, soft_mask, working_box
 from stamp.classify.search import rotated_bank, search_space
 from stamp.classify.wedge import apply_wedge, box_wedge, observed_directions
 from stamp.commands.classify import _classify_combined
@@ -647,6 +648,30 @@ class TestMatch:
         particle = apply_wedge(rotate_density(reference, space.rotations[target]), wedge)
         result = align_to_reference(particle[None], wedge[None], reference, space, top=5)
         assert result.rotation_index[0] == target and result.cc[0] > 0.95 and not result.shift.any()
+
+# TestPrepare: class containing tests for subvolume preparation
+class TestPrepare:
+    # test_working_box_is_odd: odd boxes bin to odd boxes so the centre stays on a voxel
+    def test_working_box_is_odd(self) -> None:
+        assert [working_box(n, 2) for n in (45, 47, 61)] == [23, 23, 31]
+        assert working_box(45, 1) == 45
+
+    # test_normalise_uses_masked_statistics: zero mean and unit variance inside the mask
+    def test_normalise_uses_masked_statistics(self) -> None:
+        rng = np.random.default_rng(0)
+        mask = soft_mask(21, 8.0)
+        out = normalise(rng.normal(5.0, 3.0, (21,) * 3).astype(np.float32), mask)
+        assert abs(out[mask > 0.5].mean()) < 1e-4 and abs(out[mask > 0.5].std() - 1.0) < 1e-3
+
+    # test_fourier_bin_preserves_a_smooth_object: a low-pass object keeps its shape after binning, checked at the centre voxel
+    def test_fourier_bin_preserves_a_smooth_object(self) -> None:
+        volume = asymmetric_object(45, 0, n_blobs=1, spread=0.0)
+        binned = fourier_bin(volume, 23)
+        assert binned.shape == (23,) * 3 and binned[11, 11, 11] > 0.9 * volume[22, 22, 22]
+
+    # test_prepare_particle_shape: output is the working box
+    def test_prepare_particle_shape(self) -> None:
+        assert prepare_particle(np.random.default_rng(1).normal(size=(45,) * 3).astype(np.float32), 23).shape == (23,) * 3
 
 # TestSearch: class containing unit tests for per-prior alignment search space
 class TestSearch:
