@@ -27,6 +27,8 @@ from stamp.classify.extract import (
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
 from stamp.classify.match import align_to_reference, rank_rotations, wedge_filter
+from stamp.classify.merge import half_split_ceilings, merge_groups, pair_thresholds, pairwise_similarity
+from stamp.classify.null import null_bar, null_threshold
 from stamp.classify.prepare import fourier_bin, normalise, prepare_particle, soft_mask, working_box
 from stamp.classify.references import hard_assign, rebuild_references, score_against_refs
 from stamp.classify.search import rotated_bank, search_space
@@ -683,6 +685,50 @@ class TestMatch:
         particle = apply_wedge(rotate_density(reference, space.rotations[target]), wedge)
         result = align_to_reference(particle[None], wedge[None], reference, space, top=5)
         assert result.rotation_index[0] == target and result.cc[0] > 0.95 and not result.shift.any()
+
+# TestMerge: class containing unit tests for half-split ceilings, merging and phase-randomised null
+class TestMerge:
+    # test_pair_threshold_ignores_inconsistent_reference: a junk reference with a low ceiling cannot lower the merge bar for real ones
+    def test_pair_threshold_ignores_inconsistent_reference(self) -> None:
+        similarity = np.array([[1.0, 0.5, 0.4], [0.5, 1.0, 0.4], [0.4, 0.4, 1.0]])
+        assert len(np.unique(merge_groups(similarity, pair_thresholds(np.array([0.9, 0.9, 0.2]), 1.0)))) == 3
+
+    # test_merge_groups_joins_chains: similarity at or above the threshold links references transitively
+    def test_merge_groups_joins_chains(self) -> None:
+        similarity = np.array([[1.0, 0.9, 0.1], [0.9, 1.0, 0.9], [0.1, 0.9, 1.0]])
+        assert len(np.unique(merge_groups(similarity, 0.8))) == 1
+
+    # test_rotated_copy_is_the_same_reference: a reference and a rotated, shifted copy are maximally similar and the pose that maps one onto the other is returned
+    def test_rotated_copy_is_the_same_reference(self) -> None:
+        from stamp.classify.frames import rotate_density
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        reference = asymmetric_object(_REF_BOX, 1)
+        copy = rotate_density(reference, space.rotations[5])
+        similarity, poses = pairwise_similarity([reference, copy, asymmetric_object(_REF_BOX, 2)], space)
+        assert similarity[0, 1] > 0.98 and similarity[0, 2] < 0.8
+        assert np.allclose(poses[0][1][0], space.rotations[5])
+
+    # test_ceiling_drops_when_poses_are_wrong: half-split agreement is high for a label with correct poses and lower when the poses are scrambled
+    def test_ceiling_drops_when_poses_are_wrong(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path, [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 40, seed=4)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        labels = np.zeros(len(data.labels), dtype=int)
+        scrambled = data.rotations[np.random.default_rng(0).permutation(len(labels))]
+        right = half_split_ceilings(data.store.batches(), labels, data.rotations, data.shifts, space, 1, _REF_BOX)[0]
+        wrong = half_split_ceilings(data.store.batches(), labels, scrambled, data.shifts, space, 1, _REF_BOX)[0]
+        assert right > 0.8 and wrong < right
+
+    # test_null_is_below_real_signal: real particles beat the rejection threshold and the agreement bar is below a real pure label's ceiling
+    def test_null_is_below_real_signal(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NORMAL, 40, noise_sigma=0.1, seed=5)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        threshold = null_threshold(data.store, objects, space, quantile=0.95)
+        assignment = hard_assign(score_against_refs(data.store, objects, space), space)
+        assert (assignment.cc > threshold).mean() > 0.9
+        bar = null_bar(data.store, objects[0], space, 30, sigmas=3.0)
+        ceiling = half_split_ceilings(data.store.batches(), assignment.labels, assignment.rotations, assignment.shifts, space, 1, _REF_BOX)[0]
+        assert ceiling > bar
 
 # TestPrepare: class containing tests for subvolume preparation
 class TestPrepare:
