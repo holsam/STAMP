@@ -6,6 +6,7 @@ STAMP: unit tests for subvolume extraction, feature classification, and clusteri
 import mrcfile, numpy as np, pytest
 from pathlib import Path
 from scipy.ndimage import gaussian_filter, rotate
+from scipy.spatial.transform import Rotation
 
 # Import internal STAMP objects
 from stamp.classify.align import roll_about_normal
@@ -20,6 +21,8 @@ from stamp.classify.polish import PolishConfig, run_polish
 from stamp.classify.prepare import fourier_bin, normalise, prepare_particle, soft_mask, working_box
 from stamp.classify.references import hard_assign, rebuild_references, score_against_refs
 from stamp.classify.search import rotated_bank, search_space
+from stamp.classify.shfeatures import build_sh_feature_matrix, sh_power
+from stamp.classify.spherical import fit_matrix, lm_pairs, real_sh_basis, sphere_grid
 from stamp.classify.store import build_store
 from stamp.classify.wedge import apply_wedge, box_wedge, observed_directions
 from stamp.picking.geometry import quaternion_from_reference_to
@@ -840,6 +843,47 @@ class TestSearch:
         serial = rotated_bank(reference, rotations)
         assert np.allclose(serial, rotated_bank(reference, rotations, threads=3))
         assert np.allclose(serial[3], rotate_density(reference, rotations[3]).ravel())
+
+# TestShFeatures: class containing unit tests for src/stamp/classify/shfeatures.py
+class TestShFeatures:
+    # test_features_are_rotation_invariant: rotating an object leaves its features nearly unchanged without a wedge
+    def test_features_are_rotation_invariant(self) -> None:
+        volume = asymmetric_object(25, 1)
+        reference = sh_power(volume, None, 90.0)
+        for seed in range(3):
+            rotated = sh_power(rotate_density(volume, Rotation.random(random_state=seed).as_matrix()), None, 90.0)
+            assert np.linalg.norm(np.log(rotated) - np.log(reference)) / np.linalg.norm(np.log(reference)) < 0.15
+
+    # test_features_separate_classes_under_wedge: rotated, wedged, noisy copies of three objects group by object
+    def test_features_separate_classes_under_wedge(self, tmp_path: Path) -> None:
+        rng = np.random.default_rng(2)
+        objects = [asymmetric_object(25, seed) for seed in (1, 2, 3)]
+        labels = np.repeat([0, 1, 2], 16)
+        wedge = box_wedge(25, None, 60.0, 90.0)
+        volumes = np.stack([make_particle(objects[k], Rotation.random(random_state=rng.integers(1 << 30)).as_matrix(), (0, 0, 0), wedge, 0.1, rng) for k in labels])
+        np.save(tmp_path / 't0.npy', volumes)
+        features = build_sh_feature_matrix(Subvolumes(tmp_path, [('t0', i) for i in range(len(labels))], 25), 60.0, 90.0)
+        distances = np.linalg.norm(features[:, None] - features[None], axis=2)
+        np.fill_diagonal(distances, np.inf)
+        assert (labels[distances.argmin(axis=1)] == labels).mean() >= 0.9
+
+# TestSpherical: class containing unit tests for src/stamp/classify/spherical.py
+class TestSpherical:
+    # test_sh_basis_is_orthonormal: quadrature of the basis gives the identity
+    def test_sh_basis_is_orthonormal(self) -> None:
+        xyz, weights = sphere_grid()
+        basis = real_sh_basis(xyz, lm_pairs(6, even_only=False))
+        assert np.allclose(basis.T @ (basis * weights[:, None]), np.eye(basis.shape[1]), atol=1e-6)
+
+    # test_masked_fit_recovers_coefficients: the ridge fit recovers a known even-degree function from half the sphere
+    def test_masked_fit_recovers_coefficients(self) -> None:
+        xyz, weights = sphere_grid()
+        pairs = lm_pairs(4, even_only=True)
+        basis = real_sh_basis(xyz, pairs)
+        truth = np.random.default_rng(0).normal(size=len(pairs))
+        observed = np.abs(xyz[:, 2]) <= np.abs(xyz[:, 0])
+        estimate = fit_matrix(basis, weights * observed, 1e-3) @ (basis @ truth)
+        assert np.allclose(estimate, truth, atol=0.1)
 
 # TestWedge: class containing tests for per-particle missing wedge
 class TestWedge:
