@@ -12,7 +12,7 @@ from stamp.classify.cluster import ClusteringConfig, ClusteringResult, label_to_
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.classify.polish import PolishConfig, posed_class_averages, run_polish
 from stamp.classify.extract import extract_particle_set
-from stamp.classify.frames import azimuth_degrees
+from stamp.classify.frames import azimuth_degrees, rotation_to_quaternion
 from stamp.classify.prepare import working_box
 from stamp.classify.shfeatures import build_sh_feature_matrix
 from stamp.classify.store import ParticleStore, build_store
@@ -257,6 +257,23 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
     argv += ['--plot-format', config.plots.format]
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
+# _pose_assignment: a class assignment carrying polish's pose, the in-plane angle only where it means something (membrane normal prior)
+def _pose_assignment(particle, cluster_id: str, classifier: str, prior: OrientationPrior, rotation: np.ndarray, shift_voxels: np.ndarray, cc: float, margin: float, polarity: int) -> ClassAssignment:
+    if cluster_id == 'noise':
+        return ClassAssignment(particle_id=particle.particle_id, cluster_id=cluster_id, classifier=classifier, vesicle_id=particle.vesicle_id, cc=cc, margin=margin)
+    return ClassAssignment(
+        particle_id=particle.particle_id,
+        cluster_id=cluster_id,
+        classifier=classifier,
+        inplane_angle_degrees=azimuth_degrees(rotation.T) if prior is OrientationPrior.NORMAL else None,
+        vesicle_id=particle.vesicle_id,
+        rotation=rotation_to_quaternion(rotation),
+        shift_voxels=tuple(float(v) for v in shift_voxels),
+        cc=cc,
+        margin=margin,
+        polarity=polarity if prior is OrientationPrior.AXIS else None,
+    )
+
 # _classify: seed clusters from the features, run polish over all particles together, then average each half at polish's poses
 def _classify_combined(
     particles,
@@ -286,13 +303,7 @@ def _classify_combined(
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_set.value)
         averages_by_half[half_set.value] = averages
     assignments = [
-        ClassAssignment(
-            particle_id=particle.particle_id,
-            cluster_id=cluster_id,
-            classifier='stamp-polish-classifier',
-            inplane_angle_degrees=azimuth_degrees(outcome.rotations[index].T) if cluster_id != 'noise' else None,
-            vesicle_id=particle.vesicle_id,
-        )
+        _pose_assignment(particle, cluster_id, 'stamp-polish-classifier', polish_config.prior, outcome.rotations[index], outcome.shifts[index] * scale, float(outcome.cc[index]), float(outcome.margin[index]), int(outcome.polarity[index]))
         for index, (particle, cluster_id) in enumerate(zip(particles, cluster_ids))
     ]
     return assignments, {'combined': seeds}, averages_by_half

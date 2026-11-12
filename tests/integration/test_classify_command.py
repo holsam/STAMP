@@ -159,6 +159,8 @@ class TestClassifyCommand:
         assignments = json.loads((output_dir / 'class_assignments.json').read_text())
         assert {a['classifier'] for a in assignments} == {'stamp-polish-classifier'}
         assert any(a['inplane_angle_degrees'] is not None for a in assignments)
+        posed = [a for a in assignments if a['cluster_id'] != 'noise']
+        assert posed and all(a['rotation'] is not None and len(a['shift_voxels']) == 3 and a['cc'] is not None and a['polarity'] is None for a in posed)
         averages = [path.name for path in (output_dir / 'class_averages').glob('*.mrc')]
         assert any('halfA' in name for name in averages) and any('halfB' in name for name in averages)
         assert (output_dir / 'params.toml').exists()

@@ -130,6 +130,17 @@ class TestParticleSchema:
         )
         assert result.candidate_protein == 'Prot001'
 
+    # test_class_assignment_pose_fields_are_optional: assignments without pose fields still load, pose fields validate when present
+    def test_class_assignment_pose_fields_are_optional(self) -> None:
+        legacy = ClassAssignment.model_validate({'particle_id': 'p0', 'cluster_id': 'c00', 'classifier': 'x', 'inplane_angle_degrees': 12.0})
+        assert legacy.rotation is None and legacy.polarity is None
+        full = ClassAssignment(particle_id='p0', cluster_id='c00', classifier='x', rotation=(1.0, 0.0, 0.0, 0.0), shift_voxels=(1.0, 0.0, -2.0), cc=0.5, margin=0.1, polarity=-1)
+        assert ClassAssignment.model_validate_json(full.model_dump_json()) == full
+        with pytest.raises(StampPipelineError):
+            ClassAssignment(particle_id='p0', cluster_id='c00', classifier='x', rotation=(2.0, 0.0, 0.0, 0.0))
+        with pytest.raises(ValidationError):
+            ClassAssignment(particle_id='p0', cluster_id='c00', classifier='x', polarity=0)
+
 # TestProvenanceSchema: class containing unit tests for schemas/provenance.py
 class TestProvenanceSchema:
     def test_provenance_sidecar_construction(self):
