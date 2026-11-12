@@ -5,10 +5,11 @@ STAMP: stamp_run.toml schema for `stamp run`
 # Import external dependencies
 import tomllib
 from pathlib import Path
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Literal
 
 # Import internal STAMP objects
+from stamp.schemas.particles import OrientationPrior
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.log import log, log_config
 
@@ -31,6 +32,9 @@ class RunSettings(_Strict):
     voxel_size_angstrom: float | None = None
     backend: Literal['local', 'mock', 'cluster'] = 'local'
     stop_after: Literal['pick', 'classify', 'identify', 'refine'] | None = None
+    orientation_prior: OrientationPrior = OrientationPrior.NORMAL
+    tilt_max_degrees: float | None = Field(default=None, gt=0, lt=90)   # None means no missing wedge is modelled
+    tilt_axis_degrees: float = 90.0     # angle of the tilt axis from the tomogram x axis in the xy plane, 90 is a tilt about y
 
 # PlotSettings: the [plots] table
 class PlotSettings(_Strict):

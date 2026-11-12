@@ -16,6 +16,12 @@ class HalfSet(str, Enum):
     A = 'A'
     B = 'B'
 
+# OrientationPrior: what the picker knows about particle orientation, which fixes the alignment search space
+class OrientationPrior(str, Enum):
+    NORMAL = 'normal'   # +z is the membrane normal, only the azimuth about z is unknown
+    AXIS = 'axis'       # +z is the filament axis, azimuth, polarity and the shift along z are unknown
+    NONE = 'none'       # no orientation known, full rotation and shift are unknown
+
 # Particle: class for a single consensus particle, located within one tomogram
 class Particle(BaseModel):
     particle_id: str
@@ -41,6 +47,7 @@ class ParticleSet(BaseModel):
     particles: list[Particle]
     consensus_rule: Literal['intersection', 'union']
     contributing_pickers: list[str]
+    orientation_prior: OrientationPrior = OrientationPrior.NORMAL  # files written before priors existed are membrane sets
 
     @field_validator('particles')
     @classmethod
