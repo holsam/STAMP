@@ -28,16 +28,21 @@ from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, 
 from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
 from stamp.classify.match import align_to_reference, rank_rotations, wedge_filter
 from stamp.classify.prepare import fourier_bin, normalise, prepare_particle, soft_mask, working_box
+from stamp.classify.references import hard_assign, rebuild_references, score_against_refs
 from stamp.classify.search import rotated_bank, search_space
+from stamp.classify.store import build_store
 from stamp.classify.wedge import apply_wedge, box_wedge, observed_directions
 from stamp.commands.classify import _classify_combined
 from stamp.picking.geometry import quaternion_from_reference_to
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
-from synthetic import asymmetric_object, make_particle, rod_object
+from synthetic import asymmetric_object, make_particle, rod_object, synthetic_set
 
 # _BOX: working box edge for alignment tests
 _BOX = 25
+
+# _BOX: working box edge for reference scoring tests
+_REF_BOX = 21
 
 # _subvols_from_array: write a dense subvolume stack to a single-tomogram cache and wrap it as a Subvolumes subvols
 def _subvols_from_array(tmp_path: Path, array: np.ndarray) -> Subvolumes:
@@ -119,6 +124,51 @@ def _brute_wedge(box: int, orientation, tilt_max: float, tilt_axis: float) -> np
 def _aligned_cc(a: np.ndarray, b: np.ndarray) -> float:
     return float((a * b).sum() / (np.linalg.norm(a) * np.linalg.norm(b)))
 
+# TestAlign: class containing unit tests for src/stamp/classify/align.py
+class TestAlign:
+    def test_recovers_planted_rolls(self, tmp_path: Path):
+        '''Rolled copies of one motif align back to a common frame.'''
+        box = 21
+        base = _asymmetric_blob(box)
+        planted = [0.0, 40.0, 120.0, 250.0, 300.0]
+        stack = np.stack([roll_about_normal(base, angle) for angle in planted])
+        subvols = _subvols_from_array(tmp_path, stack)
+        angles = align_inplane(subvols, ['c00'] * len(planted), angular_step_degrees=10.0, iterations=4)
+
+        aligned = np.stack([roll_about_normal(stack[i], angles[i]) for i in range(len(planted))])
+        reference = aligned.mean(axis=0)
+        for frame in aligned:
+            assert np.corrcoef(frame.ravel(), reference.ravel())[0, 1] > 0.98
+
+    def test_alignment_checkpoint_resumes_per_cluster(self, tmp_path: Path, monkeypatch) -> None:
+        from stamp.classify import align as align_module
+        stack = np.random.default_rng(0).random((6, 15, 15, 15))
+        subvols = _subvols_from_array(tmp_path / 'sv', stack)
+        cluster_ids = ['c00', 'c00', 'c00', 'c01', 'c01', 'c01']
+        checkpoint = tmp_path / 'align'
+        first = align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint)
+        assert sorted(p.name for p in checkpoint.glob('*.json')) == ['c00.json', 'c01.json']
+
+        # simulate an abort before c01 finished
+        (checkpoint / 'c01.json').unlink()
+        aligned_clusters: list[list[int]] = []
+        original = align_module._align_one_cluster
+        monkeypatch.setattr(align_module, '_align_one_cluster', lambda job: (aligned_clusters.append(job.member_indices), original(job))[1])
+        assert align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint) == first
+        assert aligned_clusters == [[3, 4, 5]]
+
+        # a cluster whose membership changed is recomputed
+        aligned_clusters.clear()
+        align_inplane(subvols, ['c00', 'c00', 'c01', 'c01', 'c01', 'c01'], checkpoint_dir=checkpoint)
+        assert sorted(aligned_clusters) == [[0, 1], [2, 3, 4, 5]]
+
+    def test_noise_cluster_skipped(self, tmp_path: Path):
+        '''Noise rows get no angle.'''
+        stack = np.random.default_rng(0).random((4, 15, 15, 15))
+        subvols = _subvols_from_array(tmp_path, stack)
+        angles = align_inplane(subvols, ['noise', 'noise', 'c00', 'c00'])
+        assert set(angles) == {2, 3}
+
 # TestAverage: class containing tests for subvolume averages
 class TestAverage:
     # test_weighted_average_beats_plain_mean: on wedged particles of known pose the coverage-corrected average is closer to the truth than the plain mean of the aligned particles, for every prior
@@ -144,6 +194,80 @@ class TestAverage:
         weighted = weighted_average(particles, wedges, rotations, shifts)
         plain = np.mean([rotate_density(np.roll(p, -s, axis=(0, 1, 2)), r.T) for p, r, s in zip(particles, rotations, shifts)], axis=0)
         assert _aligned_cc(weighted, obj) > _aligned_cc(plain, obj)
+
+# TestCluster: class containing unit tests for src/stamp/classify/cluster.py
+class TestCluster:
+    def test_hdbscan_recovers_three_groups(self) -> None:
+        '''HDBSCAN finds three groups in three-blob data.'''
+        result = reduce_and_cluster(
+            _three_blobs(),
+            ClusteringConfig(method='hdbscan', n_components=2, min_cluster_size=10),
+        )
+        real_labels = {label for label in result.labels if label != -1}
+        assert len(real_labels) == 3
+
+    def test_kmeans_respects_requested_cluster_count(self) -> None:
+        '''KMeans returns exactly n_clusters groups.'''
+        result = reduce_and_cluster(
+            _three_blobs(), ClusteringConfig(method='kmeans', n_components=2, n_clusters=3)
+        )
+        assert len(set(result.labels)) == 3
+
+    def test_pca_components_capped_by_sample_count(self) -> None:
+        '''N_components is capped at what the data supports.'''
+        features = np.random.default_rng(0).normal(size=(5, 100))
+        embedding, explained = reduce_features(features, ClusteringConfig(n_components=50))
+        assert embedding.shape[1] <= 4
+        assert explained.shape == (embedding.shape[1],)
+
+    def test_too_few_particles_raises(self) -> None:
+        '''A single particle raises a clear error.'''
+        with pytest.raises(ValueError, match='Too few particles'):
+            reduce_features(np.zeros((1, 10)), ClusteringConfig())
+
+    def test_hdbscan_below_min_cluster_size_raises_clearly(self) -> None:
+        '''Too few particles for min_cluster_size raises.'''
+        with pytest.raises(ValueError, match='min_cluster_size'):
+            reduce_and_cluster(
+                np.random.default_rng(0).normal(size=(5, 10)),
+                ClusteringConfig(method='hdbscan', min_cluster_size=20),
+            )
+
+    def test_noise_label_becomes_named_id(self) -> None:
+        '''Label -1 becomes 'noise', other labels become 'cNN'.'''
+        assert label_to_cluster_id(-1) == 'noise'
+        assert label_to_cluster_id(3) == 'c03'
+
+    def test_cluster_matching_pairs_nearest_centroids(self) -> None:
+        '''Cross-half matching pairs the nearest centroids.'''
+        centroids_a = {0: np.array([0.0, 0.0]), 1: np.array([10.0, 0.0])}
+        centroids_b = {0: np.array([10.2, 0.1]), 1: np.array([0.1, 0.2])}
+        matches = match_clusters_across_halves(centroids_a, centroids_b)
+        assert matches[0][0] == 1
+        assert matches[1][0] == 0
+
+    def test_cluster_matching_uses_each_a_cluster_once(self) -> None:
+        '''A half-A cluster is matched at most once.'''
+        centroids_a = {0: np.array([0.0, 0.0])}
+        centroids_b = {0: np.array([0.1, 0.0]), 1: np.array([0.2, 0.0])}
+        matches = match_clusters_across_halves(centroids_a, centroids_b)
+        assert len([m for m in matches.values() if m[0] == 0]) == 1
+
+    def test_shared_basis_matches_recover_planted_split(self):
+        '''Two motifs, each split A/B, match A<->B correctly.'''
+        rng = np.random.default_rng(0)
+        motif_a = rng.normal(0.0, 1.0, 40)
+        motif_b = rng.normal(5.0, 1.0, 40)
+        rows, group_a, group_b = [], [], []
+        for i in range(40):
+            rows.append(motif_a + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
+        for i in range(40):
+            rows.append(motif_b + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
+        features = np.array(rows)
+        config = ClusteringConfig(method='kmeans', n_clusters=2, n_components=5)
+        results = reduce_and_cluster_shared(features, {'A': np.array(group_a), 'B': np.array(group_b)}, config)
+        matches = match_clusters_across_halves(results['A'].centroids, results['B'].centroids)
+        assert len(matches) == 2 and all(d < 1.0 for _, d in matches.values())
 
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
@@ -496,125 +620,6 @@ class TestFrames:
         box = extract_subvolume(tomogram, tuple(position), quaternion, 21)
         assert _peak(box) == (10, 10, 18)   # centre 10, plus 8 along +z
 
-# TestCluster: class containing unit tests for src/stamp/classify/cluster.py
-class TestCluster:
-    def test_hdbscan_recovers_three_groups(self) -> None:
-        '''HDBSCAN finds three groups in three-blob data.'''
-        result = reduce_and_cluster(
-            _three_blobs(),
-            ClusteringConfig(method='hdbscan', n_components=2, min_cluster_size=10),
-        )
-        real_labels = {label for label in result.labels if label != -1}
-        assert len(real_labels) == 3
-
-    def test_kmeans_respects_requested_cluster_count(self) -> None:
-        '''KMeans returns exactly n_clusters groups.'''
-        result = reduce_and_cluster(
-            _three_blobs(), ClusteringConfig(method='kmeans', n_components=2, n_clusters=3)
-        )
-        assert len(set(result.labels)) == 3
-
-    def test_pca_components_capped_by_sample_count(self) -> None:
-        '''N_components is capped at what the data supports.'''
-        features = np.random.default_rng(0).normal(size=(5, 100))
-        embedding, explained = reduce_features(features, ClusteringConfig(n_components=50))
-        assert embedding.shape[1] <= 4
-        assert explained.shape == (embedding.shape[1],)
-
-    def test_too_few_particles_raises(self) -> None:
-        '''A single particle raises a clear error.'''
-        with pytest.raises(ValueError, match='Too few particles'):
-            reduce_features(np.zeros((1, 10)), ClusteringConfig())
-
-    def test_hdbscan_below_min_cluster_size_raises_clearly(self) -> None:
-        '''Too few particles for min_cluster_size raises.'''
-        with pytest.raises(ValueError, match='min_cluster_size'):
-            reduce_and_cluster(
-                np.random.default_rng(0).normal(size=(5, 10)),
-                ClusteringConfig(method='hdbscan', min_cluster_size=20),
-            )
-
-    def test_noise_label_becomes_named_id(self) -> None:
-        '''Label -1 becomes 'noise', other labels become 'cNN'.'''
-        assert label_to_cluster_id(-1) == 'noise'
-        assert label_to_cluster_id(3) == 'c03'
-
-    def test_cluster_matching_pairs_nearest_centroids(self) -> None:
-        '''Cross-half matching pairs the nearest centroids.'''
-        centroids_a = {0: np.array([0.0, 0.0]), 1: np.array([10.0, 0.0])}
-        centroids_b = {0: np.array([10.2, 0.1]), 1: np.array([0.1, 0.2])}
-        matches = match_clusters_across_halves(centroids_a, centroids_b)
-        assert matches[0][0] == 1
-        assert matches[1][0] == 0
-
-    def test_cluster_matching_uses_each_a_cluster_once(self) -> None:
-        '''A half-A cluster is matched at most once.'''
-        centroids_a = {0: np.array([0.0, 0.0])}
-        centroids_b = {0: np.array([0.1, 0.0]), 1: np.array([0.2, 0.0])}
-        matches = match_clusters_across_halves(centroids_a, centroids_b)
-        assert len([m for m in matches.values() if m[0] == 0]) == 1
-
-    def test_shared_basis_matches_recover_planted_split(self):
-        '''Two motifs, each split A/B, match A<->B correctly.'''
-        rng = np.random.default_rng(0)
-        motif_a = rng.normal(0.0, 1.0, 40)
-        motif_b = rng.normal(5.0, 1.0, 40)
-        rows, group_a, group_b = [], [], []
-        for i in range(40):
-            rows.append(motif_a + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
-        for i in range(40):
-            rows.append(motif_b + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
-        features = np.array(rows)
-        config = ClusteringConfig(method='kmeans', n_clusters=2, n_components=5)
-        results = reduce_and_cluster_shared(features, {'A': np.array(group_a), 'B': np.array(group_b)}, config)
-        matches = match_clusters_across_halves(results['A'].centroids, results['B'].centroids)
-        assert len(matches) == 2 and all(d < 1.0 for _, d in matches.values())
-
-# TestAlign: class containing unit tests for src/stamp/classify/align.py
-class TestAlign:
-    def test_recovers_planted_rolls(self, tmp_path: Path):
-        '''Rolled copies of one motif align back to a common frame.'''
-        box = 21
-        base = _asymmetric_blob(box)
-        planted = [0.0, 40.0, 120.0, 250.0, 300.0]
-        stack = np.stack([roll_about_normal(base, angle) for angle in planted])
-        subvols = _subvols_from_array(tmp_path, stack)
-        angles = align_inplane(subvols, ['c00'] * len(planted), angular_step_degrees=10.0, iterations=4)
-
-        aligned = np.stack([roll_about_normal(stack[i], angles[i]) for i in range(len(planted))])
-        reference = aligned.mean(axis=0)
-        for frame in aligned:
-            assert np.corrcoef(frame.ravel(), reference.ravel())[0, 1] > 0.98
-
-    def test_alignment_checkpoint_resumes_per_cluster(self, tmp_path: Path, monkeypatch) -> None:
-        from stamp.classify import align as align_module
-        stack = np.random.default_rng(0).random((6, 15, 15, 15))
-        subvols = _subvols_from_array(tmp_path / 'sv', stack)
-        cluster_ids = ['c00', 'c00', 'c00', 'c01', 'c01', 'c01']
-        checkpoint = tmp_path / 'align'
-        first = align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint)
-        assert sorted(p.name for p in checkpoint.glob('*.json')) == ['c00.json', 'c01.json']
-
-        # simulate an abort before c01 finished
-        (checkpoint / 'c01.json').unlink()
-        aligned_clusters: list[list[int]] = []
-        original = align_module._align_one_cluster
-        monkeypatch.setattr(align_module, '_align_one_cluster', lambda job: (aligned_clusters.append(job.member_indices), original(job))[1])
-        assert align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint) == first
-        assert aligned_clusters == [[3, 4, 5]]
-
-        # a cluster whose membership changed is recomputed
-        aligned_clusters.clear()
-        align_inplane(subvols, ['c00', 'c00', 'c01', 'c01', 'c01', 'c01'], checkpoint_dir=checkpoint)
-        assert sorted(aligned_clusters) == [[0, 1], [2, 3, 4, 5]]
-
-    def test_noise_cluster_skipped(self, tmp_path: Path):
-        '''Noise rows get no angle.'''
-        stack = np.random.default_rng(0).random((4, 15, 15, 15))
-        subvols = _subvols_from_array(tmp_path, stack)
-        angles = align_inplane(subvols, ['noise', 'noise', 'c00', 'c00'])
-        assert set(angles) == {2, 3}
-
 # TestMatch: class containing unit tests for prior-aware particle alignment to reference
 class TestMatch:
     # test_rank_rotations_matches_masked_bank: the shared-bank score equals the brute-force score against a bank masked with each particle's own wedge
@@ -702,6 +707,44 @@ class TestPrepare:
     # test_prepare_particle_shape: output is the working box
     def test_prepare_particle_shape(self) -> None:
         assert prepare_particle(np.random.default_rng(1).normal(size=(45,) * 3).astype(np.float32), 23).shape == (23,) * 3
+
+# TestReferences: class containing unit tests for particle store and reference scoring
+class TestReferences:
+    # test_store_serves_wedges_and_batches: batches cover every particle once and carry each particle's own wedge
+    def test_store_serves_wedges_and_batches(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path, [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 12, seed=1)
+        seen = []
+        for indices, volumes, wedges in data.store.batches(5):
+            assert volumes.shape == (len(indices), _REF_BOX, _REF_BOX, _REF_BOX) and wedges.shape == volumes.shape
+            assert np.array_equal(wedges[0], box_wedge(_REF_BOX, data.store.orientations[indices[0]], 60.0, 90.0))
+            seen += indices
+        assert sorted(seen) == list(range(12))
+
+    # test_build_store_bins_and_normalises: the prepared store has the working box and matches prepare_particle
+    def test_build_store_bins_and_normalises(self, tmp_path: Path) -> None:
+        rng = np.random.default_rng(0)
+        raw = rng.normal(size=(4, 45, 45, 45)).astype(np.float32)
+        np.save(tmp_path / 't0.npy', raw)
+        store = build_store(Subvolumes(tmp_path, [('t0', i) for i in range(4)], 45), [None] * 4, 23, 60.0, 90.0, tmp_path / 'prepared')
+        assert store.volumes.box_voxels == 23 and len(store) == 4
+        assert np.allclose(store.volumes[2], prepare_particle(raw[2], 23), atol=1e-5)
+
+    # test_scoring_against_true_objects_recovers_classes: assignment against the generating objects labels particles correctly
+    def test_scoring_against_true_objects_recovers_classes(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NORMAL, 20, seed=2)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        assignment = hard_assign(score_against_refs(data.store, objects, space), space)
+        assert (assignment.labels == data.labels).mean() > 0.95
+        assert (assignment.margin > 0).all()
+
+    # test_rebuild_from_true_poses_matches_object: references rebuilt from the true labels and poses correlate with the generating object
+    def test_rebuild_from_true_poses_matches_object(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NONE, 25, noise_sigma=0.05, seed=3)
+        rebuilt = rebuild_references(data.store, data.labels, data.rotations, data.shifts, 2)
+        for reference, truth in zip(rebuilt, objects):
+            assert float((reference * truth).sum() / np.linalg.norm(reference) / np.linalg.norm(truth)) > 0.9
 
 # TestSearch: class containing unit tests for per-prior alignment search space
 class TestSearch:
