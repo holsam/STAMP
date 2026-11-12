@@ -436,6 +436,21 @@ class TestCheckpoint:
         assert directory_signatures(tmp_path) != first
         assert signatures({'a': tmp_path / 'a.mrc'}, content=True) == signatures({'a': tmp_path / 'a.mrc'}, content=True)
 
+# TestPhase: class containing unit tests for phase randomisation
+class TestPhase:
+    # test_phase_randomise_keeps_amplitudes: amplitudes survive, phases change except inside the kept shell
+    def test_phase_randomise_keeps_amplitudes(self) -> None:
+        from stamp.utils.phase import phase_randomise
+        rng = np.random.default_rng(0)
+        volume = rng.normal(size=(12, 12, 12))
+        out = phase_randomise(volume, np.random.default_rng(1))
+        assert np.allclose(np.abs(np.fft.fftn(out)), np.abs(np.fft.fftn(volume)), rtol=1e-3, atol=1e-3)
+        assert not np.allclose(out, volume)
+        freq = np.fft.fftfreq(12)
+        keep = np.sqrt(sum(f**2 for f in np.meshgrid(freq, freq, freq, indexing='ij'))) < 0.2    # symmetric under k -> -k, as a shell mask is
+        kept = np.fft.fftn(phase_randomise(volume, np.random.default_rng(1), keep=keep))
+        assert np.allclose(kept[keep], np.fft.fftn(volume)[keep], atol=1e-3)
+
 # TestPickCache: class containing unit tests for cache_tomogram_picks and load_cached_picks in src/stamp/utils/io.py
 class TestPickCache:
     def test_round_trip_and_truncated_file_is_skipped(self, tmp_path: Path) -> None:
@@ -446,5 +461,3 @@ class TestPickCache:
         (tmp_path / 'cache' / 't1.json').write_text('[{"tomogram_id": ')  # truncated
         loaded = load_cached_picks(tmp_path / 'cache', ['t0', 't1'])
         assert [p.tomogram_id for p in loaded] == ['t0']
-
-
