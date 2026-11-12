@@ -14,12 +14,13 @@ from stamp.classify.polish import PolishConfig, posed_class_averages, run_polish
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.frames import azimuth_degrees
 from stamp.classify.prepare import working_box
+from stamp.classify.shfeatures import build_sh_feature_matrix
 from stamp.classify.store import ParticleStore, build_store
 from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.run.state import stage_dir
-from stamp.schemas.particles import ClassAssignment, HalfSet, ParticleSet
+from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, ParticleSet
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import archive_and_remove_directory, glob_mrc, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
@@ -65,6 +66,7 @@ def run_classify(
     log.progress('Classifying particle set')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
+    prior = particle_set.orientation_prior
     log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles')
     tomogram_ids = sorted({particle.tomogram_id for particle in particle_set.particles})
     matched, unmatched = match_by_stem([Path(f'{tomogram_id}.mrc') for tomogram_id in tomogram_ids], glob_mrc(raw_tomogram_dir))
@@ -99,6 +101,7 @@ def run_classify(
         'strict_halfset_independence': strict_halfset_independence,
         'inplane_angular_step_degrees': inplane_angular_step_degrees,
         'random_state': random_state,
+        'orientation_prior': prior.value,
         'tilt_max_degrees': tilt_max_degrees,
         'tilt_axis_degrees': tilt_axis_degrees,
         'bin_factor': bin_factor,
@@ -109,7 +112,7 @@ def run_classify(
     log.progress('Starting subvolume extraction')
     subvols, kept, skipped = extract_particle_set(
         particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels,
-        segmentation_paths=segmentation_paths, n_workers=n_workers, cache_dir=output_dir / 'raw' / 'subvolumes',
+        segmentation_paths=segmentation_paths, n_workers=n_workers, cache_dir=output_dir / 'raw' / 'subvolumes', prior=prior,
     )
     if skipped:
         log.warning(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
@@ -117,17 +120,21 @@ def run_classify(
         raise StampPipelineError('No particles could be extracted. Check --raw-dir and --box-length-a')
 
     log.progress('Starting feature matrix construction')
-    features = build_feature_matrix(
-        subvols,
-        n_radial_bins=n_radial_bins,
-        max_azimuthal_mode=azimuthal_modes,
-        n_azimuthal_samples=n_azimuthal_samples,
-        min_radius_fraction=min_radius_fraction,
-        n_workers=n_workers,
-        cache_dir=output_dir / 'raw' / 'features',
-        normalisation=feature_normalisation,
-    )
-    log.progress(f'Feature matrix complete: {features.shape[0]} particles x {features.shape[1]} features (modes 0-{azimuthal_modes})')
+    if prior is OrientationPrior.NONE:
+        features = build_sh_feature_matrix(subvols, tilt_max_degrees, tilt_axis_degrees, n_workers=n_workers)
+    else:
+        features = build_feature_matrix(
+            subvols,
+            n_radial_bins=n_radial_bins,
+            max_azimuthal_mode=azimuthal_modes,
+            n_azimuthal_samples=n_azimuthal_samples,
+            min_radius_fraction=min_radius_fraction,
+            n_workers=n_workers,
+            cache_dir=output_dir / 'raw' / 'features',
+            normalisation=feature_normalisation,
+            axial_invariant=prior is OrientationPrior.AXIS,
+        )
+    log.progress(f'Feature matrix complete: {features.shape[0]} particles x {features.shape[1]} features ({prior.value} prior)')
 
     degenerate = ~features.any(axis=1)
     if degenerate.any():
@@ -154,8 +161,8 @@ def run_classify(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     log.warning('half-A and half-B particles are classified together, FSC built on these classes will be inflated')
-    polish_config = PolishConfig(prior=particle_set.orientation_prior, min_seed_size=min_cluster_size, seed=random_state, threads=n_workers)
-    assignments, result_by_half, averages_by_half = _classify_polish_combined(kept, subvols, features, config, polish_config, working_box(box_voxels, bin_factor), (tilt_max_degrees, tilt_axis_degrees), output_dir, voxel_size_angstrom)
+    polish_config = PolishConfig(prior=prior, min_seed_size=min_cluster_size, seed=random_state, threads=n_workers)
+    assignments, result_by_half, averages_by_half = _classify_combined(kept, subvols, features, config, polish_config, working_box(box_voxels, bin_factor), (tilt_max_degrees, tilt_axis_degrees), output_dir, voxel_size_angstrom)
 
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
@@ -182,6 +189,7 @@ def run_classify(
             'strict_halfset_independence': strict_halfset_independence,
             'inplane_angular_step_degrees': inplane_angular_step_degrees,
             'random_state': random_state,
+            'orientation_prior': prior.value,
             'tilt_max_degrees': tilt_max_degrees,
             'tilt_axis_degrees': tilt_axis_degrees,
             'bin_factor': bin_factor,

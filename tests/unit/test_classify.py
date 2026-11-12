@@ -361,6 +361,20 @@ class TestExtract:
         extract_particle_set(particles, paths, 13, cache_dir=cache)
         assert sorted(calls) == ['a', 'b']
 
+    # test_none_prior_extracts_axis_aligned_boxes_without_orientation: particles without an orientation are kept and the box ignores any reported orientation
+    def test_none_prior_extracts_axis_aligned_boxes_without_orientation(self, tmp_path: Path) -> None:
+        volume = np.zeros((40, 40, 40), dtype=np.float32)
+        volume[20, 20, 26] = 1.0       # zyx: 6 voxels along +x of the particle at (20, 20, 20)
+        with mrcfile.new(tmp_path / 't0.mrc', overwrite=True) as mrc:
+            mrc.set_data(volume)
+        plain = Particle(particle_id='a', tomogram_id='t0', position=(20.0, 20.0, 20.0), source_picker='x', half_set=HalfSet.A)
+        tilted = plain.model_copy(update={'particle_id': 'b', 'orientation': quaternion_from_reference_to(np.array([1.0, 0.0, 1.0]))})
+        subvols, kept, skipped = extract_particle_set([plain, tilted], {'t0': str(tmp_path / 't0.mrc')}, 17, cache_dir=tmp_path / 'cache', prior=OrientationPrior.NONE)
+        assert len(kept) == 2 and not skipped
+        assert all(tuple(np.unravel_index(subvols[i].argmax(), subvols[i].shape)) == (14, 8, 8) for i in range(2))
+        _, kept_normal, skipped_normal = extract_particle_set([plain], {'t0': str(tmp_path / 't0.mrc')}, 17, cache_dir=tmp_path / 'cache2')
+        assert not kept_normal and len(skipped_normal) == 1
+
 # TestFeatures: class containing unit tests for src/stamp/classify/features.py
 class TestFeatures:
     def test_rotational_average_shape(self) -> None:
