@@ -23,7 +23,6 @@ from stamp.classify.extract import (
     extract_particle_set,
     extract_subvolume,
     quaternion_to_matrix,
-    roll_about_normal,
 )
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
@@ -114,6 +113,37 @@ def _brute_wedge(box: int, orientation, tilt_max: float, tilt_axis: float) -> np
                 across = np.sqrt(max(tomo[0] ** 2 + tomo[1] ** 2 - (tomo @ direction) ** 2, 0.0))   # in-plane component perpendicular to the tilt axis
                 out[i, j, k] = abs(tomo[2]) <= across * np.tan(np.radians(tilt_max)) + 1e-12
     return out
+
+
+# _aligned_cc: normalised correlation of two volumes
+def _aligned_cc(a: np.ndarray, b: np.ndarray) -> float:
+    return float((a * b).sum() / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+# TestAverage: class containing tests for subvolume averages
+class TestAverage:
+    # test_weighted_average_beats_plain_mean: on wedged particles of known pose the coverage-corrected average is closer to the truth than the plain mean of the aligned particles, for every prior
+    @pytest.mark.parametrize('prior', ['normal', 'axis', 'none'])
+    def test_weighted_average_beats_plain_mean(self, prior: str) -> None:
+        from stamp.classify.average import weighted_average
+        from stamp.classify.frames import azimuth_matrix, flip_matrix, rotate_density
+        from stamp.classify.wedge import box_wedge
+        from scipy.spatial.transform import Rotation
+        from synthetic import asymmetric_object, make_particle, rod_object
+        box, n = 25, 60
+        rng = np.random.default_rng(8)
+        obj = rod_object(box, 1, repeat=box) if prior == 'axis' else asymmetric_object(box, 1)
+        if prior == 'none':
+            rotations = Rotation.random(n, random_state=1).as_matrix()
+            wedges = np.stack([box_wedge(box, None, 35.0, 90.0)] * n)
+        else:
+            flips = [flip_matrix() if prior == 'axis' and rng.random() < 0.5 else np.eye(3) for _ in range(n)]
+            rotations = np.stack([azimuth_matrix(a) @ f for a, f in zip(rng.uniform(0, 360, n), flips)])
+            wedges = np.stack([box_wedge(box, quaternion_from_reference_to(rng.normal(size=3)), 35.0, 90.0) for _ in range(n)])
+        shifts = rng.integers(-2, 3, (n, 3)) * (np.array([0, 0, 1]) if prior == 'axis' else 1)
+        particles = np.stack([make_particle(obj, r, tuple(s), w, 0.02, rng) for r, s, w in zip(rotations, shifts, wedges)])
+        weighted = weighted_average(particles, wedges, rotations, shifts)
+        plain = np.mean([rotate_density(np.roll(p, -s, axis=(0, 1, 2)), r.T) for p, r, s in zip(particles, rotations, shifts)], axis=0)
+        assert _aligned_cc(weighted, obj) > _aligned_cc(plain, obj)
 
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
