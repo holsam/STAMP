@@ -9,26 +9,14 @@ from scipy.ndimage import gaussian_filter, rotate
 
 # Import internal STAMP objects
 from stamp.classify.align import align_inplane, roll_about_normal
-from stamp.classify.cluster import (
-    ClusteringConfig,
-    label_to_cluster_id,
-    match_clusters_across_halves,
-    reduce_and_cluster,
-    reduce_features,
-    reduce_and_cluster_shared,
-)
-from stamp.classify.extract import (
-    box_fits_inside,
-    canonical_grid,
-    extract_particle_set,
-    extract_subvolume,
-    quaternion_to_matrix,
-)
+from stamp.classify.cluster import ClusteringConfig, label_to_cluster_id, match_clusters_across_halves, reduce_and_cluster, reduce_features, reduce_and_cluster_shared
+from stamp.classify.extract import box_fits_inside, canonical_grid, extract_particle_set, extract_subvolume, quaternion_to_matrix
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
 from stamp.classify.match import align_to_reference, rank_rotations, wedge_filter
 from stamp.classify.merge import half_split_ceilings, merge_groups, pair_thresholds, pairwise_similarity
 from stamp.classify.null import null_bar, null_threshold
+from stamp.classify.polish import PolishConfig, run_polish
 from stamp.classify.prepare import fourier_bin, normalise, prepare_particle, soft_mask, working_box
 from stamp.classify.references import hard_assign, rebuild_references, score_against_refs
 from stamp.classify.search import rotated_bank, search_space
@@ -46,38 +34,14 @@ _BOX = 25
 # _BOX: working box edge for reference scoring tests
 _REF_BOX = 21
 
-# _subvols_from_array: write a dense subvolume stack to a single-tomogram cache and wrap it as a Subvolumes subvols
-def _subvols_from_array(tmp_path: Path, array: np.ndarray) -> Subvolumes:
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    box_voxels = array.shape[-1]
-    np.save(tmp_path / 'tomo000.npy', np.asarray(array, dtype=np.float32))
-    index = [('tomo000', i) for i in range(array.shape[0])]
-    return Subvolumes(tmp_path, index, box_voxels)
 
-# _three_blobs: three well-separated Gaussian blobs in 2D
-def _three_blobs(n_per_group: int = 40, seed: int = 0) -> np.ndarray:
-    rng = np.random.default_rng(seed)
-    centres = np.array([[0.0, 0.0], [20.0, 0.0], [0.0, 20.0]])
-    return np.vstack(
-        [rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres]
-    )
+# _aligned_cc: normalised correlation of two volumes
+def _aligned_cc(a: np.ndarray, b: np.ndarray) -> float:
+    return float((a * b).sum() / (np.linalg.norm(a) * np.linalg.norm(b)))
 
-# _c_n_particle: a ring of n_fold blobs above the canonical mid-plane (idealised C-n oligomer on a membrane)
-def _c_n_particle(box: int = 25, n_fold: int = 4, radius: float = 6.0) -> np.ndarray:
-    volume = np.zeros((box, box, box))
-    centre = (box - 1) / 2.0
-    z_plane = int(centre + 4)
-
-    for index in range(n_fold):
-        angle = 2.0 * np.pi * index / n_fold
-        x = int(round(centre + radius * np.cos(angle)))
-        y = int(round(centre + radius * np.sin(angle)))
-        volume[x - 1 : x + 2, y - 1 : y + 2, z_plane - 1 : z_plane + 2] = 1.0
-    return volume
-
-# _rotate_in_plane: rotate a canonical (x, y, z) volume in-plane about axes (0, 1)
-def _rotate_in_plane(volume: np.ndarray, degrees: float) -> np.ndarray:
-    return rotate(volume, angle=degrees, axes=(0, 1), reshape=False, order=1)
+# _angle_error: absolute difference of two angles in degrees, wrapped to [0, 180]
+def _angle_error(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return np.abs((a - b + 180.0) % 360.0 - 180.0)
 
 # _asymmetric_blob: a subvolume with a clear azimuthal feature (an off-axis lobe)
 def _asymmetric_blob(box: int) -> np.ndarray:
@@ -86,25 +50,11 @@ def _asymmetric_blob(box: int) -> np.ndarray:
     volume[box // 2, box // 2, box // 2] = 1.0
     return gaussian_filter(volume, 1.5)
 
-# _random_orientation: unit quaternion mapping +z onto a random direction within 60 degrees of the beam-orthogonal plane
-def _random_orientation(rng: np.random.Generator) -> tuple[float, float, float, float]:
-    vector = rng.normal(size=3)
-    vector[2] *= 0.5
-    return quaternion_from_reference_to(vector / np.linalg.norm(vector))
-
-# _angle_error: absolute difference of two angles in degrees, wrapped to [0, 180]
-def _angle_error(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    return np.abs((a - b + 180.0) % 360.0 - 180.0)
-
 # _blob: volume with one gaussian blob at the given integer index
 def _blob(shape: tuple[int, int, int], index: tuple[int, int, int]) -> np.ndarray:
     volume = np.zeros(shape, dtype=np.float32)
     volume[index] = 1.0
     return gaussian_filter(volume, 1.0)
-
-# _peak: index of the maximum of a volume
-def _peak(volume: np.ndarray) -> tuple[int, ...]:
-    return tuple(int(i) for i in np.unravel_index(volume.argmax(), volume.shape))
 
 # _brute_wedge: explicit triple loop, tomogram-frame vectors from the rotation matrix, tilt about the axis at tilt_axis_degrees
 def _brute_wedge(box: int, orientation, tilt_max: float, tilt_axis: float) -> np.ndarray:
@@ -121,10 +71,77 @@ def _brute_wedge(box: int, orientation, tilt_max: float, tilt_axis: float) -> np
                 out[i, j, k] = abs(tomo[2]) <= across * np.tan(np.radians(tilt_max)) + 1e-12
     return out
 
+# _c_n_particle: a ring of n_fold blobs above the canonical mid-plane (idealised C-n oligomer on a membrane)
+def _c_n_particle(box: int = 25, n_fold: int = 4, radius: float = 6.0) -> np.ndarray:
+    volume = np.zeros((box, box, box))
+    centre = (box - 1) / 2.0
+    z_plane = int(centre + 4)
 
-# _aligned_cc: normalised correlation of two volumes
-def _aligned_cc(a: np.ndarray, b: np.ndarray) -> float:
-    return float((a * b).sum() / (np.linalg.norm(a) * np.linalg.norm(b)))
+    for index in range(n_fold):
+        angle = 2.0 * np.pi * index / n_fold
+        x = int(round(centre + radius * np.cos(angle)))
+        y = int(round(centre + radius * np.sin(angle)))
+        volume[x - 1 : x + 2, y - 1 : y + 2, z_plane - 1 : z_plane + 2] = 1.0
+    return volume
+
+# _concatenate: one store from the volumes of two synthetic sets
+def _concatenate(directory: Path, first, second):
+    from stamp.classify.store import ParticleStore
+    from stamp.schemas.subvolumes import Subvolumes
+    directory.mkdir(parents=True)
+    volumes = [np.stack([s.store.volumes[i] for i in range(len(s.store))]) for s in (first, second)]
+    np.save(directory / 'all.npy', np.concatenate(volumes))
+    total = sum(len(v) for v in volumes)
+    return ParticleStore(Subvolumes(directory, [('all', i) for i in range(total)], _BOX), first.store.orientations + second.store.orientations, first.store.tilt_max_degrees, first.store.tilt_axis_degrees)
+
+# _config: small polish settings for fast tests
+def _config(prior: OrientationPrior, **overrides) -> PolishConfig:
+    return PolishConfig(prior=prior, angular_step_degrees=15.0, n_rotations=250, shift_range_voxels=2, min_seed_size=10, **overrides)
+
+# _corrupted_seeds: true labels with a fraction replaced by a random class, plus an embedding in which seeds sit near their class
+def _corrupted_seeds(truth: np.ndarray, fraction: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    seeds = truth.copy()
+    wrong = rng.random(len(truth)) < fraction
+    seeds[wrong] = rng.integers(0, truth.max() + 1, wrong.sum())
+    embedding = np.eye(truth.max() + 1)[seeds] + rng.normal(0, 0.1, (len(truth), truth.max() + 1))
+    return seeds, embedding
+
+# _peak: index of the maximum of a volume
+def _peak(volume: np.ndarray) -> tuple[int, ...]:
+    return tuple(int(i) for i in np.unravel_index(volume.argmax(), volume.shape))
+
+# _purity: fraction of accepted particles whose cluster's majority class is their own class
+def _purity(labels: np.ndarray, truth: np.ndarray) -> float:
+    accepted = labels >= 0
+    hits = sum(np.bincount(truth[labels == k]).max() for k in np.unique(labels[accepted]))
+    return float(hits / accepted.sum())
+
+# _random_orientation: unit quaternion mapping +z onto a random direction within 60 degrees of the beam-orthogonal plane
+def _random_orientation(rng: np.random.Generator) -> tuple[float, float, float, float]:
+    vector = rng.normal(size=3)
+    vector[2] *= 0.5
+    return quaternion_from_reference_to(vector / np.linalg.norm(vector))
+
+# _rotate_in_plane: rotate a canonical (x, y, z) volume in-plane about axes (0, 1)
+def _rotate_in_plane(volume: np.ndarray, degrees: float) -> np.ndarray:
+    return rotate(volume, angle=degrees, axes=(0, 1), reshape=False, order=1)
+
+# _subvols_from_array: write a dense subvolume stack to a single-tomogram cache and wrap it as a Subvolumes subvols
+def _subvols_from_array(tmp_path: Path, array: np.ndarray) -> Subvolumes:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    box_voxels = array.shape[-1]
+    np.save(tmp_path / 'tomo000.npy', np.asarray(array, dtype=np.float32))
+    index = [('tomo000', i) for i in range(array.shape[0])]
+    return Subvolumes(tmp_path, index, box_voxels)
+
+# _three_blobs: three well-separated Gaussian blobs in 2D
+def _three_blobs(n_per_group: int = 40, seed: int = 0) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    centres = np.array([[0.0, 0.0], [20.0, 0.0], [0.0, 20.0]])
+    return np.vstack(
+        [rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres]
+    )
 
 # TestAlign: class containing unit tests for src/stamp/classify/align.py
 class TestAlign:
@@ -729,6 +746,51 @@ class TestMerge:
         bar = null_bar(data.store, objects[0], space, 30, sigmas=3.0)
         ceiling = half_split_ceilings(data.store.batches(), assignment.labels, assignment.rotations, assignment.shifts, space, 1, _REF_BOX)[0]
         assert ceiling > bar
+
+# TestPolish: class containing unit tests for polish step
+class TestPolish:
+    # test_polish_repairs_corrupted_seeds: noisy seeds are polished into pure classes, for every prior
+    @pytest.mark.parametrize('prior', [OrientationPrior.NORMAL, OrientationPrior.AXIS, OrientationPrior.NONE])
+    def test_polish_repairs_corrupted_seeds(self, tmp_path: Path, prior: OrientationPrior) -> None:
+        make = rod_object if prior is OrientationPrior.AXIS else asymmetric_object
+        objects = [make(_BOX, seed) if prior is not OrientationPrior.AXIS else rod_object(_BOX, seed, repeat=_BOX) for seed in (1, 2)]
+        data = synthetic_set(tmp_path / 'data', objects, prior, 30, noise_sigma=0.1, seed=3)
+        seeds, embedding = _corrupted_seeds(data.labels, 0.15, 4)
+        result = run_polish(data.store, embedding, seeds, _config(prior))
+        assert _purity(result.labels, data.labels) > 0.9
+        assert (result.labels >= 0).mean() > 0.7
+        assert len(result.references) == 2
+
+    # test_polish_rejects_noise_only_particles: pure noise matches no reference above the null
+    def test_polish_rejects_noise_only_particles(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_BOX, 1)]
+        data = synthetic_set(tmp_path / 'data', objects, OrientationPrior.NORMAL, 40, seed=5)
+        noise = synthetic_set(tmp_path / 'noise', [np.zeros_like(objects[0])], OrientationPrior.NORMAL, 20, noise_sigma=0.5, seed=6)
+        # one store holding both: build by stacking the volumes of the two sets
+        both = _concatenate(tmp_path / 'both', data, noise)
+        seeds = np.concatenate([np.zeros(40, dtype=int), np.full(20, -1)])
+        embedding = np.zeros((60, 2))
+        result = run_polish(both, embedding, seeds, _config(OrientationPrior.NORMAL))
+        assert (result.labels[40:] == -1).mean() > 0.7 and (result.labels[:40] >= 0).mean() > 0.8
+
+    # test_polish_resumes_identically: a run stopped after the seeds and restarted gives identical output
+    def test_polish_resumes_identically(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_BOX, 1), asymmetric_object(_BOX, 2)]
+        data = synthetic_set(tmp_path / 'data', objects, OrientationPrior.NORMAL, 25, seed=7)
+        seeds, embedding = _corrupted_seeds(data.labels, 0.1, 8)
+        config = _config(OrientationPrior.NORMAL)
+        fresh = run_polish(data.store, embedding, seeds, config, checkpoint_dir=tmp_path / 'ckpt')
+        for path in (tmp_path / 'ckpt').glob('round*.npz'):
+            path.unlink()       # as if killed between the seed references and the first round
+        resumed = run_polish(data.store, embedding, seeds, config, checkpoint_dir=tmp_path / 'ckpt')
+        assert np.array_equal(fresh.labels, resumed.labels) and np.allclose(fresh.rotations, resumed.rotations)
+
+    # test_polish_needs_a_seed: no seed cluster of the minimum size is an error
+    def test_polish_needs_a_seed(self, tmp_path: Path) -> None:
+        from stamp.utils.errors import StampPipelineError
+        data = synthetic_set(tmp_path / 'data', [asymmetric_object(_BOX, 1)], OrientationPrior.NORMAL, 12, seed=9)
+        with pytest.raises(StampPipelineError):
+            run_polish(data.store, np.zeros((12, 2)), np.full(12, -1), _config(OrientationPrior.NORMAL))
 
 # TestPrepare: class containing tests for subvolume preparation
 class TestPrepare:
