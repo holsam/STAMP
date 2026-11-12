@@ -23,12 +23,13 @@ from stamp.classify.extract import (
     extract_particle_set,
     extract_subvolume,
     quaternion_to_matrix,
+    roll_about_normal,
 )
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
-from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density
+from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
 from stamp.classify.match import align_to_reference, rank_rotations, wedge_filter
 from stamp.classify.search import rotated_bank, search_space
-from stamp.classify.wedge import apply_wedge, box_wedge
+from stamp.classify.wedge import apply_wedge, box_wedge, observed_directions
 from stamp.commands.classify import _classify_combined
 from stamp.picking.geometry import quaternion_from_reference_to
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
@@ -87,6 +88,31 @@ def _random_orientation(rng: np.random.Generator) -> tuple[float, float, float, 
 # _angle_error: absolute difference of two angles in degrees, wrapped to [0, 180]
 def _angle_error(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.abs((a - b + 180.0) % 360.0 - 180.0)
+
+# _blob: volume with one gaussian blob at the given integer index
+def _blob(shape: tuple[int, int, int], index: tuple[int, int, int]) -> np.ndarray:
+    volume = np.zeros(shape, dtype=np.float32)
+    volume[index] = 1.0
+    return gaussian_filter(volume, 1.0)
+
+# _peak: index of the maximum of a volume
+def _peak(volume: np.ndarray) -> tuple[int, ...]:
+    return tuple(int(i) for i in np.unravel_index(volume.argmax(), volume.shape))
+
+# _brute_wedge: explicit triple loop, tomogram-frame vectors from the rotation matrix, tilt about the axis at tilt_axis_degrees
+def _brute_wedge(box: int, orientation, tilt_max: float, tilt_axis: float) -> np.ndarray:
+    rotation = np.eye(3) if orientation is None else quaternion_to_matrix(orientation)
+    axis = np.radians(tilt_axis)
+    direction = np.array([np.cos(axis), np.sin(axis), 0.0])     # tilt axis itself
+    freq = np.fft.fftfreq(box)
+    out = np.zeros((box,) * 3, dtype=np.float32)
+    for i in range(box):
+        for j in range(box):
+            for k in range(box):
+                tomo = rotation @ np.array([freq[i], freq[j], freq[k]])
+                across = np.sqrt(max(tomo[0] ** 2 + tomo[1] ** 2 - (tomo @ direction) ** 2, 0.0))   # in-plane component perpendicular to the tilt axis
+                out[i, j, k] = abs(tomo[2]) <= across * np.tan(np.radians(tilt_max)) + 1e-12
+    return out
 
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
@@ -398,6 +424,47 @@ class TestFeatures:
         with pytest.raises(ValueError, match='normalisation'):
             build_feature_matrix(subvols, n_radial_bins=4, normalisation='bogus')
 
+# TestFrames: class containing tests for frame and rotation conventions
+class TestFrames:
+    # test_rotate_density_moves_features_by_the_matrix: a feature at +x moves to +y under a +90 degree azimuth and to -z under the flip
+    def test_rotate_density_moves_features_by_the_matrix(self) -> None:
+        volume = _blob((15, 15, 15), (10, 7, 9))    # offset (+3, 0, +2) from the centre
+        assert _peak(rotate_density(volume, azimuth_matrix(90.0))) == (7, 10, 9)
+        assert _peak(rotate_density(volume, flip_matrix())) == (10, 7, 5)
+
+    # test_roll_about_normal_is_azimuth_matrix: the existing scipy roll equals rotate_density with azimuth_matrix for random angles
+    def test_roll_about_normal_is_azimuth_matrix(self) -> None:
+        rng = np.random.default_rng(0)
+        volume = gaussian_filter(rng.normal(size=(17, 17, 17)).astype(np.float32), 2.0)
+        for angle in rng.uniform(-180, 180, 5):
+            rolled = roll_about_normal(volume, float(angle))
+            moved = rotate_density(volume, azimuth_matrix(float(angle)))
+            inside = np.s_[4:-4, 4:-4, 4:-4]
+            assert np.allclose(rolled[inside], moved[inside], atol=1e-3)
+
+    # test_azimuth_degrees_inverts_azimuth_matrix: angle round trip across the full range
+    def test_azimuth_degrees_inverts_azimuth_matrix(self) -> None:
+        for angle in (-170.0, -45.0, 0.0, 30.0, 179.0):
+            assert np.isclose(azimuth_degrees(azimuth_matrix(angle)), angle)
+
+    # test_rotation_to_quaternion_round_trip: quaternion_to_matrix recovers the matrix, w is non-negative
+    def test_rotation_to_quaternion_round_trip(self) -> None:
+        rotation = azimuth_matrix(70.0) @ flip_matrix()
+        quaternion = rotation_to_quaternion(rotation)
+        assert quaternion[0] >= 0 and np.allclose(quaternion_to_matrix(quaternion), rotation)
+
+    # test_off_axis_density_lands_on_the_normal: a density planted 8 voxels along a tilted normal sits on +z of the extracted box
+    def test_off_axis_density_lands_on_the_normal(self) -> None:
+        normal = np.array([0.6, 0.0, 0.8])
+        position = np.array([30.0, 30.0, 30.0])
+        tomogram = np.zeros((61, 61, 61), dtype=np.float32)    # zyx array
+        target_xyz = position + 8.0 * normal
+        tomogram[int(round(target_xyz[2])), int(round(target_xyz[1])), int(round(target_xyz[0]))] = 1.0
+        tomogram = gaussian_filter(tomogram, 1.0)
+        quaternion = quaternion_from_reference_to(normal)
+        box = extract_subvolume(tomogram, tuple(position), quaternion, 21)
+        assert _peak(box) == (10, 10, 18)   # centre 10, plus 8 along +z
+
 # TestCluster: class containing unit tests for src/stamp/classify/cluster.py
 class TestCluster:
     def test_hdbscan_recovers_three_groups(self) -> None:
@@ -672,3 +739,42 @@ class TestVesicle:
         )
 
         assert all(assignment.vesicle_id is None for assignment in assignments)
+
+# TestWedge: class containing tests for per-particle missing wedge
+class TestWedge:
+    # test_identity_orientation_is_the_global_mask: tilt about y with identity orientation keeps |kz| <= |kx| tan(tilt)
+    def test_identity_orientation_is_the_global_mask(self) -> None:
+        box = 15
+        freq = np.fft.fftfreq(box)
+        kx, _ky, kz = np.meshgrid(freq, freq, freq, indexing='ij')
+        expected = (np.abs(kz) <= np.abs(kx) * np.tan(np.radians(60.0))).astype(np.float32)
+        assert np.array_equal(box_wedge(box, None, 60.0, 90.0), expected)
+
+    # test_rotated_wedge_matches_brute_force: random orientations and tilt axes agree with the explicit construction
+    def test_rotated_wedge_matches_brute_force(self) -> None:
+        rng = np.random.default_rng(1)
+        for _ in range(3):
+            normal = rng.normal(size=3)
+            orientation = quaternion_from_reference_to(normal)
+            tilt_axis = float(rng.uniform(0, 180))
+            fast = box_wedge(9, orientation, 55.0, tilt_axis)
+            slow = _brute_wedge(9, orientation, 55.0, tilt_axis)
+            assert (fast != slow).mean() < 0.01     # only voxels exactly on the edge may differ by rounding
+
+    # test_wedge_is_centrosymmetric: the mask is symmetric under k -> -k so filtered volumes stay real
+    def test_wedge_is_centrosymmetric(self) -> None:
+        orientation = quaternion_from_reference_to(np.array([0.3, -0.5, 0.8]))
+        wedge = box_wedge(11, orientation, 50.0, 30.0)
+        assert np.array_equal(wedge, np.roll(wedge[::-1, ::-1, ::-1], 1, axis=(0, 1, 2)))
+
+    # test_no_tilt_means_no_wedge: unset tilt keeps everything
+    def test_no_tilt_means_no_wedge(self) -> None:
+        assert box_wedge(7, None, None, 90.0).all()
+        assert observed_directions(np.eye(3), None, None, 90.0).all()
+
+    # test_apply_wedge_is_idempotent: filtering twice changes nothing
+    def test_apply_wedge_is_idempotent(self) -> None:
+        rng = np.random.default_rng(2)
+        wedge = box_wedge(11, None, 60.0, 90.0)
+        once = apply_wedge(rng.normal(size=(11, 11, 11)), wedge)
+        assert np.allclose(apply_wedge(once, wedge), once, atol=1e-5)
