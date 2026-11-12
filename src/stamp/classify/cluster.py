@@ -71,45 +71,6 @@ def reduce_and_cluster(features: np.ndarray, config: ClusteringConfig) -> Cluste
     log.progress(f'Clustering complete: {len(set(labels) - {-1})} cluster(s), {int((labels == -1).sum())} noise')
     return ClusteringResult(labels=labels, embedding=embedding, explained_variance_ratio=explained_variance_ratio, centroids=centroids)
 
-# reduce_and_cluster_shared: one PCA basis fitted on every particle, each index group clustered in that basis
-def reduce_and_cluster_shared(features: np.ndarray, groups: dict[str, np.ndarray], config: ClusteringConfig) -> dict[str, ClusteringResult]:
-    embedding_all, explained_variance_ratio = reduce_features(features, config)
-    results: dict[str, ClusteringResult] = {}
-    for name, indices in groups.items():
-        log.progress(f'Starting {config.method} clustering for half {name}')
-        log_config(config.method, config)
-        embedding = embedding_all[indices]
-        labels, centroids = _cluster_embedding(embedding, config)
-        log.progress(f'Half {name} clustering complete: {len(set(labels) - {-1})} cluster(s), {int((labels == -1).sum())} noise')
-        results[name] = ClusteringResult(
-            labels=labels,
-            embedding=embedding,
-            explained_variance_ratio=explained_variance_ratio,
-            centroids=centroids,
-        )
-    return results
-
 # label_to_cluster_id: turn a raw cluster label into a stable string id
 def label_to_cluster_id(label: int) -> str:
     return NOISE_CLUSTER_ID if label == -1 else f'c{label:02d}'
-
-# match_clusters_across_halves: pair half-B clusters to half-A clusters by nearest centroid
-def match_clusters_across_halves(
-    centroids_a: dict[int, np.ndarray], centroids_b: dict[int, np.ndarray]
-) -> dict[int, tuple[int, float]]:
-    matches: dict[int, tuple[int, float]] = {}
-    available = set(centroids_a)
-    pairs = sorted(
-        (
-            (float(np.linalg.norm(centroid_b - centroids_a[label_a])), label_b, label_a)
-            for label_b, centroid_b in centroids_b.items()
-            for label_a in centroids_a
-        )
-    )
-    for distance, label_b, label_a in pairs:
-        if label_b in matches or label_a not in available:
-            continue
-        matches[label_b] = (label_a, distance)
-        available.discard(label_a)
-    log.debug(f'Matched {len(matches)} cluster pair(s) across halves')
-    return matches

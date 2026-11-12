@@ -8,8 +8,8 @@ from pathlib import Path
 from scipy.ndimage import gaussian_filter, rotate
 
 # Import internal STAMP objects
-from stamp.classify.align import align_inplane, roll_about_normal
-from stamp.classify.cluster import ClusteringConfig, label_to_cluster_id, match_clusters_across_halves, reduce_and_cluster, reduce_features, reduce_and_cluster_shared
+from stamp.classify.align import roll_about_normal
+from stamp.classify.cluster import ClusteringConfig, label_to_cluster_id, reduce_and_cluster, reduce_features
 from stamp.classify.extract import box_fits_inside, canonical_grid, extract_particle_set, extract_subvolume, quaternion_to_matrix
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
@@ -22,7 +22,6 @@ from stamp.classify.references import hard_assign, rebuild_references, score_aga
 from stamp.classify.search import rotated_bank, search_space
 from stamp.classify.store import build_store
 from stamp.classify.wedge import apply_wedge, box_wedge, observed_directions
-from stamp.commands.classify import _classify_combined
 from stamp.picking.geometry import quaternion_from_reference_to
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
@@ -143,51 +142,6 @@ def _three_blobs(n_per_group: int = 40, seed: int = 0) -> np.ndarray:
         [rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres]
     )
 
-# TestAlign: class containing unit tests for src/stamp/classify/align.py
-class TestAlign:
-    def test_recovers_planted_rolls(self, tmp_path: Path):
-        '''Rolled copies of one motif align back to a common frame.'''
-        box = 21
-        base = _asymmetric_blob(box)
-        planted = [0.0, 40.0, 120.0, 250.0, 300.0]
-        stack = np.stack([roll_about_normal(base, angle) for angle in planted])
-        subvols = _subvols_from_array(tmp_path, stack)
-        angles = align_inplane(subvols, ['c00'] * len(planted), angular_step_degrees=10.0, iterations=4)
-
-        aligned = np.stack([roll_about_normal(stack[i], angles[i]) for i in range(len(planted))])
-        reference = aligned.mean(axis=0)
-        for frame in aligned:
-            assert np.corrcoef(frame.ravel(), reference.ravel())[0, 1] > 0.98
-
-    def test_alignment_checkpoint_resumes_per_cluster(self, tmp_path: Path, monkeypatch) -> None:
-        from stamp.classify import align as align_module
-        stack = np.random.default_rng(0).random((6, 15, 15, 15))
-        subvols = _subvols_from_array(tmp_path / 'sv', stack)
-        cluster_ids = ['c00', 'c00', 'c00', 'c01', 'c01', 'c01']
-        checkpoint = tmp_path / 'align'
-        first = align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint)
-        assert sorted(p.name for p in checkpoint.glob('*.json')) == ['c00.json', 'c01.json']
-
-        # simulate an abort before c01 finished
-        (checkpoint / 'c01.json').unlink()
-        aligned_clusters: list[list[int]] = []
-        original = align_module._align_one_cluster
-        monkeypatch.setattr(align_module, '_align_one_cluster', lambda job: (aligned_clusters.append(job.member_indices), original(job))[1])
-        assert align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint) == first
-        assert aligned_clusters == [[3, 4, 5]]
-
-        # a cluster whose membership changed is recomputed
-        aligned_clusters.clear()
-        align_inplane(subvols, ['c00', 'c00', 'c01', 'c01', 'c01', 'c01'], checkpoint_dir=checkpoint)
-        assert sorted(aligned_clusters) == [[0, 1], [2, 3, 4, 5]]
-
-    def test_noise_cluster_skipped(self, tmp_path: Path):
-        '''Noise rows get no angle.'''
-        stack = np.random.default_rng(0).random((4, 15, 15, 15))
-        subvols = _subvols_from_array(tmp_path, stack)
-        angles = align_inplane(subvols, ['noise', 'noise', 'c00', 'c00'])
-        assert set(angles) == {2, 3}
-
 # TestAverage: class containing tests for subvolume averages
 class TestAverage:
     # test_weighted_average_beats_plain_mean: on wedged particles of known pose the coverage-corrected average is closer to the truth than the plain mean of the aligned particles, for every prior
@@ -256,37 +210,6 @@ class TestCluster:
         '''Label -1 becomes 'noise', other labels become 'cNN'.'''
         assert label_to_cluster_id(-1) == 'noise'
         assert label_to_cluster_id(3) == 'c03'
-
-    def test_cluster_matching_pairs_nearest_centroids(self) -> None:
-        '''Cross-half matching pairs the nearest centroids.'''
-        centroids_a = {0: np.array([0.0, 0.0]), 1: np.array([10.0, 0.0])}
-        centroids_b = {0: np.array([10.2, 0.1]), 1: np.array([0.1, 0.2])}
-        matches = match_clusters_across_halves(centroids_a, centroids_b)
-        assert matches[0][0] == 1
-        assert matches[1][0] == 0
-
-    def test_cluster_matching_uses_each_a_cluster_once(self) -> None:
-        '''A half-A cluster is matched at most once.'''
-        centroids_a = {0: np.array([0.0, 0.0])}
-        centroids_b = {0: np.array([0.1, 0.0]), 1: np.array([0.2, 0.0])}
-        matches = match_clusters_across_halves(centroids_a, centroids_b)
-        assert len([m for m in matches.values() if m[0] == 0]) == 1
-
-    def test_shared_basis_matches_recover_planted_split(self):
-        '''Two motifs, each split A/B, match A<->B correctly.'''
-        rng = np.random.default_rng(0)
-        motif_a = rng.normal(0.0, 1.0, 40)
-        motif_b = rng.normal(5.0, 1.0, 40)
-        rows, group_a, group_b = [], [], []
-        for i in range(40):
-            rows.append(motif_a + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
-        for i in range(40):
-            rows.append(motif_b + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
-        features = np.array(rows)
-        config = ClusteringConfig(method='kmeans', n_clusters=2, n_components=5)
-        results = reduce_and_cluster_shared(features, {'A': np.array(group_a), 'B': np.array(group_b)}, config)
-        matches = match_clusters_across_halves(results['A'].centroids, results['B'].centroids)
-        assert len(matches) == 2 and all(d < 1.0 for _, d in matches.values())
 
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
@@ -884,67 +807,6 @@ class TestSearch:
         serial = rotated_bank(reference, rotations)
         assert np.allclose(serial, rotated_bank(reference, rotations, threads=3))
         assert np.allclose(serial[3], rotate_density(reference, rotations[3]).ravel())
-
-# TestVesicle: class containing unit tests for vesicle_id carry-through in classification
-class TestVesicle:
-    def test_class_assignment_carries_vesicle_id(self, tmp_path: Path) -> None:
-        '''vesicle_id on a Particle survives unchanged into its ClassAssignment'''
-        rng = np.random.default_rng(0)
-        n_per_group, box = 6, 5
-        centres = np.array([[0.0, 0.0], [20.0, 0.0]])
-        features = np.vstack([rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres])
-        n_particles = features.shape[0]
-        subvolumes = _subvols_from_array(tmp_path / 'subvolumes', np.zeros((n_particles, box, box, box), dtype=np.float32))
-
-        particles = [
-            Particle(
-                particle_id=f'p{index:06d}',
-                tomogram_id='tomo000',
-                position=(0.0, 0.0, 0.0),
-                source_picker='stamp-native',
-                half_set=HalfSet.A if index % 2 == 0 else HalfSet.B,
-                vesicle_id=f'tomo000:v{(index % 2) + 1:04d}',
-            )
-            for index in range(n_particles)
-        ]
-
-        config = ClusteringConfig(method='kmeans', n_components=2, n_clusters=2)
-        align_settings = dict(enabled=False, angular_step_degrees=10.0, iterations=1)
-        assignments, _result_by_half, _averages_by_half = _classify_combined(
-            particles, subvolumes, features, config, tmp_path, voxel_size_angstrom=1.0, align_settings=align_settings,
-        )
-
-        assert len(assignments) == n_particles
-        for particle, assignment in zip(particles, assignments):
-            assert assignment.vesicle_id == particle.vesicle_id
-
-    def test_class_assignment_vesicle_id_none_when_unset(self, tmp_path: Path) -> None:
-        '''Particles with no vesicle_id (default picking, no labels MRC) produce assignments with vesicle_id=None'''
-        rng = np.random.default_rng(1)
-        n_per_group, box = 6, 5
-        centres = np.array([[0.0, 0.0], [20.0, 0.0]])
-        features = np.vstack([rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres])
-        n_particles = features.shape[0]
-        subvolumes = _subvols_from_array(tmp_path / 'subvolumes', np.zeros((n_particles, box, box, box), dtype=np.float32))
-
-        particles = [
-            Particle(
-                particle_id=f'p{index:06d}',
-                tomogram_id='tomo000',
-                position=(0.0, 0.0, 0.0),
-                source_picker='stamp-native',
-                half_set=HalfSet.A if index % 2 == 0 else HalfSet.B,
-            )
-            for index in range(n_particles)
-        ]
-
-        config = ClusteringConfig(method='kmeans', n_components=2, n_clusters=2)
-        align_settings = dict(enabled=False, angular_step_degrees=10.0, iterations=1)
-        assignments, _result_by_half, _averages_by_half = _classify_combined(
-            particles, subvolumes, features, config, tmp_path, voxel_size_angstrom=1.0, align_settings=align_settings,
-        )
-
-        assert all(assignment.vesicle_id is None for assignment in assignments)
 
 # TestWedge: class containing tests for per-particle missing wedge
 class TestWedge:

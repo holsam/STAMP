@@ -78,9 +78,7 @@ class ClassifyStage(_Strict):
     box_angstrom: float = 300.0
     n_radial_bins: int = 12
     strict_halfset_independence: bool = True
-    inplane_alignment: bool = True
     inplane_angular_step_degrees: float = 10.0
-    inplane_iterations: int = 3
     random_state: int = 0
     n_workers: int = 1
     keep_raw: bool = False

@@ -54,9 +54,7 @@ n_components = 20
 box_angstrom = 300.0                        # --box-length-a
 n_radial_bins = 12                          # --n-bins
 strict_halfset_independence = true
-inplane_alignment = true
 inplane_angular_step_degrees = 10.0
-inplane_iterations = 3
 random_state = 0                            # --seed
 n_workers = 1
 
