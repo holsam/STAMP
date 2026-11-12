@@ -25,10 +25,13 @@ from stamp.classify.extract import (
     quaternion_to_matrix,
 )
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
+from stamp.classify.frames import rotate_density
+from stamp.classify.search import rotated_bank, search_space
 from stamp.commands.classify import _classify_combined
 from stamp.picking.geometry import quaternion_from_reference_to
-from stamp.schemas.particles import HalfSet, Particle
+from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
+from synthetic import asymmetric_object
 
 # _subvols_from_array: write a dense subvolume stack to a single-tomogram cache and wrap it as a Subvolumes subvols
 def _subvols_from_array(tmp_path: Path, array: np.ndarray) -> Subvolumes:
@@ -498,6 +501,37 @@ class TestAlign:
         subvols = _subvols_from_array(tmp_path, stack)
         angles = align_inplane(subvols, ['noise', 'noise', 'c00', 'c00'])
         assert set(angles) == {2, 3}
+
+# TestSearch: class containing unit tests for per-prior alignment search space
+class TestSearch:
+    # test_normal_space_is_z_rolls: 36 proper rotations about z at a 10 degree step, no polarity flips
+    def test_normal_space_is_z_rolls(self) -> None:
+        space = search_space(OrientationPrior.NORMAL, 25, angular_step_degrees=10.0)
+        assert len(space) == 36 and (space.polarity == 1).all()
+        assert np.allclose(space.rotations[:, 2], [0.0, 0.0, 1.0]) and np.allclose(space.rotations[:, :, 2], [0.0, 0.0, 1.0])
+        assert np.allclose(np.linalg.det(space.rotations), 1.0)
+
+    # test_axis_space_doubles_with_polarity: z-rolls and their flips, with an axial shift window of a quarter box
+    def test_axis_space_doubles_with_polarity(self) -> None:
+        space = search_space(OrientationPrior.AXIS, 25, angular_step_degrees=10.0)
+        assert len(space) == 72 and (space.polarity == -1).sum() == 36
+        assert np.allclose(space.rotations[space.polarity < 0][:, 2, 2], -1.0)
+        assert space.max_shift == (3, 3, 6)
+
+    # test_none_space_starts_at_identity: identity first, all proper rotations, reproducible from the seed
+    def test_none_space_starts_at_identity(self) -> None:
+        space = search_space(OrientationPrior.NONE, 25, n_rotations=50, seed=4)
+        assert len(space) == 50 and np.allclose(space.rotations[0], np.eye(3))
+        assert np.allclose(np.linalg.det(space.rotations), 1.0)
+        assert np.array_equal(space.rotations, search_space(OrientationPrior.NONE, 25, n_rotations=50, seed=4).rotations)
+
+    # test_rotated_bank_matches_rotate_density: threaded and serial banks agree with rotating one by one
+    def test_rotated_bank_matches_rotate_density(self) -> None:
+        reference = asymmetric_object(15, 0)
+        rotations = search_space(OrientationPrior.NONE, 15, n_rotations=6).rotations
+        serial = rotated_bank(reference, rotations)
+        assert np.allclose(serial, rotated_bank(reference, rotations, threads=3))
+        assert np.allclose(serial[3], rotate_density(reference, rotations[3]).ravel())
 
 # TestVesicle: class containing unit tests for vesicle_id carry-through in classification
 class TestVesicle:
