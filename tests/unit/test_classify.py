@@ -236,6 +236,21 @@ class TestCluster:
         config = ClusteringConfig(method='leiden', n_components=4, min_cluster_size=5, random_state=3)
         assert np.array_equal(reduce_and_cluster(features, config).labels, reduce_and_cluster(features, config).labels)
 
+    # test_seed_purity_per_prior: Leiden on the prior's features separates two distinct structures into pure seeds, wedge and random pose included
+    @pytest.mark.parametrize('prior', [OrientationPrior.NORMAL, OrientationPrior.AXIS, OrientationPrior.NONE])
+    def test_seed_purity_per_prior(self, tmp_path: Path, prior: OrientationPrior) -> None:
+        box = 25
+        objects = [rod_object(box, s, repeat=box) if prior is OrientationPrior.AXIS else asymmetric_object(box, s) for s in (1, 2)]
+        data = synthetic_set(tmp_path, objects, prior, 40, noise_sigma=0.1, seed=11, max_shift=1)
+        if prior is OrientationPrior.NONE:
+            features = build_sh_feature_matrix(data.store.volumes, 60.0, 90.0)
+        else:
+            features = build_feature_matrix(data.store.volumes, n_radial_bins=6, max_azimuthal_mode=3, n_azimuthal_samples=32, axial_invariant=prior is OrientationPrior.AXIS)
+        labels = reduce_and_cluster(features, ClusteringConfig(n_components=8, min_cluster_size=10)).labels
+        seeded = labels >= 0
+        purity = sum(np.bincount(data.labels[labels == k]).max() for k in np.unique(labels[seeded])) / seeded.sum()
+        assert seeded.mean() > 0.8 and purity >= 0.9
+
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
     def test_identity_quaternion_gives_identity_matrix(self) -> None:
