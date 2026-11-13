@@ -179,6 +179,10 @@ def run_pipeline(
     elif config.decoy.enabled:
         log.debug('Stage classify (decoy) already complete, skipping')
 
+    if stop_after == 'classify':
+        log.info(f'Stopping after stage {stop_after!r} as configured')
+        return _finalise(outcome, output_dir)
+
     # --- identify ---
     identify_dir = stage_dir(output_dir, 'real', 'identify')
     real_classes = stage_dir(output_dir, 'real', 'classify') / 'class_averages'

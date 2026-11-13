@@ -183,3 +183,8 @@ class TestDecoyControl:
         result = evaluate_decoy_control([0.95, 0.50, 0.49, 0.10], [0.60, 0.55, 0.45, 0.05])
         assert not result.passed
         assert 'Mann-Whitney' in result.reason
+
+    # test_decoy_control_passes_when_the_decoy_matched_nothing: no decoy classes is the best outcome, not an error
+    def test_decoy_control_passes_when_the_decoy_matched_nothing(self) -> None:
+        result = evaluate_decoy_control([0.8, 0.7], [])
+        assert result.passed and 'no classes' in result.reason

@@ -322,6 +322,7 @@ def _classify_combined(
     voxel_size_angstrom: float,
 ) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
     seeds = reduce_and_cluster(features, config)
+    (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
     store = build_store(subvols, orientations, working_voxels, *tilt, output_dir / 'raw' / 'working')
     outcome = run_polish(store, seeds.embedding, seeds.labels, polish_config, checkpoint_dir=output_dir / 'raw' / 'polish')
@@ -361,6 +362,7 @@ def _classify_strict(
     if not members['A'] or not members['B']:
         raise StampPipelineError('Strict mode needs particles in both half-sets')
     seeds = {half: reduce_and_cluster(features[indices], config) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
+    (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
     store = build_store(subvols, orientations, working_voxels, *tilt, output_dir / 'raw' / 'working')
     results, matches = run_polish_by_half(store, members, {h: seeds[h].embedding for h in members}, {h: seeds[h].labels for h in members}, polish_config, checkpoint_dir=output_dir / 'raw' / 'polish')

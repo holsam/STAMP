@@ -38,10 +38,10 @@ def _classify_was_inplane_aligned(classes: Path) -> bool:
     return bool(tomllib.loads(sidecar.read_text()).get('parameters', {}).get('inplane_alignment'))
 
 # load_class_averages: {class_id: (mean_volume, voxel_size)} merged across half-set MRCs
-def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
+def load_class_averages(directory: Path, *, allow_empty: bool = False) -> dict[str, tuple[np.ndarray, float]]:
     grouped: dict[str, list[np.ndarray]] = defaultdict(list)
     voxel_sizes: dict[str, float] = {}
-    for path in glob_mrc(directory):
+    for path in (glob_mrc(directory) if directory.is_dir() else []):
         match = _CLASS_ID.match(path.stem)
         if not match:
             continue
@@ -49,6 +49,8 @@ def load_class_averages(directory: Path) -> dict[str, tuple[np.ndarray, float]]:
             grouped[match.group(1)].append(np.transpose(np.asarray(mrc.data), (2, 1, 0)))
             voxel_sizes[match.group(1)] = float(mrc.voxel_size.x)
     if not grouped:
+        if allow_empty:
+            return {}
         raise StampPipelineError(f'No cNN-named class averages in {directory}')
     return {cid: (np.mean(volumes, axis=0), voxel_sizes[cid]) for cid, volumes in grouped.items()}
 
@@ -156,7 +158,7 @@ def run_identify(
     real_best, decoy_best = None, None
     if decoy_classes is not None:
         log.progress('Fitting candidates against decoy classes for control')
-        decoy_scores = _score_panel(load_class_averages(decoy_classes), panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'decoy')
+        decoy_scores = _score_panel(load_class_averages(decoy_classes, allow_empty=True), panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'decoy')
         real_best = [max(s.values()) for s in real_scores.values()]
         decoy_best = [max(s.values()) for s in decoy_scores.values()]
         decoy_control = evaluate_decoy_control(real_best, decoy_best)
@@ -203,7 +205,7 @@ def _plot_identify(real_scores, results, decoy_control, real_best, decoy_best, o
     fig, ax = plt.subplots(figsize=(6.5, 0.6 * len(cluster_ids) + 2))
     score_heatmap(ax, cluster_ids, names, real_scores, row_labels=row_labels, title='identify: fit score per candidate')
     finish(fig, plot_path(output_dir, 'identify_scores', fmt))
-    if decoy_control is not None:
+    if decoy_control is not None and decoy_best:
         fig, ax = plt.subplots(figsize=(5, 4))
         decoy_hist(ax, real_best, decoy_best, decoy_control.passed)
         finish(fig, plot_path(output_dir, 'decoy_control', fmt))

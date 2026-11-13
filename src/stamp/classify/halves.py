@@ -24,6 +24,8 @@ class HalfMatch:
 
 # match_halves: pair half-B references to half-A references by best-pose similarity, greedily from most similar pair, keeping only pairs that agree at least as well as references agree with themselves
 def match_halves(result_a: PolishResult, result_b: PolishResult, merge_fraction: float, *, threads: int = 1) -> dict[int, HalfMatch]:
+    if not result_a.references or not result_b.references:
+        return {}   # a half with no surviving cluster has nothing to match
     space = result_a.space
     stack = np.stack(result_b.references)
     full = np.ones_like(stack)

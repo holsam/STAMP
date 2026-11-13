@@ -89,6 +89,7 @@ backend = "local"
 method = "kmeans"
 n_clusters = 2
 n_components = 3
+min_cluster_size = 5
 box_angstrom = 120
 
 [stage.identify]
