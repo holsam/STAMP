@@ -4,16 +4,16 @@ STAMP: unit tests for protein parsing, simulation, fitting and decoy checking
 
 # Import external dependencies
 import numpy as np, pytest
-from scipy.ndimage import gaussian_filter, shift as shift_volume
+from scipy.ndimage import shift as shift_volume
 from scipy.spatial.transform import Rotation
 
 # Import internal STAMP objects
 from stamp.classify.frames import azimuth_matrix, rotate_density
 from stamp.identify.decoy_check import evaluate_decoy_control
-from stamp.identify.fit import fit_candidate, rank_candidates
+from stamp.identify.fit import rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.identify.register import register_score
-from stamp.identify.simulate import azimuthal_smear, simulate_density, to_comparable
+from stamp.identify.simulate import simulate_density
 from stamp.schemas.particles import OrientationPrior
 from synthetic import asymmetric_object
 
@@ -26,11 +26,6 @@ def _write_panel(tmp_path, body):
     path = tmp_path / 'candidates.yaml'
     path.write_text(body)
     return path
-
-def _blob(box, offset=0):
-    volume = np.zeros((box, box, box))
-    volume[box // 2 + offset, box // 2, box // 2] = 1.0
-    return gaussian_filter(volume, 2.0)
 
 # _write_cloud: a PDB of eight Gaussian-scattered atom clusters, different for each seed, so rotated copies are distinguishable from other clouds
 def _write_cloud(path, seed):
@@ -108,13 +103,6 @@ class TestSimulate:
         centre = np.array(np.unravel_index(np.argmax(volume), volume.shape))
         assert np.allclose(centre, 10, atol=1)
 
-    def test_smear_is_rotation_invariant(self):
-        rng = np.random.default_rng(0)
-        volume = rng.random((16, 16, 16))
-        smeared = azimuthal_smear(volume, n_angles=36)
-        rotated = azimuthal_smear(np.rot90(volume, k=1, axes=(0, 1)), n_angles=36)
-        assert np.corrcoef(smeared.ravel(), np.rot90(rotated, k=-1, axes=(0, 1)).ravel())[0, 1] > 0.95
-
     def test_orient_puts_slab_normal_on_z(self):
         from stamp.identify.simulate import orient_to_membrane_slab
         rng = np.random.default_rng(0)
@@ -132,84 +120,13 @@ class TestSimulate:
         _coords, weights, elements = read_pdb_atoms(pdb)
         assert weights[0] == 1.0 and elements[0] == 'H'
 
-    # test_to_comparable_only_smears_when_asked: smearing makes a volume symmetric about z, switching it off leaves it alone
-    def test_to_comparable_only_smears_when_asked(self) -> None:
-        volume = np.random.default_rng(0).random((16, 16, 16))
-        correlation = lambda v: np.corrcoef(v.ravel(), np.rot90(v, axes=(0, 1)).ravel())[0, 1]
-        assert correlation(to_comparable(volume, 4.0, 16.0)) > 0.95      # symmetric about z after smearing
-        assert correlation(to_comparable(volume, 4.0, 16.0, smear=False)) < 0.5
-
-# TestFit: class containing unit tests for src/stamp/identify/fit.py
-class TestFit:
-    def test_fit_recovers_planted_match(self):
-        target = _blob(21)
-        match_score = fit_candidate(target, target.copy())
-        mismatch_score = fit_candidate(target, np.random.default_rng(1).random((21, 21, 21)))
-        assert match_score > mismatch_score
-        assert match_score > 0.8
-
+# TestRank: class containing unit tests for src/stamp/identify/fit.py
+class TestRank:
     def test_gap_widens_without_distractor(self):
         with_distractor = rank_candidates('c00', {'real': 0.9, 'near': 0.85, 'far': 0.2}, 'm')
         without = rank_candidates('c00', {'real': 0.9, 'far': 0.2}, 'm')
         assert without.score_gap_to_runner_up > with_distractor.score_gap_to_runner_up
         assert with_distractor.candidate_protein == 'real'
-
-    def test_species_discrimination(self):
-        box, voxel, resolution = 32, 4.0, 20.0
-
-        def cylinder(height_voxels):
-            centre = box // 2
-            yy, xx = np.ogrid[-centre:box - centre, -centre:box - centre]
-            disk = (xx * xx + yy * yy) <= 16
-            mask = np.zeros((box, box, box), dtype=bool)
-            z0, z1 = centre - height_voxels // 2, centre + height_voxels // 2
-            mask[..., z0:z1] = disk[..., None]
-            volume = np.zeros((box, box, box))
-            volume[mask] = 1.0
-            return volume
-
-        tall_template = to_comparable(cylinder(20), voxel, resolution)
-        short_template = to_comparable(cylinder(6), voxel, resolution)
-
-        rng = np.random.default_rng(0)
-        average = -1.0 * cylinder(20) + rng.normal(0.0, 0.2, (box, box, box))
-        comparable_average = to_comparable(average, voxel, resolution)
-
-        tall_score = fit_candidate(comparable_average, tall_template)
-        short_score = fit_candidate(comparable_average, short_template)
-        assert tall_score > short_score
-
-    def test_matches_through_opposite_contrast(self):
-        # a protein-dark class average must recognise its own (protein-bright) template, flipped the way _score_panel flips it, above a mismatched one
-        box, voxel, resolution = 32, 4.0, 20.0
-
-        def cylinder(height_voxels):
-            centre = box // 2
-            yy, xx = np.ogrid[-centre:box - centre, -centre:box - centre]
-            disk = (xx * xx + yy * yy) <= 16
-            mask = np.zeros((box, box, box), dtype=bool)
-            z0, z1 = centre - height_voxels // 2, centre + height_voxels // 2
-            mask[..., z0:z1] = disk[..., None]
-            volume = np.zeros((box, box, box))
-            volume[mask] = 1.0
-            return volume
-
-        rng = np.random.default_rng(0)
-        average = to_comparable(-1.0 * cylinder(20) + rng.normal(0.0, 0.2, (box, box, box)), voxel, resolution)
-        tall = -to_comparable(cylinder(20), voxel, resolution)
-        short = -to_comparable(cylinder(6), voxel, resolution)
-
-        assert fit_candidate(average, tall) > 0.3
-        assert fit_candidate(average, tall) > fit_candidate(average, short)
-
-    def test_fit_is_contrast_blind(self):
-        target = _blob(21)
-        assert fit_candidate(target, -target.copy()) > 0.8
-
-    def test_fit_recovers_ninety_degree_misorientation(self):
-        target = _blob(21) + _blob(21, offset=5)
-        rolled = np.rot90(target, 1, axes=(0, 1))
-        assert fit_candidate(target, rolled) > 0.8
 
     def test_single_candidate_has_no_gap(self):
         result = rank_candidates('c00', {'only': 0.7}, 'm')

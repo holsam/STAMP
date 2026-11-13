@@ -70,7 +70,7 @@ class _FitJob:
 # _fit_one: multiprocessing worker entry point
 def _fit_one(job: _FitJob) -> tuple[str, str, float]:
     simulated = simulate_density(job.candidate.structure_path, job.box_voxels, job.voxel_size, job.resolution)
-    simulated = to_comparable(simulated, job.voxel_size, job.resolution, already_bandlimited=True, smear=False)
+    simulated = to_comparable(simulated, job.voxel_size, job.resolution, already_bandlimited=True)
     score = register_score(job.comparable_average, simulated, job.aligned_prior)
     return job.class_id, job.candidate.name, score
 
@@ -98,7 +98,7 @@ def _score_panel(class_averages, panel, resolution, fitter, backend, n_workers: 
         for candidate in panel:
             saved = _load_score(checkpoint_dir, class_id, candidate.name)
             if saved is None:
-                jobs.append(_FitJob(class_id, to_comparable(average, voxel_size, resolution, smear=False), average.shape[-1], voxel_size, resolution, candidate, aligned_prior))
+                jobs.append(_FitJob(class_id, to_comparable(average, voxel_size, resolution), average.shape[-1], voxel_size, resolution, candidate, aligned_prior))
             else:
                 all_scores[class_id][candidate.name] = saved
     n_resumed = sum(len(scores) for scores in all_scores.values())
