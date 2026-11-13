@@ -4,13 +4,21 @@ STAMP: unit tests for protein parsing, simulation, fitting and decoy checking
 
 # Import external dependencies
 import numpy as np, pytest
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, shift as shift_volume
+from scipy.spatial.transform import Rotation
 
 # Import internal STAMP objects
+from stamp.classify.frames import azimuth_matrix, rotate_density
 from stamp.identify.decoy_check import evaluate_decoy_control
 from stamp.identify.fit import fit_candidate, rank_candidates
 from stamp.identify.panel import load_candidate_panel
+from stamp.identify.register import register_score
 from stamp.identify.simulate import azimuthal_smear, simulate_density, to_comparable
+from stamp.schemas.particles import OrientationPrior
+from synthetic import asymmetric_object
+
+# _REGISTER_BOX: box edge of the registration tests
+_REGISTER_BOX = 25
 
 # _write_panel: helper to drop a candidates.yaml plus a stub PDB next to it
 def _write_panel(tmp_path, body):
@@ -46,6 +54,30 @@ class TestPanel:
         path = _write_panel(tmp_path, 'candidates: []\n')
         with pytest.raises(ValueError, match='candidates'):
             load_candidate_panel(path)
+
+# TestRegister: class containing unit tests for src/stamp/identify/register.py
+class TestRegister:
+    # test_registration_finds_the_matching_candidate_after_any_rotation: for the none prior a randomly rotated and shifted copy of candidate A scores far above candidate B
+    def test_registration_finds_the_matching_candidate_after_any_rotation(self) -> None:
+        candidate_a, candidate_b = asymmetric_object(_REGISTER_BOX, 1), asymmetric_object(_REGISTER_BOX, 2)
+        average = shift_volume(rotate_density(candidate_a, Rotation.random(random_state=5).as_matrix()), (1, -1, 0), order=1)
+        score_a = register_score(average, candidate_a, OrientationPrior.NONE, n_rotations=800)
+        score_b = register_score(average, candidate_b, OrientationPrior.NONE, n_rotations=800)
+        assert score_a > 0.85 and score_a > score_b + 0.2
+
+    # test_registration_matches_through_inverted_contrast: a class average with opposite contrast still matches when match_contrast is on
+    def test_registration_matches_through_inverted_contrast(self) -> None:
+        candidate = asymmetric_object(_REGISTER_BOX, 3)
+        average = -rotate_density(candidate, azimuth_matrix(40.0))
+        assert register_score(average, candidate, OrientationPrior.NORMAL) > 0.85
+        assert register_score(average, candidate, OrientationPrior.NORMAL, match_contrast=False) < 0.5
+
+    # test_normal_prior_searches_only_azimuth_and_flip: an off-axis tilt of 60 degrees is not recovered by the membrane search, unlike the none prior
+    def test_normal_prior_searches_only_azimuth_and_flip(self) -> None:
+        candidate = asymmetric_object(_REGISTER_BOX, 4)
+        tilted = rotate_density(candidate, Rotation.from_euler('x', 70, degrees=True).as_matrix())
+        assert register_score(tilted, candidate, OrientationPrior.NORMAL, n_local=1) < 0.7
+        assert register_score(tilted, candidate, OrientationPrior.NONE, n_rotations=800) > 0.85
 
 # TestSimulate: class containing unit tests for src/stamp/identify/simulate.py
 class TestSimulate:
