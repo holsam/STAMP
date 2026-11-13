@@ -15,6 +15,9 @@ output_dir = "."                            # output directory for each stage
 voxel_size_angstrom = ""                    # --voxel-size-a  (blank = auto-detect from tomogram headers)
 backend = "local"                           # --backend  (local|mock|cluster; per-stage backends below override)
 stop_after = ""                             # optional; blank|pick|classify|identify|refine
+orientation_prior = "normal"                # normal (membrane proteins)|axis (filaments)|none (soluble particles)
+tilt_max_degrees = ""                       # --tilt-max  (maximum tilt of the tilt series; blank = no missing wedge modelled)
+tilt_axis_degrees = 90.0                    # --tilt-axis  (tilt axis angle from the tomogram x axis, 90 = tilt about y)
 
 [decoy]
 enabled = true                              # --no-decoy
@@ -47,16 +50,21 @@ keep_raw = false
 backend = ""                                # inert for pick; blank = defaults to [run].backend
 
 [stage.classify]
-method = "hdbscan"                          # --method  (hdbscan|kmeans)
-min_cluster_size = 20
+method = "leiden"                           # --method  (leiden|hdbscan|kmeans)
+min_cluster_size = 20                       # smallest cluster, and the smallest seed polish refines
 n_clusters = 5
 n_components = 20
 box_angstrom = 300.0                        # --box-length-a
 n_radial_bins = 12                          # --n-bins
 strict_halfset_independence = true
-inplane_alignment = true
 inplane_angular_step_degrees = 10.0
-inplane_iterations = 3
+bin_factor = 2                              # --bin-factor  (working resolution)
+n_rotations = 3000                          # --n-rots  (none prior)
+shift_range_voxels = 3                      # --shift-range  (working voxels)
+polish_rounds = 2                           # --polish-rounds
+null_sigmas = 3.0                           # --null-sigmas
+reject_quantile = 0.95                      # --reject-quantile
+merge_fraction = 1.0                        # --merge-fraction
 random_state = 0                            # --seed
 n_workers = 1
 

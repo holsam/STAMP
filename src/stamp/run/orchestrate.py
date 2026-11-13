@@ -103,10 +103,17 @@ def _classify_track(config: RunConfig, output_dir: Path, track: str, particles: 
         n_components=settings.n_components,
         strict_halfset_independence=settings.strict_halfset_independence,
         random_state=settings.random_state,
-        inplane_alignment=settings.inplane_alignment,
         inplane_angular_step_degrees=settings.inplane_angular_step_degrees,
-        inplane_iterations=settings.inplane_iterations,
         n_workers=settings.n_workers,
+        tilt_max_degrees=config.run.tilt_max_degrees,
+        tilt_axis_degrees=config.run.tilt_axis_degrees,
+        bin_factor=settings.bin_factor,
+        n_rotations=settings.n_rotations,
+        shift_range_voxels=settings.shift_range_voxels,
+        polish_rounds=settings.polish_rounds,
+        null_sigmas=settings.null_sigmas,
+        reject_quantile=settings.reject_quantile,
+        merge_fraction=settings.merge_fraction,
     )
     return target
 

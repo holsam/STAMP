@@ -9,7 +9,7 @@ from pathlib import Path
 from scipy.ndimage import map_coordinates
 
 # Import STAMP schema
-from stamp.schemas.particles import Particle
+from stamp.schemas.particles import OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampValidationError
 from stamp.utils.io import new_mrc, open_mrc, read_mrc
@@ -25,6 +25,7 @@ class _ExtractTomogramJob:
     box_voxels: int
     cache_dir: Path
     subtracted: bool = False
+    prior: OrientationPrior = OrientationPrior.NORMAL
 
 # _SubtractTomogramJob: one tomogram's membrane subtraction, written to disk for extraction to mmap
 @dataclass(frozen=True)
@@ -136,10 +137,11 @@ def _extract_one_tomogram(job: _ExtractTomogramJob) -> tuple[list[Particle], lis
         if tomogram.dtype != np.float32:
             tomogram = tomogram.astype(np.float32)
         for particle in job.group:
-            if particle.orientation is None or not box_fits_inside(particle.position, tomogram.shape, job.box_voxels):
+            axis_aligned = job.prior is OrientationPrior.NONE     # no orientation prior: the box stays in the tomogram frame whatever the picker reported
+            if (particle.orientation is None and not axis_aligned) or not box_fits_inside(particle.position, tomogram.shape, job.box_voxels):
                 skipped.append(particle)
                 continue
-            subvolumes.append(extract_subvolume(tomogram, particle.position, particle.orientation, job.box_voxels))
+            subvolumes.append(extract_subvolume(tomogram, particle.position, None if axis_aligned else particle.orientation, job.box_voxels))
             kept.append(particle)
     job.cache_dir.mkdir(parents=True, exist_ok=True)
     if subvolumes:
@@ -160,6 +162,7 @@ def extract_particle_set(
     n_workers: int = 1,
     *,
     cache_dir: Path,
+    prior: OrientationPrior = OrientationPrior.NORMAL,
 ) -> tuple[Subvolumes, list[Particle], list[Particle]]:
     by_tomogram: dict[str, list[Particle]] = {}
     for particle in particles:
@@ -194,7 +197,7 @@ def extract_particle_set(
         if segmentation_path is not None:
             subtract_jobs.append(_SubtractTomogramJob(tomogram_id, path, segmentation_path, subtracted_dir / f'{tomogram_id}.mrc'))
         else:
-            jobs.append(_ExtractTomogramJob(tomogram_id, group, path, box_voxels, cache_dir))
+            jobs.append(_ExtractTomogramJob(tomogram_id, group, path, box_voxels, cache_dir, prior=prior))
 
     if n_resumed:
         log.info(f'Resuming extraction: {n_resumed}/{len(by_tomogram)} tomogram(s) already extracted')
@@ -211,10 +214,10 @@ def extract_particle_set(
             raise exc
         # fall back to the raw tomogram so the particles are still classified, just without subtraction
         log.warning(f'{job.tomogram_id}: {exc}; extracting from the raw tomogram without membrane subtraction')
-        jobs.append(_ExtractTomogramJob(job.tomogram_id, by_tomogram[job.tomogram_id], job.tomogram_path, box_voxels, cache_dir))
+        jobs.append(_ExtractTomogramJob(job.tomogram_id, by_tomogram[job.tomogram_id], job.tomogram_path, box_voxels, cache_dir, prior=prior))
 
     def _on_subtracted(job: _SubtractTomogramJob, output_path: Path) -> None:
-        jobs.append(_ExtractTomogramJob(job.tomogram_id, by_tomogram[job.tomogram_id], str(output_path), box_voxels, cache_dir, subtracted=True))
+        jobs.append(_ExtractTomogramJob(job.tomogram_id, by_tomogram[job.tomogram_id], str(output_path), box_voxels, cache_dir, subtracted=True, prior=prior))
 
     def _on_success(job: _ExtractTomogramJob, result: tuple[list[Particle], list[Particle]]) -> None:
         result_by_tomogram[job.tomogram_id] = result

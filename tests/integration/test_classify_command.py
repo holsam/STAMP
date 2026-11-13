@@ -10,8 +10,6 @@ from typer.testing import CliRunner
 # Import main CLI
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
-from stamp.classify.align import align_inplane
-from stamp.classify.average import compute_class_averages
 from stamp.cli.cli import stamp_app
 from stamp.schemas.particles import HalfSet, Particle
 
@@ -64,61 +62,6 @@ def _build_dataset(tmp_path: Path) -> tuple[Path, Path]:
     )
     return particle_set_path, raw_dir
 
-# TestClassifyCommand: class containing unit tests for test_classify_command.py
-class TestClassifyCommand:
-    def test_classify_end_to_end(self, tmp_path: Path) -> None:
-        '''Classify runs end to end and writes assignments, averages and params.'''
-        particle_set_path, raw_dir = _build_dataset(tmp_path)
-        result = runner.invoke(
-            stamp_app,
-            [
-                '-d', str(tmp_path),
-                'classify',
-                '--particles', str(particle_set_path),
-                '--raw-dir', str(raw_dir),
-                '--out-dir', tmp_path,
-                '--voxel-size-a', '10.0',
-                '--box-length-a', '200.0',
-                '--method', 'kmeans',
-                '--n-clusters', '2',
-                '--n-components', '10',
-            ],
-        )
-        output_dir = tmp_path / 'stamp' / 'classify'
-        assert result.exit_code == 0, result.output
-        assignments = json.loads((output_dir / 'class_assignments.json').read_text())
-        assert len(assignments) > 0
-        assert {a['cluster_id'] for a in assignments} == {'c00', 'c01'}
-        averages = list((output_dir / 'class_averages').glob('*.mrc'))
-        assert averages, 'no class averages written'
-        # Averages are written per half-set.
-        assert any('halfA' in path.name for path in averages)
-        assert any('halfB' in path.name for path in averages)
-        assert (output_dir / 'params.toml').exists()
-
-    def test_classify_strict_halfset_mode(self, tmp_path: Path) -> None:
-        '''Strict mode reports cross-half cluster matching.'''
-        particle_set_path, raw_dir = _build_dataset(tmp_path)
-        result = runner.invoke(
-            stamp_app,
-            [
-                '-vv',
-                '-d', str(tmp_path),
-                'classify',
-                '--particles', str(particle_set_path),
-                '--raw-dir', str(raw_dir),
-                '--out-dir', tmp_path,
-                '--voxel-size-a', '10.0',
-                '--box-length-a', '200.0',
-                '--method', 'kmeans',
-                '--n-clusters', '2',
-                '--n-components', '10',
-                '--strict-halfset-independence',
-            ],
-        )
-        assert result.exit_code == 0, result.output
-        assert 'Cross-half cluster matching' in result.output
-
 class TestClassifyChunking:
     def _guard_no_full_concatenate(self, monkeypatch, max_rows: int) -> None:
         '''Fail the test if anything tries to stack more than max_rows at once.'''
@@ -136,7 +79,7 @@ class TestClassifyChunking:
             '-vv', '-d', str(tmp_path), 'classify',
             '--particles', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path),
             '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'kmeans',
-            '--n-clusters', '2', '--n-components', '10', '--keep-raw',
+            '--n-clusters', '2', '--n-components', '10', '--keep-raw', '--no-strict-halfset-independence',
         ]
         assert runner.invoke(stamp_app, argv).exit_code == 0
         output_dir = tmp_path / 'stamp' / 'classify'
@@ -146,7 +89,7 @@ class TestClassifyChunking:
         assert result.exit_code == 0, result.output
         assert 'Resuming extraction' in result.output
         assert 'features loaded from checkpoint' in result.output
-        assert 'Resuming in-plane alignment' in result.output
+        assert 'Resuming polish step' in result.output
         assert (output_dir / 'class_assignments.json').read_text() == first
 
         changed = argv[:argv.index('--n-clusters')] + ['--n-clusters', '3'] + argv[argv.index('--n-clusters') + 2:]
@@ -194,8 +137,87 @@ class TestClassifyChunking:
         monkeypatch.undo()
         features = build_feature_matrix(subvols, n_workers=1, batch_size=n_particles_per_tomogram)
         assert features.shape[0] == len(subvols)
-        cluster_ids = ['c00'] * len(subvols)
-        angles = align_inplane(subvols, cluster_ids, n_workers=1)
-        assert len(angles) == len(subvols)
-        averages = compute_class_averages(subvols, cluster_ids)
-        assert averages['c00'][1] == len(subvols)
+
+class TestClassifyCommand:
+    def _invoke(self, tmp_path: Path, *extra: str, edit=None):
+        particle_set_path, raw_dir = _build_dataset(tmp_path)
+        if edit is not None:
+            payload = json.loads(particle_set_path.read_text())
+            edit(payload)
+            particle_set_path.write_text(json.dumps(payload))
+        return runner.invoke(stamp_app, [
+            '-vv', '-d', str(tmp_path), 'classify', '--particles', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path),
+            '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'kmeans', '--n-clusters', '2', '--n-components', '10',
+            '--min-cluster-size', '10', '--tilt-max', '60', *extra,
+        ])
+
+    def test_classify_end_to_end(self, tmp_path: Path) -> None:
+        '''Classify writes assignments with in-plane angles, per-half averages, params and its classifier name.'''
+        result = self._invoke(tmp_path, '--no-strict-halfset-independence')
+        assert result.exit_code == 0, result.output
+        output_dir = tmp_path / 'stamp' / 'classify'
+        assignments = json.loads((output_dir / 'class_assignments.json').read_text())
+        assert {a['classifier'] for a in assignments} == {'stamp-polish-classifier'}
+        assert any(a['inplane_angle_degrees'] is not None for a in assignments)
+        posed = [a for a in assignments if a['cluster_id'] != 'noise']
+        assert posed and all(a['rotation'] is not None and len(a['shift_voxels']) == 3 and a['cc'] is not None and a['polarity'] is None for a in posed)
+        averages = [path.name for path in (output_dir / 'class_averages').glob('*.mrc')]
+        assert any('halfA' in name for name in averages) and any('halfB' in name for name in averages)
+        assert (output_dir / 'params.toml').exists()
+
+    def test_class_assignment_carries_vesicle_id(self, tmp_path: Path) -> None:
+        '''vesicle_id on a Particle survives unchanged into its ClassAssignment, and stays None when unset.'''
+        expected: dict[str, str | None] = {}
+        def add_vesicles(payload: dict) -> None:
+            for index, particle in enumerate(payload['particles']):
+                particle['vesicle_id'] = f'tomo000:v{index % 2 + 1:04d}' if index % 3 else None
+                expected[particle['particle_id']] = particle['vesicle_id']
+        result = self._invoke(tmp_path, '--no-strict-halfset-independence', edit=add_vesicles)
+        assert result.exit_code == 0, result.output
+        assignments = json.loads((tmp_path / 'stamp' / 'classify' / 'class_assignments.json').read_text())
+        assert assignments and all(a['vesicle_id'] == expected[a['particle_id']] for a in assignments)     # particles near the edge are skipped, so only those classified are compared
+
+    def test_polish_strict_halfsets(self, tmp_path: Path) -> None:
+        '''Strict mode runs polish per half, matches clusters by reference and writes pose fields for both halves.'''
+        result = self._invoke(tmp_path, '--strict-halfset-independence', '--bin-factor', '1', '--null-sigmas', '0.5')
+        assert result.exit_code == 0, result.output
+        assert 'Cross-half cluster matching' in result.output
+        output_dir = tmp_path / 'stamp' / 'classify'
+        assignments = json.loads((output_dir / 'class_assignments.json').read_text())
+        assert {a['classifier'] for a in assignments} == {'stamp-polish-classifier-strict'}
+        assert {a['cluster_id'] for a in assignments if a['cluster_id'] != 'noise'}
+        halves = {path.name.split('_half')[1][0] for path in (output_dir / 'class_averages').glob('*.mrc')}
+        assert halves == {'A', 'B'}
+
+    def test_polish_runs_for_every_prior(self, tmp_path: Path) -> None:
+        '''The axis and none priors run end to end from the same particle set, `none` without any orientation.'''
+        for prior in ('axis', 'none'):
+            root = tmp_path / prior
+            root.mkdir()
+            particle_set_path, raw_dir = _build_dataset(root)
+            payload = json.loads(particle_set_path.read_text())
+            payload['orientation_prior'] = prior
+            if prior == 'none':
+                for particle in payload['particles']:
+                    del particle['orientation']
+            particle_set_path.write_text(json.dumps(payload))
+            result = runner.invoke(stamp_app, [
+                '-d', str(root), 'classify', '--particles', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(root),
+                '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'leiden', '--min-cluster-size', '10', '--n-components', '10',
+                '--tilt-max', '60', '--bin-factor', '1', '--null-sigmas', '0.5', '--n-rots', '150', '--no-strict-halfset-independence',
+            ])
+            assert result.exit_code == 0, result.output
+            assignments = json.loads((root / 'stamp' / 'classify' / 'class_assignments.json').read_text())
+            posed = [a for a in assignments if a['cluster_id'] != 'noise']
+            assert posed and all((a['polarity'] in (1, -1)) == (prior == 'axis') for a in posed)
+
+# TestBuildClassifyCommands: class containing tests for the classify argv built from the run config
+class TestBuildClassifyCommands:
+    # test_build_classify_commands_passes_polish_settings: the wedge and alignment settings reach the classify argv
+    def test_build_classify_commands_passes_polish_settings(self, tmp_path) -> None:
+        config = RunConfig.model_validate({**_CONFIG_DICT, 'run': {**_CONFIG_DICT['run'], 'tilt_max_degrees': 60.0, 'tilt_axis_degrees': 85.0}, 'stage': {**_CONFIG_DICT['stage'], 'classify': {'method': 'kmeans', 'n_rotations': 500}}})
+        argv = build_classify_commands(config, tmp_path)[0].argv
+        for flag, value in (('--method', 'kmeans'), ('--n-rots', '500'), ('--tilt-max', '60.0'), ('--tilt-axis', '85.0')):
+            assert argv[argv.index(flag) + 1] == value
+        default = build_classify_commands(RunConfig.model_validate(_CONFIG_DICT), tmp_path)[0].argv
+        assert '--tilt-max' not in default and default[default.index('--method') + 1] == 'leiden'

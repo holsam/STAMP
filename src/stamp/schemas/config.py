@@ -5,10 +5,11 @@ STAMP: stamp_run.toml schema for `stamp run`
 # Import external dependencies
 import tomllib
 from pathlib import Path
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Literal
 
 # Import internal STAMP objects
+from stamp.schemas.particles import OrientationPrior
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.log import log, log_config
 
@@ -31,6 +32,9 @@ class RunSettings(_Strict):
     voxel_size_angstrom: float | None = None
     backend: Literal['local', 'mock', 'cluster'] = 'local'
     stop_after: Literal['pick', 'classify', 'identify', 'refine'] | None = None
+    orientation_prior: OrientationPrior = OrientationPrior.NORMAL
+    tilt_max_degrees: float | None = Field(default=None, gt=0, lt=90)   # None means no missing wedge is modelled
+    tilt_axis_degrees: float = 90.0     # angle of the tilt axis from the tomogram x axis in the xy plane, 90 is a tilt about y
 
 # PlotSettings: the [plots] table
 class PlotSettings(_Strict):
@@ -67,16 +71,21 @@ class PickStage(_Strict):
     keep_raw: bool = False
 
 class ClassifyStage(_Strict):
-    method: Literal['hdbscan', 'kmeans'] = 'hdbscan'
+    method: Literal['leiden', 'hdbscan', 'kmeans'] = 'leiden'
     min_cluster_size: int = 20
     n_clusters: int = 5
     n_components: int = 20
     box_angstrom: float = 300.0
     n_radial_bins: int = 12
     strict_halfset_independence: bool = True
-    inplane_alignment: bool = True
     inplane_angular_step_degrees: float = 10.0
-    inplane_iterations: int = 3
+    bin_factor: int = Field(default=2, ge=1)
+    n_rotations: int = Field(default=3000, ge=2)
+    shift_range_voxels: int = Field(default=3, ge=0)
+    polish_rounds: int = Field(default=2, ge=1)
+    null_sigmas: float = Field(default=3.0, ge=0)
+    reject_quantile: float = Field(default=0.95, gt=0.5, lt=1.0)
+    merge_fraction: float = Field(default=1.0, ge=0)
     random_state: int = 0
     n_workers: int = 1
     keep_raw: bool = False

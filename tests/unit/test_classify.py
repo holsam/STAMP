@@ -6,29 +6,130 @@ STAMP: unit tests for subvolume extraction, feature classification, and clusteri
 import mrcfile, numpy as np, pytest
 from pathlib import Path
 from scipy.ndimage import gaussian_filter, rotate
+from scipy.spatial.transform import Rotation
 
 # Import internal STAMP objects
-from stamp.classify.align import align_inplane, roll_about_normal
-from stamp.classify.cluster import (
-    ClusteringConfig,
-    label_to_cluster_id,
-    match_clusters_across_halves,
-    reduce_and_cluster,
-    reduce_features,
-    reduce_and_cluster_shared,
-)
-from stamp.classify.extract import (
-    box_fits_inside,
-    canonical_grid,
-    extract_particle_set,
-    extract_subvolume,
-    quaternion_to_matrix,
-)
+from stamp.classify.align import roll_about_normal
+from stamp.classify.average import weighted_average
+from stamp.classify.cluster import ClusteringConfig, label_to_cluster_id, reduce_and_cluster, reduce_features
+from stamp.classify.extract import box_fits_inside, canonical_grid, extract_particle_set, extract_subvolume, quaternion_to_matrix
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
-from stamp.commands.classify import _classify_combined
+from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
+from stamp.classify.halves import express_in_frame_of_a, run_polish_by_half
+from stamp.classify.match import align_to_reference, rank_rotations, wedge_filter
+from stamp.classify.merge import half_split_ceilings, merge_groups, pair_thresholds, pairwise_similarity
+from stamp.classify.null import null_bar, null_threshold
+from stamp.classify.polish import PolishConfig, run_polish
+from stamp.classify.prepare import fourier_bin, normalise, prepare_particle, soft_mask, working_box
+from stamp.classify.references import hard_assign, rebuild_references, score_against_refs
+from stamp.classify.search import rotated_bank, search_space
+from stamp.classify.shfeatures import build_sh_feature_matrix, sh_power
+from stamp.classify.spherical import fit_matrix, lm_pairs, real_sh_basis, sphere_grid
+from stamp.classify.store import ParticleStore, build_store
+from stamp.classify.wedge import apply_wedge, box_wedge, observed_directions
 from stamp.picking.geometry import quaternion_from_reference_to
-from stamp.schemas.particles import HalfSet, Particle
+from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
+from synthetic import asymmetric_object, make_particle, rod_object, synthetic_set
+
+# _BOX: working box edge for alignment tests
+_BOX = 25
+
+# _BOX: working box edge for reference scoring tests
+_REF_BOX = 21
+
+
+# _aligned_cc: normalised correlation of two volumes
+def _aligned_cc(a: np.ndarray, b: np.ndarray) -> float:
+    return float((a * b).sum() / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+# _angle_error: absolute difference of two angles in degrees, wrapped to [0, 180]
+def _angle_error(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    return np.abs((a - b + 180.0) % 360.0 - 180.0)
+
+# _asymmetric_blob: a subvolume with a clear azimuthal feature (an off-axis lobe)
+def _asymmetric_blob(box: int) -> np.ndarray:
+    volume = np.zeros((box, box, box))
+    volume[box // 2 + 4, box // 2, box // 2] = 1.0
+    volume[box // 2, box // 2, box // 2] = 1.0
+    return gaussian_filter(volume, 1.5)
+
+# _blob: volume with one gaussian blob at the given integer index
+def _blob(shape: tuple[int, int, int], index: tuple[int, int, int]) -> np.ndarray:
+    volume = np.zeros(shape, dtype=np.float32)
+    volume[index] = 1.0
+    return gaussian_filter(volume, 1.0)
+
+# _brute_wedge: explicit triple loop, tomogram-frame vectors from the rotation matrix, tilt about the axis at tilt_axis_degrees
+def _brute_wedge(box: int, orientation, tilt_max: float, tilt_axis: float) -> np.ndarray:
+    rotation = np.eye(3) if orientation is None else quaternion_to_matrix(orientation)
+    axis = np.radians(tilt_axis)
+    direction = np.array([np.cos(axis), np.sin(axis), 0.0])     # tilt axis itself
+    freq = np.fft.fftfreq(box)
+    out = np.zeros((box,) * 3, dtype=np.float32)
+    for i in range(box):
+        for j in range(box):
+            for k in range(box):
+                tomo = rotation @ np.array([freq[i], freq[j], freq[k]])
+                across = np.sqrt(max(tomo[0] ** 2 + tomo[1] ** 2 - (tomo @ direction) ** 2, 0.0))   # in-plane component perpendicular to the tilt axis
+                out[i, j, k] = abs(tomo[2]) <= across * np.tan(np.radians(tilt_max)) + 1e-12
+    return out
+
+# _c_n_particle: a ring of n_fold blobs above the canonical mid-plane (idealised C-n oligomer on a membrane)
+def _c_n_particle(box: int = 25, n_fold: int = 4, radius: float = 6.0) -> np.ndarray:
+    volume = np.zeros((box, box, box))
+    centre = (box - 1) / 2.0
+    z_plane = int(centre + 4)
+
+    for index in range(n_fold):
+        angle = 2.0 * np.pi * index / n_fold
+        x = int(round(centre + radius * np.cos(angle)))
+        y = int(round(centre + radius * np.sin(angle)))
+        volume[x - 1 : x + 2, y - 1 : y + 2, z_plane - 1 : z_plane + 2] = 1.0
+    return volume
+
+# _concatenate: one store from the volumes of two synthetic sets
+def _concatenate(directory: Path, first, second):
+    from stamp.classify.store import ParticleStore
+    from stamp.schemas.subvolumes import Subvolumes
+    directory.mkdir(parents=True)
+    volumes = [np.stack([s.store.volumes[i] for i in range(len(s.store))]) for s in (first, second)]
+    np.save(directory / 'all.npy', np.concatenate(volumes))
+    total = sum(len(v) for v in volumes)
+    return ParticleStore(Subvolumes(directory, [('all', i) for i in range(total)], _BOX), first.store.orientations + second.store.orientations, first.store.tilt_max_degrees, first.store.tilt_axis_degrees)
+
+# _config: small polish settings for fast tests
+def _config(prior: OrientationPrior, **overrides) -> PolishConfig:
+    return PolishConfig(prior=prior, angular_step_degrees=15.0, n_rotations=250, shift_range_voxels=2, min_seed_size=10, **overrides)
+
+# _corrupted_seeds: true labels with a fraction replaced by a random class, plus an embedding in which seeds sit near their class
+def _corrupted_seeds(truth: np.ndarray, fraction: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    seeds = truth.copy()
+    wrong = rng.random(len(truth)) < fraction
+    seeds[wrong] = rng.integers(0, truth.max() + 1, wrong.sum())
+    embedding = np.eye(truth.max() + 1)[seeds] + rng.normal(0, 0.1, (len(truth), truth.max() + 1))
+    return seeds, embedding
+
+# _peak: index of the maximum of a volume
+def _peak(volume: np.ndarray) -> tuple[int, ...]:
+    return tuple(int(i) for i in np.unravel_index(volume.argmax(), volume.shape))
+
+# _purity: fraction of accepted particles whose cluster's majority class is their own class
+def _purity(labels: np.ndarray, truth: np.ndarray) -> float:
+    accepted = labels >= 0
+    hits = sum(np.bincount(truth[labels == k]).max() for k in np.unique(labels[accepted]))
+    return float(hits / accepted.sum())
+
+# _random_orientation: unit quaternion mapping +z onto a random direction within 60 degrees of the beam-orthogonal plane
+def _random_orientation(rng: np.random.Generator) -> tuple[float, float, float, float]:
+    vector = rng.normal(size=3)
+    vector[2] *= 0.5
+    return quaternion_from_reference_to(vector / np.linalg.norm(vector))
+
+# _rotate_in_plane: rotate a canonical (x, y, z) volume in-plane about axes (0, 1)
+def _rotate_in_plane(volume: np.ndarray, degrees: float) -> np.ndarray:
+    return rotate(volume, angle=degrees, axes=(0, 1), reshape=False, order=1)
 
 # _subvols_from_array: write a dense subvolume stack to a single-tomogram cache and wrap it as a Subvolumes subvols
 def _subvols_from_array(tmp_path: Path, array: np.ndarray) -> Subvolumes:
@@ -46,29 +147,119 @@ def _three_blobs(n_per_group: int = 40, seed: int = 0) -> np.ndarray:
         [rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres]
     )
 
-# _c_n_particle: a ring of n_fold blobs above the canonical mid-plane (idealised C-n oligomer on a membrane)
-def _c_n_particle(box: int = 25, n_fold: int = 4, radius: float = 6.0) -> np.ndarray:
-    volume = np.zeros((box, box, box))
-    centre = (box - 1) / 2.0
-    z_plane = int(centre + 4)
+# _nearest_neighbour_accuracy: fraction of rows whose nearest other row has the same label
+def _nearest_neighbour_accuracy(features: np.ndarray, labels: np.ndarray) -> float:
+    distances = np.linalg.norm(features[:, None] - features[None], axis=2)
+    np.fill_diagonal(distances, np.inf)
+    return float((labels[distances.argmin(axis=1)] == labels).mean())
 
-    for index in range(n_fold):
-        angle = 2.0 * np.pi * index / n_fold
-        x = int(round(centre + radius * np.cos(angle)))
-        y = int(round(centre + radius * np.sin(angle)))
-        volume[x - 1 : x + 2, y - 1 : y + 2, z_plane - 1 : z_plane + 2] = 1.0
-    return volume
+# _split: interleaved halves of a synthetic set with seeds from the true labels, and the store
+def _split(data):
+    n = len(data.labels)
+    indices = {'A': list(range(0, n, 2)), 'B': list(range(1, n, 2))}
+    seeds = {h: data.labels[i] for h, i in indices.items()}
+    embeddings = {h: np.eye(2)[seeds[h]] + np.random.default_rng(0).normal(0, 0.05, (len(seeds[h]), 2)) for h in indices}
+    return indices, embeddings, seeds
 
-# _rotate_in_plane: rotate a canonical (x, y, z) volume in-plane about axes (0, 1)
-def _rotate_in_plane(volume: np.ndarray, degrees: float) -> np.ndarray:
-    return rotate(volume, angle=degrees, axes=(0, 1), reshape=False, order=1)
+# TestAverage: class containing tests for subvolume averages
+class TestAverage:
+    # test_weighted_average_beats_plain_mean: on wedged particles of known pose the coverage-corrected average is closer to the truth than the plain mean of the aligned particles, for every prior
+    @pytest.mark.parametrize('prior', ['normal', 'axis', 'none'])
+    def test_weighted_average_beats_plain_mean(self, prior: str) -> None:
+        from stamp.classify.average import weighted_average
+        from stamp.classify.frames import azimuth_matrix, flip_matrix, rotate_density
+        from stamp.classify.wedge import box_wedge
+        from scipy.spatial.transform import Rotation
+        from synthetic import asymmetric_object, make_particle, rod_object
+        box, n = 25, 60
+        rng = np.random.default_rng(8)
+        obj = rod_object(box, 1, repeat=box) if prior == 'axis' else asymmetric_object(box, 1)
+        if prior == 'none':
+            rotations = Rotation.random(n, random_state=1).as_matrix()
+            wedges = np.stack([box_wedge(box, None, 35.0, 90.0)] * n)
+        else:
+            flips = [flip_matrix() if prior == 'axis' and rng.random() < 0.5 else np.eye(3) for _ in range(n)]
+            rotations = np.stack([azimuth_matrix(a) @ f for a, f in zip(rng.uniform(0, 360, n), flips)])
+            wedges = np.stack([box_wedge(box, quaternion_from_reference_to(rng.normal(size=3)), 35.0, 90.0) for _ in range(n)])
+        shifts = rng.integers(-2, 3, (n, 3)) * (np.array([0, 0, 1]) if prior == 'axis' else 1)
+        particles = np.stack([make_particle(obj, r, tuple(s), w, 0.02, rng) for r, s, w in zip(rotations, shifts, wedges)])
+        weighted = weighted_average(particles, wedges, rotations, shifts)
+        plain = np.mean([rotate_density(np.roll(p, -s, axis=(0, 1, 2)), r.T) for p, r, s in zip(particles, rotations, shifts)], axis=0)
+        assert _aligned_cc(weighted, obj) > _aligned_cc(plain, obj)
 
-# _asymmetric_blob: a subvolume with a clear azimuthal feature (an off-axis lobe)
-def _asymmetric_blob(box: int) -> np.ndarray:
-    volume = np.zeros((box, box, box))
-    volume[box // 2 + 4, box // 2, box // 2] = 1.0
-    volume[box // 2, box // 2, box // 2] = 1.0
-    return gaussian_filter(volume, 1.5)
+# TestCluster: class containing unit tests for src/stamp/classify/cluster.py
+class TestCluster:
+    def test_hdbscan_recovers_three_groups(self) -> None:
+        '''HDBSCAN finds three groups in three-blob data.'''
+        result = reduce_and_cluster(
+            _three_blobs(),
+            ClusteringConfig(method='hdbscan', n_components=2, min_cluster_size=10),
+        )
+        real_labels = {label for label in result.labels if label != -1}
+        assert len(real_labels) == 3
+
+    def test_kmeans_respects_requested_cluster_count(self) -> None:
+        '''KMeans returns exactly n_clusters groups.'''
+        result = reduce_and_cluster(
+            _three_blobs(), ClusteringConfig(method='kmeans', n_components=2, n_clusters=3)
+        )
+        assert len(set(result.labels)) == 3
+
+    def test_pca_components_capped_by_sample_count(self) -> None:
+        '''N_components is capped at what the data supports.'''
+        features = np.random.default_rng(0).normal(size=(5, 100))
+        embedding, explained = reduce_features(features, ClusteringConfig(n_components=50))
+        assert embedding.shape[1] <= 4
+        assert explained.shape == (embedding.shape[1],)
+
+    def test_too_few_particles_raises(self) -> None:
+        '''A single particle raises a clear error.'''
+        with pytest.raises(ValueError, match='Too few particles'):
+            reduce_features(np.zeros((1, 10)), ClusteringConfig())
+
+    def test_hdbscan_below_min_cluster_size_raises_clearly(self) -> None:
+        '''Too few particles for min_cluster_size raises.'''
+        with pytest.raises(ValueError, match='min_cluster_size'):
+            reduce_and_cluster(
+                np.random.default_rng(0).normal(size=(5, 10)),
+                ClusteringConfig(method='hdbscan', min_cluster_size=20),
+            )
+
+    def test_noise_label_becomes_named_id(self) -> None:
+        '''Label -1 becomes 'noise', other labels become 'cNN'.'''
+        assert label_to_cluster_id(-1) == 'noise'
+        assert label_to_cluster_id(3) == 'c03'
+
+    # test_leiden_finds_blobs_and_applies_min_size: three well separated blobs give three clusters, and communities under min_cluster_size are noise
+    def test_leiden_finds_blobs_and_applies_min_size(self) -> None:
+        rng = np.random.default_rng(0)
+        centres = np.array([[0.0] * 5, [8.0] * 5, [-8.0, 8.0, -8.0, 8.0, -8.0]])
+        features = np.vstack([rng.normal(c, 1.0, (40, 5)) for c in centres])
+        result = reduce_and_cluster(features, ClusteringConfig(method='leiden', n_components=5, min_cluster_size=10))
+        assert result.labels.max() == 2 and all(len(set(result.labels[i * 40:(i + 1) * 40])) == 1 for i in range(3))
+        assert set(result.centroids) == {0, 1, 2}
+        assert (reduce_and_cluster(features, ClusteringConfig(method='leiden', n_components=5, min_cluster_size=50)).labels == -1).all()
+
+    # test_leiden_is_reproducible: same seed, same partition
+    def test_leiden_is_reproducible(self) -> None:
+        features = np.random.default_rng(1).normal(size=(120, 6))
+        config = ClusteringConfig(method='leiden', n_components=4, min_cluster_size=5, random_state=3)
+        assert np.array_equal(reduce_and_cluster(features, config).labels, reduce_and_cluster(features, config).labels)
+
+    # test_seed_purity_per_prior: Leiden on the prior's features separates two distinct structures into pure seeds, wedge and random pose included
+    @pytest.mark.parametrize('prior', [OrientationPrior.NORMAL, OrientationPrior.AXIS, OrientationPrior.NONE])
+    def test_seed_purity_per_prior(self, tmp_path: Path, prior: OrientationPrior) -> None:
+        box = 25
+        objects = [rod_object(box, s, repeat=box) if prior is OrientationPrior.AXIS else asymmetric_object(box, s) for s in (1, 2)]
+        data = synthetic_set(tmp_path, objects, prior, 40, noise_sigma=0.1, seed=11, max_shift=1)
+        if prior is OrientationPrior.NONE:
+            features = build_sh_feature_matrix(data.store.volumes, 60.0, 90.0)
+        else:
+            features = build_feature_matrix(data.store.volumes, n_radial_bins=6, max_azimuthal_mode=3, n_azimuthal_samples=32, axial_invariant=prior is OrientationPrior.AXIS)
+        labels = reduce_and_cluster(features, ClusteringConfig(n_components=8, min_cluster_size=10)).labels
+        seeded = labels >= 0
+        purity = sum(np.bincount(data.labels[labels == k]).max() for k in np.unique(labels[seeded])) / seeded.sum()
+        assert seeded.mean() > 0.8 and purity >= 0.9
 
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
@@ -194,6 +385,20 @@ class TestExtract:
         calls.clear()
         extract_particle_set(particles, paths, 13, cache_dir=cache)
         assert sorted(calls) == ['a', 'b']
+
+    # test_none_prior_extracts_axis_aligned_boxes_without_orientation: particles without an orientation are kept and the box ignores any reported orientation
+    def test_none_prior_extracts_axis_aligned_boxes_without_orientation(self, tmp_path: Path) -> None:
+        volume = np.zeros((40, 40, 40), dtype=np.float32)
+        volume[20, 20, 26] = 1.0       # zyx: 6 voxels along +x of the particle at (20, 20, 20)
+        with mrcfile.new(tmp_path / 't0.mrc', overwrite=True) as mrc:
+            mrc.set_data(volume)
+        plain = Particle(particle_id='a', tomogram_id='t0', position=(20.0, 20.0, 20.0), source_picker='x', half_set=HalfSet.A)
+        tilted = plain.model_copy(update={'particle_id': 'b', 'orientation': quaternion_from_reference_to(np.array([1.0, 0.0, 1.0]))})
+        subvols, kept, skipped = extract_particle_set([plain, tilted], {'t0': str(tmp_path / 't0.mrc')}, 17, cache_dir=tmp_path / 'cache', prior=OrientationPrior.NONE)
+        assert len(kept) == 2 and not skipped
+        assert all(tuple(np.unravel_index(subvols[i].argmax(), subvols[i].shape)) == (14, 8, 8) for i in range(2))
+        _, kept_normal, skipped_normal = extract_particle_set([plain], {'t0': str(tmp_path / 't0.mrc')}, 17, cache_dir=tmp_path / 'cache2')
+        assert not kept_normal and len(skipped_normal) == 1
 
 # TestFeatures: class containing unit tests for src/stamp/classify/features.py
 class TestFeatures:
@@ -380,182 +585,418 @@ class TestFeatures:
         with pytest.raises(ValueError, match='normalisation'):
             build_feature_matrix(subvols, n_radial_bins=4, normalisation='bogus')
 
-# TestCluster: class containing unit tests for src/stamp/classify/cluster.py
-class TestCluster:
-    def test_hdbscan_recovers_three_groups(self) -> None:
-        '''HDBSCAN finds three groups in three-blob data.'''
-        result = reduce_and_cluster(
-            _three_blobs(),
-            ClusteringConfig(method='hdbscan', n_components=2, min_cluster_size=10),
-        )
-        real_labels = {label for label in result.labels if label != -1}
-        assert len(real_labels) == 3
+    # test_axial_features_ignore_azimuth_and_axial_shift: rods of two kinds at random azimuth and axial position group by kind with axial_invariant, and by position without it
+    def test_axial_features_ignore_azimuth_and_axial_shift(self, tmp_path: Path) -> None:
+        box, rng = 25, np.random.default_rng(0)
+        rods = [rod_object(box, seed, repeat=box) for seed in (3, 4)]
+        labels = np.repeat([0, 1], 15)
+        volumes = [roll_about_normal(np.roll(rods[k], int(rng.integers(0, box)), axis=2), float(rng.uniform(0, 360))) for k in labels]
+        subvols = _subvols_from_array(tmp_path, np.stack(volumes))
+        kwargs = dict(n_radial_bins=6, max_azimuthal_mode=3, n_azimuthal_samples=32, normalisation='both')
+        assert _nearest_neighbour_accuracy(build_feature_matrix(subvols, axial_invariant=True, **kwargs), labels) >= 0.95
+        assert _nearest_neighbour_accuracy(build_feature_matrix(subvols, **kwargs), labels) < 0.9
 
-    def test_kmeans_respects_requested_cluster_count(self) -> None:
-        '''KMeans returns exactly n_clusters groups.'''
-        result = reduce_and_cluster(
-            _three_blobs(), ClusteringConfig(method='kmeans', n_components=2, n_clusters=3)
-        )
-        assert len(set(result.labels)) == 3
+# TestFrames: class containing tests for frame and rotation conventions
+class TestFrames:
+    # test_rotate_density_moves_features_by_the_matrix: a feature at +x moves to +y under a +90 degree azimuth and to -z under the flip
+    def test_rotate_density_moves_features_by_the_matrix(self) -> None:
+        volume = _blob((15, 15, 15), (10, 7, 9))    # offset (+3, 0, +2) from the centre
+        assert _peak(rotate_density(volume, azimuth_matrix(90.0))) == (7, 10, 9)
+        assert _peak(rotate_density(volume, flip_matrix())) == (10, 7, 5)
 
-    def test_pca_components_capped_by_sample_count(self) -> None:
-        '''N_components is capped at what the data supports.'''
-        features = np.random.default_rng(0).normal(size=(5, 100))
-        embedding, explained = reduce_features(features, ClusteringConfig(n_components=50))
-        assert embedding.shape[1] <= 4
-        assert explained.shape == (embedding.shape[1],)
-
-    def test_too_few_particles_raises(self) -> None:
-        '''A single particle raises a clear error.'''
-        with pytest.raises(ValueError, match='Too few particles'):
-            reduce_features(np.zeros((1, 10)), ClusteringConfig())
-
-    def test_hdbscan_below_min_cluster_size_raises_clearly(self) -> None:
-        '''Too few particles for min_cluster_size raises.'''
-        with pytest.raises(ValueError, match='min_cluster_size'):
-            reduce_and_cluster(
-                np.random.default_rng(0).normal(size=(5, 10)),
-                ClusteringConfig(method='hdbscan', min_cluster_size=20),
-            )
-
-    def test_noise_label_becomes_named_id(self) -> None:
-        '''Label -1 becomes 'noise', other labels become 'cNN'.'''
-        assert label_to_cluster_id(-1) == 'noise'
-        assert label_to_cluster_id(3) == 'c03'
-
-    def test_cluster_matching_pairs_nearest_centroids(self) -> None:
-        '''Cross-half matching pairs the nearest centroids.'''
-        centroids_a = {0: np.array([0.0, 0.0]), 1: np.array([10.0, 0.0])}
-        centroids_b = {0: np.array([10.2, 0.1]), 1: np.array([0.1, 0.2])}
-        matches = match_clusters_across_halves(centroids_a, centroids_b)
-        assert matches[0][0] == 1
-        assert matches[1][0] == 0
-
-    def test_cluster_matching_uses_each_a_cluster_once(self) -> None:
-        '''A half-A cluster is matched at most once.'''
-        centroids_a = {0: np.array([0.0, 0.0])}
-        centroids_b = {0: np.array([0.1, 0.0]), 1: np.array([0.2, 0.0])}
-        matches = match_clusters_across_halves(centroids_a, centroids_b)
-        assert len([m for m in matches.values() if m[0] == 0]) == 1
-
-    def test_shared_basis_matches_recover_planted_split(self):
-        '''Two motifs, each split A/B, match A<->B correctly.'''
+    # test_roll_about_normal_is_azimuth_matrix: the existing scipy roll equals rotate_density with azimuth_matrix for random angles
+    def test_roll_about_normal_is_azimuth_matrix(self) -> None:
         rng = np.random.default_rng(0)
-        motif_a = rng.normal(0.0, 1.0, 40)
-        motif_b = rng.normal(5.0, 1.0, 40)
-        rows, group_a, group_b = [], [], []
-        for i in range(40):
-            rows.append(motif_a + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
-        for i in range(40):
-            rows.append(motif_b + rng.normal(0, 0.1, 40)); (group_a if i % 2 else group_b).append(len(rows) - 1)
-        features = np.array(rows)
-        config = ClusteringConfig(method='kmeans', n_clusters=2, n_components=5)
-        results = reduce_and_cluster_shared(features, {'A': np.array(group_a), 'B': np.array(group_b)}, config)
-        matches = match_clusters_across_halves(results['A'].centroids, results['B'].centroids)
-        assert len(matches) == 2 and all(d < 1.0 for _, d in matches.values())
+        volume = gaussian_filter(rng.normal(size=(17, 17, 17)).astype(np.float32), 2.0)
+        for angle in rng.uniform(-180, 180, 5):
+            rolled = roll_about_normal(volume, float(angle))
+            moved = rotate_density(volume, azimuth_matrix(float(angle)))
+            inside = np.s_[4:-4, 4:-4, 4:-4]
+            assert np.allclose(rolled[inside], moved[inside], atol=1e-3)
 
-# TestAlign: class containing unit tests for src/stamp/classify/align.py
-class TestAlign:
-    def test_recovers_planted_rolls(self, tmp_path: Path):
-        '''Rolled copies of one motif align back to a common frame.'''
-        box = 21
-        base = _asymmetric_blob(box)
-        planted = [0.0, 40.0, 120.0, 250.0, 300.0]
-        stack = np.stack([roll_about_normal(base, angle) for angle in planted])
-        subvols = _subvols_from_array(tmp_path, stack)
-        angles = align_inplane(subvols, ['c00'] * len(planted), angular_step_degrees=10.0, iterations=4)
+    # test_azimuth_degrees_inverts_azimuth_matrix: angle round trip across the full range
+    def test_azimuth_degrees_inverts_azimuth_matrix(self) -> None:
+        for angle in (-170.0, -45.0, 0.0, 30.0, 179.0):
+            assert np.isclose(azimuth_degrees(azimuth_matrix(angle)), angle)
 
-        aligned = np.stack([roll_about_normal(stack[i], angles[i]) for i in range(len(planted))])
-        reference = aligned.mean(axis=0)
-        for frame in aligned:
-            assert np.corrcoef(frame.ravel(), reference.ravel())[0, 1] > 0.98
+    # test_rotation_to_quaternion_round_trip: quaternion_to_matrix recovers the matrix, w is non-negative
+    def test_rotation_to_quaternion_round_trip(self) -> None:
+        rotation = azimuth_matrix(70.0) @ flip_matrix()
+        quaternion = rotation_to_quaternion(rotation)
+        assert quaternion[0] >= 0 and np.allclose(quaternion_to_matrix(quaternion), rotation)
 
-    def test_alignment_checkpoint_resumes_per_cluster(self, tmp_path: Path, monkeypatch) -> None:
-        from stamp.classify import align as align_module
-        stack = np.random.default_rng(0).random((6, 15, 15, 15))
-        subvols = _subvols_from_array(tmp_path / 'sv', stack)
-        cluster_ids = ['c00', 'c00', 'c00', 'c01', 'c01', 'c01']
-        checkpoint = tmp_path / 'align'
-        first = align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint)
-        assert sorted(p.name for p in checkpoint.glob('*.json')) == ['c00.json', 'c01.json']
+    # test_off_axis_density_lands_on_the_normal: a density planted 8 voxels along a tilted normal sits on +z of the extracted box
+    def test_off_axis_density_lands_on_the_normal(self) -> None:
+        normal = np.array([0.6, 0.0, 0.8])
+        position = np.array([30.0, 30.0, 30.0])
+        tomogram = np.zeros((61, 61, 61), dtype=np.float32)    # zyx array
+        target_xyz = position + 8.0 * normal
+        tomogram[int(round(target_xyz[2])), int(round(target_xyz[1])), int(round(target_xyz[0]))] = 1.0
+        tomogram = gaussian_filter(tomogram, 1.0)
+        quaternion = quaternion_from_reference_to(normal)
+        box = extract_subvolume(tomogram, tuple(position), quaternion, 21)
+        assert _peak(box) == (10, 10, 18)   # centre 10, plus 8 along +z
 
-        # simulate an abort before c01 finished
-        (checkpoint / 'c01.json').unlink()
-        aligned_clusters: list[list[int]] = []
-        original = align_module._align_one_cluster
-        monkeypatch.setattr(align_module, '_align_one_cluster', lambda job: (aligned_clusters.append(job.member_indices), original(job))[1])
-        assert align_inplane(subvols, cluster_ids, checkpoint_dir=checkpoint) == first
-        assert aligned_clusters == [[3, 4, 5]]
+# TestHalves: class containing unit tests for src/stamp/classify/halves.py
+class TestHalves:
+    # test_half_a_does_not_read_half_b: replacing every half-B particle with noise leaves the half-A result bit-identical to the run that saw the real half B
+    def test_half_a_does_not_read_half_b(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path / 'data', objects, OrientationPrior.NORMAL, 30, seed=2)
+        indices, embeddings, seeds = _split(data)
+        real, _ = run_polish_by_half(data.store, indices, embeddings, seeds, _config(OrientationPrior.NORMAL))
+        volumes = np.stack([data.store.volumes[i] for i in range(len(data.store))])
+        volumes[indices['B']] = np.random.default_rng(9).normal(size=volumes[indices['B']].shape)
+        perturbed_dir = tmp_path / 'perturbed'
+        perturbed_dir.mkdir()
+        np.save(perturbed_dir / 'all.npy', volumes)
+        perturbed = ParticleStore(Subvolumes(perturbed_dir, [('all', i) for i in range(len(volumes))], _REF_BOX), data.store.orientations, data.store.tilt_max_degrees, data.store.tilt_axis_degrees)
+        alone = run_polish(perturbed.take(indices['A']), embeddings['A'], seeds['A'], _config(OrientationPrior.NORMAL))     # half B never enters
+        assert np.array_equal(real['A'].labels, alone.labels) and np.array_equal(real['A'].rotations, alone.rotations)
+        assert all(np.array_equal(a, b) for a, b in zip(real['A'].references, alone.references))
 
-        # a cluster whose membership changed is recomputed
-        aligned_clusters.clear()
-        align_inplane(subvols, ['c00', 'c00', 'c01', 'c01', 'c01', 'c01'], checkpoint_dir=checkpoint)
-        assert sorted(aligned_clusters) == [[0, 1], [2, 3, 4, 5]]
+    # test_halves_match_by_reference_and_share_a_frame: matched clusters are the same class, and half-B averages built with the re-expressed poses agree with half A
+    def test_halves_match_by_reference_and_share_a_frame(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NORMAL, 40, noise_sigma=0.1, seed=3)
+        indices, embeddings, seeds = _split(data)
+        results, matches = run_polish_by_half(data.store, indices, embeddings, seeds, _config(OrientationPrior.NORMAL))
+        assert len(matches) == 2
+        majority = lambda half, label: np.bincount(data.labels[indices[half]][results[half].labels == label]).argmax()
+        assert all(majority('A', m.label_a) == majority('B', label_b) for label_b, m in matches.items())
+        rotations, shifts = express_in_frame_of_a(results['B'], matches)
+        store_a, store_b = data.store.take(indices['A']), data.store.take(indices['B'])
+        for label_b, match in matches.items():
+            members_b = np.where(results['B'].labels == label_b)[0]
+            members_a = np.where(results['A'].labels == match.label_a)[0]
+            average_a = weighted_average(*store_a.load(members_a), results['A'].rotations[members_a], results['A'].shifts[members_a])
+            in_frame = weighted_average(*store_b.load(members_b), rotations[members_b], shifts[members_b])
+            own_frame = weighted_average(*store_b.load(members_b), results['B'].rotations[members_b], results['B'].shifts[members_b])
+            correlation = lambda x, y: float((x * y).sum() / np.linalg.norm(x) / np.linalg.norm(y))
+            assert correlation(average_a, in_frame) > 0.6 and correlation(average_a, in_frame) > correlation(average_a, own_frame) + 0.15
 
-    def test_noise_cluster_skipped(self, tmp_path: Path):
-        '''Noise rows get no angle.'''
-        stack = np.random.default_rng(0).random((4, 15, 15, 15))
-        subvols = _subvols_from_array(tmp_path, stack)
-        angles = align_inplane(subvols, ['noise', 'noise', 'c00', 'c00'])
-        assert set(angles) == {2, 3}
-
-# TestVesicle: class containing unit tests for vesicle_id carry-through in classification
-class TestVesicle:
-    def test_class_assignment_carries_vesicle_id(self, tmp_path: Path) -> None:
-        '''vesicle_id on a Particle survives unchanged into its ClassAssignment'''
+# TestMatch: class containing unit tests for prior-aware particle alignment to reference
+class TestMatch:
+    # test_rank_rotations_matches_masked_bank: the shared-bank score equals the brute-force score against a bank masked with each particle's own wedge
+    def test_rank_rotations_matches_masked_bank(self) -> None:
         rng = np.random.default_rng(0)
-        n_per_group, box = 6, 5
-        centres = np.array([[0.0, 0.0], [20.0, 0.0]])
-        features = np.vstack([rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres])
-        n_particles = features.shape[0]
-        subvolumes = _subvols_from_array(tmp_path / 'subvolumes', np.zeros((n_particles, box, box, box), dtype=np.float32))
+        reference = asymmetric_object(_BOX, 1)
+        space = search_space(OrientationPrior.NORMAL, _BOX, angular_step_degrees=60.0)
+        bank = rotated_bank(reference, space.rotations)
+        orientations = [_random_orientation(rng) for _ in range(3)]
+        wedges = np.stack([box_wedge(_BOX, o, 60.0, 90.0) for o in orientations])
+        particles = np.stack([apply_wedge(rng.normal(size=(_BOX,) * 3), w) for w in wedges])
+        fast, _norms = rank_rotations(wedge_filter(particles, wedges), wedges, bank, _BOX)
+        for i, wedge in enumerate(wedges):
+            for r, rotated in enumerate(bank):
+                masked = apply_wedge(rotated.reshape((_BOX,) * 3), wedge).ravel()
+                expected = (particles[i].ravel() @ masked) / (np.linalg.norm(particles[i]) * np.linalg.norm(masked))
+                assert abs(fast[i, r] - expected) < 1e-3
 
-        particles = [
-            Particle(
-                particle_id=f'p{index:06d}',
-                tomogram_id='tomo000',
-                position=(0.0, 0.0, 0.0),
-                source_picker='stamp-native',
-                half_set=HalfSet.A if index % 2 == 0 else HalfSet.B,
-                vesicle_id=f'tomo000:v{(index % 2) + 1:04d}',
-            )
-            for index in range(n_particles)
-        ]
+    # test_normal_prior_recovers_azimuth: azimuth error against known rotation, with a different wedge per particle and small shifts
+    def test_normal_prior_recovers_azimuth(self) -> None:
+        rng = np.random.default_rng(3)
+        reference = asymmetric_object(_BOX, 5)
+        space = search_space(OrientationPrior.NORMAL, _BOX, angular_step_degrees=10.0, shift_range_voxels=2)
+        truth = rng.uniform(0, 360, 40)
+        shifts = rng.integers(-1, 2, (40, 3))
+        wedges = np.stack([box_wedge(_BOX, _random_orientation(rng), 60.0, 90.0) for _ in truth])
+        particles = np.stack([make_particle(reference, azimuth_matrix(a), tuple(s), w, 0.05, rng) for a, s, w in zip(truth, shifts, wedges)])
+        result = align_to_reference(particles, wedges, reference, space)
+        found = np.array([azimuth_degrees(space.rotations[i]) for i in result.rotation_index])
+        error = _angle_error(found, truth)
+        assert np.median(error) <= 5.0 and np.percentile(error, 90) <= 10.0
+        assert (result.shift == shifts).all(axis=1).mean() > 0.9
 
-        config = ClusteringConfig(method='kmeans', n_components=2, n_clusters=2)
-        align_settings = dict(enabled=False, angular_step_degrees=10.0, iterations=1)
-        assignments, _result_by_half, _averages_by_half = _classify_combined(
-            particles, subvolumes, features, config, tmp_path, voxel_size_angstrom=1.0, align_settings=align_settings,
-        )
+    # test_axis_prior_recovers_azimuth_polarity_and_shift: rods with random polarity and axial offsets
+    def test_axis_prior_recovers_azimuth_polarity_and_shift(self) -> None:
+        rng = np.random.default_rng(4)
+        reference = rod_object(_BOX, 6, repeat=_BOX)    # no helical degeneracy inside the box
+        space = search_space(OrientationPrior.AXIS, _BOX, angular_step_degrees=15.0)
+        n = 30
+        azimuth = rng.uniform(0, 360, n)
+        flipped = rng.random(n) < 0.5
+        axial = rng.integers(-5, 6, n)
+        wedges = np.stack([box_wedge(_BOX, _random_orientation(rng), 60.0, 90.0) for _ in range(n)])
+        particles = np.stack([
+            make_particle(reference, azimuth_matrix(a) @ (flip_matrix() if f else np.eye(3)), (0, 0, z), w, 0.05, rng)
+            for a, f, z, w in zip(azimuth, flipped, axial, wedges)
+        ])
+        result = align_to_reference(particles, wedges, reference, space)
+        found_flip = space.polarity[result.rotation_index] < 0
+        assert (found_flip == flipped).mean() >= 0.95
+        assert (np.abs(result.shift[:, 2] - axial) <= 1).mean() >= 0.9
+        found_azimuth = np.array([azimuth_degrees(space.rotations[i] @ (flip_matrix() if f else np.eye(3))) for i, f in zip(result.rotation_index, found_flip)])
+        assert np.median(_angle_error(found_azimuth, azimuth)) <= 8.0
 
-        assert len(assignments) == n_particles
-        for particle, assignment in zip(particles, assignments):
-            assert assignment.vesicle_id == particle.vesicle_id
+    # test_none_prior_recovers_bank_rotation: a wedged rotated copy finds its own rotation in a noiseless bank (regression for the original brute-force search)
+    def test_none_prior_recovers_bank_rotation(self) -> None:
+        reference = asymmetric_object(_BOX, 7)
+        space = search_space(OrientationPrior.NONE, _BOX, n_rotations=200, shift_range_voxels=1)
+        wedge = box_wedge(_BOX, None, 60.0, 90.0)
+        target = 123
+        particle = apply_wedge(rotate_density(reference, space.rotations[target]), wedge)
+        result = align_to_reference(particle[None], wedge[None], reference, space, top=5)
+        assert result.rotation_index[0] == target and result.cc[0] > 0.95 and not result.shift.any()
 
-    def test_class_assignment_vesicle_id_none_when_unset(self, tmp_path: Path) -> None:
-        '''Particles with no vesicle_id (default picking, no labels MRC) produce assignments with vesicle_id=None'''
+# TestMerge: class containing unit tests for half-split ceilings, merging and phase-randomised null
+class TestMerge:
+    # test_pair_threshold_ignores_inconsistent_reference: a junk reference with a low ceiling cannot lower the merge bar for real ones
+    def test_pair_threshold_ignores_inconsistent_reference(self) -> None:
+        similarity = np.array([[1.0, 0.5, 0.4], [0.5, 1.0, 0.4], [0.4, 0.4, 1.0]])
+        assert len(np.unique(merge_groups(similarity, pair_thresholds(np.array([0.9, 0.9, 0.2]), 1.0)))) == 3
+
+    # test_merge_groups_joins_chains: similarity at or above the threshold links references transitively
+    def test_merge_groups_joins_chains(self) -> None:
+        similarity = np.array([[1.0, 0.9, 0.1], [0.9, 1.0, 0.9], [0.1, 0.9, 1.0]])
+        assert len(np.unique(merge_groups(similarity, 0.8))) == 1
+
+    # test_rotated_copy_is_the_same_reference: a reference and a rotated, shifted copy are maximally similar and the pose that maps one onto the other is returned
+    def test_rotated_copy_is_the_same_reference(self) -> None:
+        from stamp.classify.frames import rotate_density
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        reference = asymmetric_object(_REF_BOX, 1)
+        copy = rotate_density(reference, space.rotations[5])
+        similarity, poses = pairwise_similarity([reference, copy, asymmetric_object(_REF_BOX, 2)], space)
+        assert similarity[0, 1] > 0.98 and similarity[0, 2] < 0.8
+        assert np.allclose(poses[0][1][0], space.rotations[5])
+
+    # test_ceiling_drops_when_poses_are_wrong: half-split agreement is high for a label with correct poses and lower when the poses are scrambled
+    def test_ceiling_drops_when_poses_are_wrong(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path, [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 40, seed=4)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        labels = np.zeros(len(data.labels), dtype=int)
+        scrambled = data.rotations[np.random.default_rng(0).permutation(len(labels))]
+        right = half_split_ceilings(data.store.batches(), labels, data.rotations, data.shifts, space, 1, _REF_BOX)[0]
+        wrong = half_split_ceilings(data.store.batches(), labels, scrambled, data.shifts, space, 1, _REF_BOX)[0]
+        assert right > 0.8 and wrong < right
+
+    # test_null_is_below_real_signal: real particles beat the rejection threshold and the agreement bar is below a real pure label's ceiling
+    def test_null_is_below_real_signal(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NORMAL, 40, noise_sigma=0.1, seed=5)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        threshold = null_threshold(data.store, objects, space, quantile=0.95)
+        assignment = hard_assign(score_against_refs(data.store, objects, space), space)
+        assert (assignment.cc > threshold).mean() > 0.9
+        bar = null_bar(data.store, objects[0], space, 30, sigmas=3.0)
+        ceiling = half_split_ceilings(data.store.batches(), assignment.labels, assignment.rotations, assignment.shifts, space, 1, _REF_BOX)[0]
+        assert ceiling > bar
+
+# TestPolish: class containing unit tests for polish step
+class TestPolish:
+    # test_polish_repairs_corrupted_seeds: noisy seeds are polished into pure classes, for every prior
+    @pytest.mark.parametrize('prior', [OrientationPrior.NORMAL, OrientationPrior.AXIS, OrientationPrior.NONE])
+    def test_polish_repairs_corrupted_seeds(self, tmp_path: Path, prior: OrientationPrior) -> None:
+        make = rod_object if prior is OrientationPrior.AXIS else asymmetric_object
+        objects = [make(_BOX, seed) if prior is not OrientationPrior.AXIS else rod_object(_BOX, seed, repeat=_BOX) for seed in (1, 2)]
+        data = synthetic_set(tmp_path / 'data', objects, prior, 30, noise_sigma=0.1, seed=3)
+        seeds, embedding = _corrupted_seeds(data.labels, 0.15, 4)
+        result = run_polish(data.store, embedding, seeds, _config(prior))
+        assert _purity(result.labels, data.labels) > 0.9
+        assert (result.labels >= 0).mean() > 0.7
+        assert len(result.references) == 2
+
+    # test_polish_rejects_noise_only_particles: pure noise matches no reference above the null
+    def test_polish_rejects_noise_only_particles(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_BOX, 1)]
+        data = synthetic_set(tmp_path / 'data', objects, OrientationPrior.NORMAL, 40, seed=5)
+        noise = synthetic_set(tmp_path / 'noise', [np.zeros_like(objects[0])], OrientationPrior.NORMAL, 20, noise_sigma=0.5, seed=6)
+        # one store holding both: build by stacking the volumes of the two sets
+        both = _concatenate(tmp_path / 'both', data, noise)
+        seeds = np.concatenate([np.zeros(40, dtype=int), np.full(20, -1)])
+        embedding = np.zeros((60, 2))
+        result = run_polish(both, embedding, seeds, _config(OrientationPrior.NORMAL))
+        assert (result.labels[40:] == -1).mean() > 0.7 and (result.labels[:40] >= 0).mean() > 0.8
+
+    # test_polish_resumes_identically: a run stopped after the seeds and restarted gives identical output
+    def test_polish_resumes_identically(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_BOX, 1), asymmetric_object(_BOX, 2)]
+        data = synthetic_set(tmp_path / 'data', objects, OrientationPrior.NORMAL, 25, seed=7)
+        seeds, embedding = _corrupted_seeds(data.labels, 0.1, 8)
+        config = _config(OrientationPrior.NORMAL)
+        fresh = run_polish(data.store, embedding, seeds, config, checkpoint_dir=tmp_path / 'ckpt')
+        for path in (tmp_path / 'ckpt').glob('round*.npz'):
+            path.unlink()       # as if killed between the seed references and the first round
+        resumed = run_polish(data.store, embedding, seeds, config, checkpoint_dir=tmp_path / 'ckpt')
+        assert np.array_equal(fresh.labels, resumed.labels) and np.allclose(fresh.rotations, resumed.rotations)
+
+    # test_polish_needs_a_seed: no seed cluster of the minimum size is an error
+    def test_polish_needs_a_seed(self, tmp_path: Path) -> None:
+        from stamp.utils.errors import StampPipelineError
+        data = synthetic_set(tmp_path / 'data', [asymmetric_object(_BOX, 1)], OrientationPrior.NORMAL, 12, seed=9)
+        with pytest.raises(StampPipelineError):
+            run_polish(data.store, np.zeros((12, 2)), np.full(12, -1), _config(OrientationPrior.NORMAL))
+
+# TestPrepare: class containing tests for subvolume preparation
+class TestPrepare:
+    # test_working_box_is_odd: odd boxes bin to odd boxes so the centre stays on a voxel
+    def test_working_box_is_odd(self) -> None:
+        assert [working_box(n, 2) for n in (45, 47, 61)] == [23, 23, 31]
+        assert working_box(45, 1) == 45
+
+    # test_normalise_uses_masked_statistics: zero mean and unit variance inside the mask
+    def test_normalise_uses_masked_statistics(self) -> None:
+        rng = np.random.default_rng(0)
+        mask = soft_mask(21, 8.0)
+        out = normalise(rng.normal(5.0, 3.0, (21,) * 3).astype(np.float32), mask)
+        assert abs(out[mask > 0.5].mean()) < 1e-4 and abs(out[mask > 0.5].std() - 1.0) < 1e-3
+
+    # test_fourier_bin_preserves_a_smooth_object: a low-pass object keeps its shape after binning, checked at the centre voxel
+    def test_fourier_bin_preserves_a_smooth_object(self) -> None:
+        volume = asymmetric_object(45, 0, n_blobs=1, spread=0.0)
+        binned = fourier_bin(volume, 23)
+        assert binned.shape == (23,) * 3 and binned[11, 11, 11] > 0.9 * volume[22, 22, 22]
+
+    # test_prepare_particle_shape: output is the working box
+    def test_prepare_particle_shape(self) -> None:
+        assert prepare_particle(np.random.default_rng(1).normal(size=(45,) * 3).astype(np.float32), 23).shape == (23,) * 3
+
+# TestReferences: class containing unit tests for particle store and reference scoring
+class TestReferences:
+    # test_store_serves_wedges_and_batches: batches cover every particle once and carry each particle's own wedge
+    def test_store_serves_wedges_and_batches(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path, [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 12, seed=1)
+        seen = []
+        for indices, volumes, wedges in data.store.batches(5):
+            assert volumes.shape == (len(indices), _REF_BOX, _REF_BOX, _REF_BOX) and wedges.shape == volumes.shape
+            assert np.array_equal(wedges[0], box_wedge(_REF_BOX, data.store.orientations[indices[0]], 60.0, 90.0))
+            seen += indices
+        assert sorted(seen) == list(range(12))
+
+    # test_build_store_bins_and_normalises: the prepared store has the working box and matches prepare_particle
+    def test_build_store_bins_and_normalises(self, tmp_path: Path) -> None:
+        rng = np.random.default_rng(0)
+        raw = rng.normal(size=(4, 45, 45, 45)).astype(np.float32)
+        np.save(tmp_path / 't0.npy', raw)
+        store = build_store(Subvolumes(tmp_path, [('t0', i) for i in range(4)], 45), [None] * 4, 23, 60.0, 90.0, tmp_path / 'prepared')
+        assert store.volumes.box_voxels == 23 and len(store) == 4
+        assert np.allclose(store.volumes[2], prepare_particle(raw[2], 23), atol=1e-5)
+
+    # test_scoring_against_true_objects_recovers_classes: assignment against the generating objects labels particles correctly
+    def test_scoring_against_true_objects_recovers_classes(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NORMAL, 20, seed=2)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        assignment = hard_assign(score_against_refs(data.store, objects, space), space)
+        assert (assignment.labels == data.labels).mean() > 0.95
+        assert (assignment.margin > 0).all()
+
+    # test_rebuild_from_true_poses_matches_object: references rebuilt from the true labels and poses correlate with the generating object
+    def test_rebuild_from_true_poses_matches_object(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NONE, 25, noise_sigma=0.05, seed=3)
+        rebuilt = rebuild_references(data.store, data.labels, data.rotations, data.shifts, 2)
+        for reference, truth in zip(rebuilt, objects):
+            assert float((reference * truth).sum() / np.linalg.norm(reference) / np.linalg.norm(truth)) > 0.9
+
+# TestSearch: class containing unit tests for per-prior alignment search space
+class TestSearch:
+    # test_normal_space_is_z_rolls: 36 proper rotations about z at a 10 degree step, no polarity flips
+    def test_normal_space_is_z_rolls(self) -> None:
+        space = search_space(OrientationPrior.NORMAL, 25, angular_step_degrees=10.0)
+        assert len(space) == 36 and (space.polarity == 1).all()
+        assert np.allclose(space.rotations[:, 2], [0.0, 0.0, 1.0]) and np.allclose(space.rotations[:, :, 2], [0.0, 0.0, 1.0])
+        assert np.allclose(np.linalg.det(space.rotations), 1.0)
+
+    # test_axis_space_doubles_with_polarity: z-rolls and their flips, with an axial shift window of a quarter box
+    def test_axis_space_doubles_with_polarity(self) -> None:
+        space = search_space(OrientationPrior.AXIS, 25, angular_step_degrees=10.0)
+        assert len(space) == 72 and (space.polarity == -1).sum() == 36
+        assert np.allclose(space.rotations[space.polarity < 0][:, 2, 2], -1.0)
+        assert space.max_shift == (3, 3, 6)
+
+    # test_none_space_starts_at_identity: identity first, all proper rotations, reproducible from the seed
+    def test_none_space_starts_at_identity(self) -> None:
+        space = search_space(OrientationPrior.NONE, 25, n_rotations=50, seed=4)
+        assert len(space) == 50 and np.allclose(space.rotations[0], np.eye(3))
+        assert np.allclose(np.linalg.det(space.rotations), 1.0)
+        assert np.array_equal(space.rotations, search_space(OrientationPrior.NONE, 25, n_rotations=50, seed=4).rotations)
+
+    # test_rotated_bank_matches_rotate_density: threaded and serial banks agree with rotating one by one
+    def test_rotated_bank_matches_rotate_density(self) -> None:
+        reference = asymmetric_object(15, 0)
+        rotations = search_space(OrientationPrior.NONE, 15, n_rotations=6).rotations
+        serial = rotated_bank(reference, rotations)
+        assert np.allclose(serial, rotated_bank(reference, rotations, threads=3))
+        assert np.allclose(serial[3], rotate_density(reference, rotations[3]).ravel())
+
+# TestShFeatures: class containing unit tests for src/stamp/classify/shfeatures.py
+class TestShFeatures:
+    # test_features_are_rotation_invariant: rotating an object leaves its features nearly unchanged without a wedge
+    def test_features_are_rotation_invariant(self) -> None:
+        volume = asymmetric_object(25, 1)
+        reference = sh_power(volume, None, 90.0)
+        for seed in range(3):
+            rotated = sh_power(rotate_density(volume, Rotation.random(random_state=seed).as_matrix()), None, 90.0)
+            assert np.linalg.norm(np.log(rotated) - np.log(reference)) / np.linalg.norm(np.log(reference)) < 0.15
+
+    # test_features_separate_classes_under_wedge: rotated, wedged, noisy copies of three objects group by object
+    def test_features_separate_classes_under_wedge(self, tmp_path: Path) -> None:
+        rng = np.random.default_rng(2)
+        objects = [asymmetric_object(25, seed) for seed in (1, 2, 3)]
+        labels = np.repeat([0, 1, 2], 16)
+        wedge = box_wedge(25, None, 60.0, 90.0)
+        volumes = np.stack([make_particle(objects[k], Rotation.random(random_state=rng.integers(1 << 30)).as_matrix(), (0, 0, 0), wedge, 0.1, rng) for k in labels])
+        np.save(tmp_path / 't0.npy', volumes)
+        features = build_sh_feature_matrix(Subvolumes(tmp_path, [('t0', i) for i in range(len(labels))], 25), 60.0, 90.0)
+        distances = np.linalg.norm(features[:, None] - features[None], axis=2)
+        np.fill_diagonal(distances, np.inf)
+        assert (labels[distances.argmin(axis=1)] == labels).mean() >= 0.9
+
+# TestSpherical: class containing unit tests for src/stamp/classify/spherical.py
+class TestSpherical:
+    # test_sh_basis_is_orthonormal: quadrature of the basis gives the identity
+    def test_sh_basis_is_orthonormal(self) -> None:
+        xyz, weights = sphere_grid()
+        basis = real_sh_basis(xyz, lm_pairs(6, even_only=False))
+        assert np.allclose(basis.T @ (basis * weights[:, None]), np.eye(basis.shape[1]), atol=1e-6)
+
+    # test_masked_fit_recovers_coefficients: the ridge fit recovers a known even-degree function from half the sphere
+    def test_masked_fit_recovers_coefficients(self) -> None:
+        xyz, weights = sphere_grid()
+        pairs = lm_pairs(4, even_only=True)
+        basis = real_sh_basis(xyz, pairs)
+        truth = np.random.default_rng(0).normal(size=len(pairs))
+        observed = np.abs(xyz[:, 2]) <= np.abs(xyz[:, 0])
+        estimate = fit_matrix(basis, weights * observed, 1e-3) @ (basis @ truth)
+        assert np.allclose(estimate, truth, atol=0.1)
+
+# TestWedge: class containing tests for per-particle missing wedge
+class TestWedge:
+    # test_identity_orientation_is_the_global_mask: tilt about y with identity orientation keeps |kz| <= |kx| tan(tilt)
+    def test_identity_orientation_is_the_global_mask(self) -> None:
+        box = 15
+        freq = np.fft.fftfreq(box)
+        kx, _ky, kz = np.meshgrid(freq, freq, freq, indexing='ij')
+        expected = (np.abs(kz) <= np.abs(kx) * np.tan(np.radians(60.0))).astype(np.float32)
+        assert np.array_equal(box_wedge(box, None, 60.0, 90.0), expected)
+
+    # test_rotated_wedge_matches_brute_force: random orientations and tilt axes agree with the explicit construction
+    def test_rotated_wedge_matches_brute_force(self) -> None:
         rng = np.random.default_rng(1)
-        n_per_group, box = 6, 5
-        centres = np.array([[0.0, 0.0], [20.0, 0.0]])
-        features = np.vstack([rng.normal(centre, 1.0, size=(n_per_group, 2)) for centre in centres])
-        n_particles = features.shape[0]
-        subvolumes = _subvols_from_array(tmp_path / 'subvolumes', np.zeros((n_particles, box, box, box), dtype=np.float32))
+        for _ in range(3):
+            normal = rng.normal(size=3)
+            orientation = quaternion_from_reference_to(normal)
+            tilt_axis = float(rng.uniform(0, 180))
+            fast = box_wedge(9, orientation, 55.0, tilt_axis)
+            slow = _brute_wedge(9, orientation, 55.0, tilt_axis)
+            assert (fast != slow).mean() < 0.01     # only voxels exactly on the edge may differ by rounding
 
-        particles = [
-            Particle(
-                particle_id=f'p{index:06d}',
-                tomogram_id='tomo000',
-                position=(0.0, 0.0, 0.0),
-                source_picker='stamp-native',
-                half_set=HalfSet.A if index % 2 == 0 else HalfSet.B,
-            )
-            for index in range(n_particles)
-        ]
+    # test_wedge_is_centrosymmetric: the mask is symmetric under k -> -k so filtered volumes stay real
+    def test_wedge_is_centrosymmetric(self) -> None:
+        orientation = quaternion_from_reference_to(np.array([0.3, -0.5, 0.8]))
+        wedge = box_wedge(11, orientation, 50.0, 30.0)
+        assert np.array_equal(wedge, np.roll(wedge[::-1, ::-1, ::-1], 1, axis=(0, 1, 2)))
 
-        config = ClusteringConfig(method='kmeans', n_components=2, n_clusters=2)
-        align_settings = dict(enabled=False, angular_step_degrees=10.0, iterations=1)
-        assignments, _result_by_half, _averages_by_half = _classify_combined(
-            particles, subvolumes, features, config, tmp_path, voxel_size_angstrom=1.0, align_settings=align_settings,
-        )
+    # test_no_tilt_means_no_wedge: unset tilt keeps everything
+    def test_no_tilt_means_no_wedge(self) -> None:
+        assert box_wedge(7, None, None, 90.0).all()
+        assert observed_directions(np.eye(3), None, None, 90.0).all()
 
-        assert all(assignment.vesicle_id is None for assignment in assignments)
+    # test_apply_wedge_is_idempotent: filtering twice changes nothing
+    def test_apply_wedge_is_idempotent(self) -> None:
+        rng = np.random.default_rng(2)
+        wedge = box_wedge(11, None, 60.0, 90.0)
+        once = apply_wedge(rng.normal(size=(11, 11, 11)), wedge)
+        assert np.allclose(apply_wedge(once, wedge), once, atol=1e-5)

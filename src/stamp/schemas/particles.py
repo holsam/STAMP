@@ -16,6 +16,12 @@ class HalfSet(str, Enum):
     A = 'A'
     B = 'B'
 
+# OrientationPrior: what the picker knows about particle orientation, which fixes the alignment search space
+class OrientationPrior(str, Enum):
+    NORMAL = 'normal'   # +z is the membrane normal, only the azimuth about z is unknown
+    AXIS = 'axis'       # +z is the filament axis, azimuth, polarity and the shift along z are unknown
+    NONE = 'none'       # no orientation known, full rotation and shift are unknown
+
 # Particle: class for a single consensus particle, located within one tomogram
 class Particle(BaseModel):
     particle_id: str
@@ -41,6 +47,7 @@ class ParticleSet(BaseModel):
     particles: list[Particle]
     consensus_rule: Literal['intersection', 'union']
     contributing_pickers: list[str]
+    orientation_prior: OrientationPrior = OrientationPrior.NORMAL  # files written before priors existed are membrane sets
 
     @field_validator('particles')
     @classmethod
@@ -56,6 +63,18 @@ class ClassAssignment(BaseModel):
     classifier: str
     inplane_angle_degrees: float | None = None
     vesicle_id: str | None = None  # denormalised from Particle so class_assignments.json doesn't need to rejoin particle_set.json
+    rotation: tuple[float, float, float, float] | None = Field(default=None, description='Unit quaternion (w, x, y, z) of the full pose against the class average: the average moved by it, then shifted, gives the particle')
+    shift_voxels: tuple[float, float, float] | None = Field(default=None, description='Shift (x, y, z) in subvolume voxels applied after the rotation')
+    cc: float | None = Field(default=None, description='Normalised correlation with the assigned class average over the particle\'s observed Fourier components')
+    margin: float | None = Field(default=None, description='Best minus second-best class correlation, a confidence in the assignment')
+    polarity: Literal[1, -1] | None = Field(default=None, description='-1 when the filament was flipped end to end to match the class average, axis prior only')
+
+    @field_validator('rotation')
+    @classmethod
+    def _rotation_is_unit_length(cls, value: tuple[float, float, float, float] | None) -> tuple[float, float, float, float] | None:
+        if value is not None:
+            assert_unit_quaternion(value)
+        return value
 
 # IdentificationResult: candidate protein assignment for a cluster
 class IdentificationResult(BaseModel):

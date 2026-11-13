@@ -9,11 +9,13 @@ from pathlib import Path
 from pydantic import ValidationError
 
 # Import schemas
+from stamp.schemas.config import RunSettings
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import (
     ClassAssignment,
     HalfSet,
     IdentificationResult,
+    OrientationPrior,
     Particle,
     ParticleSet,
 )
@@ -128,6 +130,17 @@ class TestParticleSchema:
         )
         assert result.candidate_protein == 'Prot001'
 
+    # test_class_assignment_pose_fields_are_optional: assignments without pose fields still load, pose fields validate when present
+    def test_class_assignment_pose_fields_are_optional(self) -> None:
+        legacy = ClassAssignment.model_validate({'particle_id': 'p0', 'cluster_id': 'c00', 'classifier': 'x', 'inplane_angle_degrees': 12.0})
+        assert legacy.rotation is None and legacy.polarity is None
+        full = ClassAssignment(particle_id='p0', cluster_id='c00', classifier='x', rotation=(1.0, 0.0, 0.0, 0.0), shift_voxels=(1.0, 0.0, -2.0), cc=0.5, margin=0.1, polarity=-1)
+        assert ClassAssignment.model_validate_json(full.model_dump_json()) == full
+        with pytest.raises(StampPipelineError):
+            ClassAssignment(particle_id='p0', cluster_id='c00', classifier='x', rotation=(2.0, 0.0, 0.0, 0.0))
+        with pytest.raises(ValidationError):
+            ClassAssignment(particle_id='p0', cluster_id='c00', classifier='x', polarity=0)
+
 # TestProvenanceSchema: class containing unit tests for schemas/provenance.py
 class TestProvenanceSchema:
     def test_provenance_sidecar_construction(self):
@@ -200,3 +213,25 @@ class TestSubvolumes:
         new_subvols = subvols.write_rolled(rolled, tmp_path / 'rolled')
         for i in range(len(subvols)):
             np.testing.assert_array_equal(new_subvols[i], subvols[i] * 2)
+
+
+# test_particle_set_without_prior_loads_as_normal: particle sets written before orientation priors existed load as membrane sets and round-trip
+def test_particle_set_without_prior_loads_as_normal() -> None:
+    legacy = {
+        'particles': [{'particle_id': 'p0', 'tomogram_id': 't0', 'position': [1.0, 2.0, 3.0], 'source_picker': 'x', 'half_set': 'A'}],
+        'consensus_rule': 'union',
+        'contributing_pickers': ['x'],
+    }
+    loaded = ParticleSet.model_validate(legacy)
+    assert loaded.orientation_prior is OrientationPrior.NORMAL
+    assert ParticleSet.model_validate(loaded.model_dump(mode='json')) == loaded
+
+
+# test_run_settings_orientation_prior: the run table accepts a prior and a tilt range and rejects an impossible tilt
+def test_run_settings_orientation_prior() -> None:
+    base = dict(segmentation_dir='s', raw_tomogram_dir='r', output_dir='o')
+    settings = RunSettings(**base, orientation_prior='axis', tilt_max_degrees=60.0, tilt_axis_degrees=85.0)
+    assert settings.orientation_prior is OrientationPrior.AXIS
+    assert RunSettings(**base).tilt_max_degrees is None
+    with pytest.raises(ValidationError):
+        RunSettings(**base, tilt_max_degrees=95.0)

@@ -10,6 +10,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
+from stamp.utils.phase import phase_randomise
 
 # FSCResult: both curves plus the resolution read at the threshold
 @dataclass
@@ -55,16 +56,6 @@ def _shell_fsc(map_a: np.ndarray, map_b: np.ndarray, shell: np.ndarray, n_shells
         correlation[index] = np.real(cross / power) if power > 0 else 0.0
     return correlation
 
-# _phase_randomise: keep shell amplitudes, randomise phases at or beyond from_shell
-def _phase_randomise(
-    map_array: np.ndarray, shell: np.ndarray, from_shell: int, rng: np.random.Generator
-) -> np.ndarray:
-    transform = np.fft.fftn(map_array)
-    beyond = shell >= from_shell
-    phases = rng.uniform(0.0, 2.0 * np.pi, size=transform.shape)
-    transform[beyond] = np.abs(transform[beyond]) * np.exp(1j * phases[beyond])
-    return np.real(np.fft.ifftn(transform))
-
 # _first_below: index of the first shell whose value drops under level, or None
 def _first_below(curve: np.ndarray, level: float) -> int | None:
     hits = np.argwhere(curve < level).ravel()
@@ -100,8 +91,8 @@ def compute_fsc(
     randomise_from = _first_below(unmasked, 0.8)
     if randomise_from is not None and randomise_from + 1 < n_shells:
         rng = np.random.default_rng(seed)
-        rand_a = _phase_randomise(half_map_a, shell, randomise_from, rng) * mask
-        rand_b = _phase_randomise(half_map_b, shell, randomise_from, rng) * mask
+        rand_a = phase_randomise(half_map_a, rng, keep=shell < randomise_from) * mask
+        rand_b = phase_randomise(half_map_b, rng, keep=shell < randomise_from) * mask
         fsc_rand = _shell_fsc(rand_a, rand_b, shell, n_shells)
         high = np.arange(n_shells) > randomise_from
         denom = np.clip(1.0 - fsc_rand, 1e-3, None)
