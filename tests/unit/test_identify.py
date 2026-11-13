@@ -32,6 +32,26 @@ def _blob(box, offset=0):
     volume[box // 2 + offset, box // 2, box // 2] = 1.0
     return gaussian_filter(volume, 2.0)
 
+# _write_cloud: a PDB of eight Gaussian-scattered atom clusters, different for each seed, so rotated copies are distinguishable from other clouds
+def _write_cloud(path, seed):
+    rng = np.random.default_rng(seed)
+    centres = rng.normal(scale=22.0, size=(8, 3))
+    atoms = np.vstack([c + rng.normal(scale=4.0, size=(6, 3)) for c in centres])
+    path.write_text(''.join(f'ATOM  {i + 1:>5}  CA  ALA A{i + 1:>4}    {x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00           C\n' for i, (x, y, z) in enumerate(atoms)))
+
+# TestAlignedIdentify: class containing tests for scoring candidates against 3D-aligned class averages
+class TestAlignedIdentify:
+    # test_aligned_average_picks_its_own_candidate_in_any_orientation: a randomly rotated average of candidate a scores highest against a
+    def test_aligned_average_picks_its_own_candidate_in_any_orientation(self, tmp_path):
+        from stamp.commands.identify import _score_panel
+        for name in ('a', 'b'):
+            _write_cloud(tmp_path / f'{name}.pdb', {'a': 1, 'b': 2}[name])
+        (tmp_path / 'candidates.yaml').write_text('candidates:\n  - name: a\n    structure_path: a.pdb\n  - name: b\n    structure_path: b.pdb\n')
+        panel = load_candidate_panel(tmp_path / 'candidates.yaml')
+        average = rotate_density(simulate_density(tmp_path / 'a.pdb', 25, 4.0, 16.0), Rotation.random(random_state=3).as_matrix())
+        scores = _score_panel({'c00': (average, 4.0)}, panel, 16.0, 'native', 'local', aligned_prior=OrientationPrior.NONE)['c00']
+        assert scores['a'] > 0.9 and scores['a'] > scores['b'] + 0.08
+
 # TestPanel: class containing unit tests for src/stamp/identify/panel.py
 class TestPanel:
     def test_loads_valid_panel(self, tmp_path):
@@ -111,6 +131,13 @@ class TestSimulate:
         pdb.write_text('ATOM      1  H   ALA A   1       0.000   0.000   0.000  1.00  0.00\n')
         _coords, weights, elements = read_pdb_atoms(pdb)
         assert weights[0] == 1.0 and elements[0] == 'H'
+
+    # test_to_comparable_only_smears_when_asked: smearing makes a volume symmetric about z, switching it off leaves it alone
+    def test_to_comparable_only_smears_when_asked(self) -> None:
+        volume = np.random.default_rng(0).random((16, 16, 16))
+        correlation = lambda v: np.corrcoef(v.ravel(), np.rot90(v, axes=(0, 1)).ravel())[0, 1]
+        assert correlation(to_comparable(volume, 4.0, 16.0)) > 0.95      # symmetric about z after smearing
+        assert correlation(to_comparable(volume, 4.0, 16.0, smear=False)) < 0.5
 
 # TestFit: class containing unit tests for src/stamp/identify/fit.py
 class TestFit:

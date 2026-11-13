@@ -72,19 +72,20 @@ def azimuthal_smear(volume: np.ndarray, n_angles: int = 72) -> np.ndarray:
         )
     return (accumulator / n_angles).astype(volume.dtype)
 
-# to_comparable: reduce density maps for comparability by band-limiting to common resolution and azimuthally averaging about z
+# to_comparable: reduce density maps for comparability by band-limiting to common resolution and, unless smear is off (class averages already aligned in 3D), azimuthally averaging about z
 def to_comparable(
     volume: np.ndarray,
     voxel_size_angstrom: float,
     resolution_angstrom: float,
     *,
     already_bandlimited: bool = False,
+    smear: bool = True,
 ) -> np.ndarray:
     prepared = volume.astype(np.float64)
     if not already_bandlimited:
         sigma_voxels = resolution_angstrom * _FWHM_TO_SIGMA / voxel_size_angstrom
         prepared = gaussian_filter(prepared, sigma=max(sigma_voxels, 0.5))
-    return azimuthal_smear(prepared).astype(np.float32)
+    return azimuthal_smear(prepared).astype(np.float32) if smear else prepared.astype(np.float32)
 
 # orient_to_membrane_slab: rotate mass-weighted coordinates so the slab normal (largest inertial moment) is +z
 def orient_to_membrane_slab(coordinates: np.ndarray, weights: np.ndarray) -> np.ndarray:
