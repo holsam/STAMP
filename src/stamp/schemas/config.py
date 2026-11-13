@@ -79,6 +79,13 @@ class ClassifyStage(_Strict):
     n_radial_bins: int = 12
     strict_halfset_independence: bool = True
     inplane_angular_step_degrees: float = 10.0
+    bin_factor: int = Field(default=2, ge=1)
+    n_rotations: int = Field(default=3000, ge=2)
+    shift_range_voxels: int = Field(default=3, ge=0)
+    polish_rounds: int = Field(default=2, ge=1)
+    null_sigmas: float = Field(default=3.0, ge=0)
+    reject_quantile: float = Field(default=0.95, gt=0.5, lt=1.0)
+    merge_fraction: float = Field(default=1.0, ge=0)
     random_state: int = 0
     n_workers: int = 1
     keep_raw: bool = False

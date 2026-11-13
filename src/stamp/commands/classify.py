@@ -273,7 +273,17 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
         '--seed', str(settings.random_state),
         '--inplane-step-deg', str(settings.inplane_angular_step_degrees),
         '-n', str(settings.n_workers),
+        '--tilt-axis', str(config.run.tilt_axis_degrees),
+        '--bin-factor', str(settings.bin_factor),
+        '--n-rots', str(settings.n_rotations),
+        '--shift-range', str(settings.shift_range_voxels),
+        '--polish-rounds', str(settings.polish_rounds),
+        '--null-sigmas', str(settings.null_sigmas),
+        '--reject-quantile', str(settings.reject_quantile),
+        '--merge-fraction', str(settings.merge_fraction),
     ]
+    if config.run.tilt_max_degrees is not None:
+        argv += ['--tilt-max', str(config.run.tilt_max_degrees)]
     if not settings.strict_halfset_independence:
         argv.append('--no-strict-halfset-independence')
     argv.append('--keep-raw' if settings.keep_raw else '--no-keep-raw')

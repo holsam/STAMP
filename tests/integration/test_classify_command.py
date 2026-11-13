@@ -188,3 +188,14 @@ class TestClassifyCommand:
         assert {a['cluster_id'] for a in assignments if a['cluster_id'] != 'noise'}
         halves = {path.name.split('_half')[1][0] for path in (output_dir / 'class_averages').glob('*.mrc')}
         assert halves == {'A', 'B'}
+
+# TestBuildClassifyCommands: class containing tests for the classify argv built from the run config
+class TestBuildClassifyCommands:
+    # test_build_classify_commands_passes_polish_settings: the wedge and alignment settings reach the classify argv
+    def test_build_classify_commands_passes_polish_settings(self, tmp_path) -> None:
+        config = RunConfig.model_validate({**_CONFIG_DICT, 'run': {**_CONFIG_DICT['run'], 'tilt_max_degrees': 60.0, 'tilt_axis_degrees': 85.0}, 'stage': {**_CONFIG_DICT['stage'], 'classify': {'method': 'kmeans', 'n_rotations': 500}}})
+        argv = build_classify_commands(config, tmp_path)[0].argv
+        for flag, value in (('--method', 'kmeans'), ('--n-rots', '500'), ('--tilt-max', '60.0'), ('--tilt-axis', '85.0')):
+            assert argv[argv.index(flag) + 1] == value
+        default = build_classify_commands(RunConfig.model_validate(_CONFIG_DICT), tmp_path)[0].argv
+        assert '--tilt-max' not in default and default[default.index('--method') + 1] == 'leiden'
