@@ -46,6 +46,7 @@ def _real_pick(config: RunConfig, output_dir: Path) -> Path:
         max_surface_distance_angstrom=config.stage.pick.max_surface_distance_angstrom,
         n_workers=config.stage.pick.n_workers,
         keep_raw=config.stage.pick.keep_raw,
+        orientation_prior=config.run.orientation_prior,
     )
     return target / 'particle_set.json'
 

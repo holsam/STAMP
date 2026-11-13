@@ -261,7 +261,6 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
         'stamp', 'classify',
         '--particles', str(particles),
         '--raw-dir', str(config.run.raw_tomogram_dir),
-        '--seg-dir', str(config.run.segmentation_dir),
         '--out-dir', str(target),
         '--voxel-size-a', str(config.run.voxel_size_angstrom),
         '--box-length-a', str(settings.box_angstrom),
@@ -284,6 +283,8 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
     ]
     if config.run.tilt_max_degrees is not None:
         argv += ['--tilt-max', str(config.run.tilt_max_degrees)]
+    if config.run.segmentation_dir is not None:
+        argv += ['--seg-dir', str(config.run.segmentation_dir)]
     if not settings.strict_halfset_independence:
         argv.append('--no-strict-halfset-independence')
     argv.append('--keep-raw' if settings.keep_raw else '--no-keep-raw')

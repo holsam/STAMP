@@ -9,7 +9,7 @@ TEMPLATE = '''\
 #   stamp run --config stamp_run.toml
 
 [run]
-segmentation_dir = "data/seg"               # --seg-dir
+segmentation_dir = "data/seg"               # --seg-dir  (required for orientation_prior = "normal")
 raw_tomogram_dir = "data/tomo"              # --raw-dir
 output_dir = "."                            # output directory for each stage
 voxel_size_angstrom = ""                    # --voxel-size-a  (blank = auto-detect from tomogram headers)

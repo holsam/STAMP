@@ -26,7 +26,7 @@ class _Strict(BaseModel):
 
 # RunSettings: the [run] table
 class RunSettings(_Strict):
-    segmentation_dir: Path
+    segmentation_dir: Path | None = None    # required for the normal orientation prior only
     raw_tomogram_dir: Path
     output_dir: Path
     voxel_size_angstrom: float | None = None
@@ -122,6 +122,8 @@ class RunConfig(_Strict):
 
     @model_validator(mode='after')
     def _cross_field(self) -> 'RunConfig':
+        if self.run.orientation_prior is OrientationPrior.NORMAL and self.run.segmentation_dir is None:
+            raise StampPipelineError('[run].segmentation_dir is required for orientation_prior "normal", orientations are inferred from the membrane segmentation')
         stop = self.run.stop_after
         needs_identify = stop in (None, 'identify', 'refine')
         if needs_identify and not self.stage.identify.candidates:
@@ -135,7 +137,8 @@ def load_run_config(path: Path) -> RunConfig:
     raw = tomllib.loads(path.read_text())
     config = RunConfig.model_validate(raw)
     base = path.parent
-    config.run.segmentation_dir = (base / config.run.segmentation_dir).resolve()
+    if config.run.segmentation_dir is not None:
+        config.run.segmentation_dir = (base / config.run.segmentation_dir).resolve()
     config.run.raw_tomogram_dir = (base / config.run.raw_tomogram_dir).resolve()
     config.run.output_dir = (base / config.run.output_dir).resolve()
     config.stage.identify.candidates = (base / config.stage.identify.candidates).resolve()
