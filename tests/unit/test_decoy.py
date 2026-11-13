@@ -201,3 +201,55 @@ class TestDecoyValidate:
             assert_comparable(real, small_decoy)
 
         assert_comparable(real, _set('d', 80, 'decoy-shifted'))  # should not raise
+
+
+# _real_set_for: a real particle set with the given prior and n particles clustered in the middle of a 60-voxel tomogram
+def _real_set_for(prior, n: int = 12) -> ParticleSet:
+    rng = np.random.default_rng(0)
+    particles = [
+        Particle(particle_id=f'p{i}', tomogram_id='tomo000', position=tuple(float(v) for v in rng.uniform(20, 40, 3)), source_picker='x', half_set=HalfSet.A if i % 2 else HalfSet.B)
+        for i in range(n)
+    ]
+    return ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['x'], orientation_prior=prior)
+
+
+# TestRandomVolumeDecoys: class containing tests for the prior-agnostic decoy method
+class TestRandomVolumeDecoys:
+    def test_avoids_real_picks_and_the_border(self, tmp_path: Path) -> None:
+        from stamp.decoy.generate import generate_random_volume_decoys
+        from scipy.spatial import cKDTree
+        from stamp.schemas.particles import OrientationPrior
+        manifest = _write_vesicle_pair(tmp_path)
+        real = _real_set_for(OrientationPrior.NONE)
+        decoys = generate_random_volume_decoys(real, [manifest], DecoyGeometry(voxel_size_angstrom=10.0), 60.0, 100.0, seed=1)
+        positions = np.array([p.position for p in decoys.particles])
+        assert len(positions) == len(real.particles)
+        assert (cKDTree(np.array([p.position for p in real.particles])).query(positions)[0] >= 6.0).all()     # 60 A at 10 A/voxel
+        assert (positions >= 10.0).all() and (positions <= 59 - 10.0).all()                                   # 100 A border
+        assert decoys.orientation_prior is OrientationPrior.NONE and all(p.orientation is None for p in decoys.particles)
+        assert all(p.source_picker == 'decoy-random-volume' for p in decoys.particles)
+
+    def test_axis_prior_gets_random_axes_and_is_deterministic(self, tmp_path: Path) -> None:
+        from stamp.decoy.generate import generate_random_volume_decoys
+        from stamp.schemas.particles import OrientationPrior
+        manifest = _write_vesicle_pair(tmp_path)
+        real = _real_set_for(OrientationPrior.AXIS)
+        first = generate_random_volume_decoys(real, [manifest], DecoyGeometry(voxel_size_angstrom=10.0), 60.0, 100.0, seed=2)
+        second = generate_random_volume_decoys(real, [manifest], DecoyGeometry(voxel_size_angstrom=10.0), 60.0, 100.0, seed=2)
+        assert all(p.orientation is not None for p in first.particles) and len({p.orientation for p in first.particles}) > 1
+        assert first == second
+
+    def test_refuses_the_membrane_prior(self, tmp_path: Path) -> None:
+        from stamp.decoy.generate import generate_random_volume_decoys
+        from stamp.schemas.particles import OrientationPrior
+        with pytest.raises(StampValidationError, match='shifted'):
+            generate_random_volume_decoys(_real_set_for(OrientationPrior.NORMAL), [_write_vesicle_pair(tmp_path)], DecoyGeometry(voxel_size_angstrom=10.0), 60.0, 100.0, seed=0)
+
+    def test_comparable_requires_the_same_prior(self, tmp_path: Path) -> None:
+        from stamp.decoy.generate import generate_random_volume_decoys
+        from stamp.schemas.particles import OrientationPrior
+        real = _real_set_for(OrientationPrior.NONE)
+        decoys = generate_random_volume_decoys(real, [_write_vesicle_pair(tmp_path)], DecoyGeometry(voxel_size_angstrom=10.0), 60.0, 100.0, seed=1)
+        assert_comparable(real, decoys)
+        with pytest.raises(StampPipelineError, match='orientation prior'):
+            assert_comparable(real.model_copy(update={'orientation_prior': OrientationPrior.AXIS}), decoys)

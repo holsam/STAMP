@@ -828,6 +828,13 @@ class TestPolish:
         with pytest.raises(StampPipelineError):
             run_polish(data.store, np.zeros((12, 2)), np.full(12, -1), _config(OrientationPrior.NORMAL))
 
+    # test_polish_returns_an_empty_result_for_pure_noise: a decoy with no consistent structure rejects every particle instead of raising
+    def test_polish_returns_an_empty_result_for_pure_noise(self, tmp_path: Path) -> None:
+        noise = synthetic_set(tmp_path / 'noise', [np.zeros((_BOX,) * 3, dtype=np.float32)], OrientationPrior.NORMAL, 40, noise_sigma=0.5, seed=12)
+        seeds = np.zeros(40, dtype=int)
+        result = run_polish(noise.store, np.zeros((40, 2)), seeds, _config(OrientationPrior.NORMAL))
+        assert (result.labels == -1).all() and result.references == [] and len(result.ceilings) == 0
+
 # TestPrepare: class containing tests for subvolume preparation
 class TestPrepare:
     # test_working_box_is_odd: odd boxes bin to odd boxes so the centre stays on a voxel

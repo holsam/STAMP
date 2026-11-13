@@ -193,6 +193,16 @@ class TestIo:
             names = set(tar.getnames())
         assert names == {'raw', 'raw/a.txt', 'raw/b.txt'}
 
+    # test_manifests_without_a_segmentation_directory: every raw tomogram gets a manifest with no segmentation
+    def test_manifests_without_a_segmentation_directory(self, tmp_path: Path) -> None:
+        for name in ('t0', 't1'):
+            with mrcfile.new(tmp_path / f'{name}.mrc') as mrc:
+                mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
+                mrc.voxel_size = 7.0
+        manifests = io_utils.load_tomogram_manifests(None, tmp_path, None)
+        assert sorted(m.tomogram_id for m in manifests) == ['t0', 't1']
+        assert all(m.segmentation_path is None and m.voxel_size_angstrom == 7.0 for m in manifests)
+
 class TestIoMatchByStem:
     def test_exact_match(self) -> None:
         raw = [Path('/raw/tomo000.mrc'), Path('/raw/tomo001.mrc')]

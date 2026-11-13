@@ -34,6 +34,22 @@ def _slab_manifest(tmp_path: Path) -> TomogramManifest:
 def _at(position: tuple[float, float, float], **fields) -> RawPick:
     return RawPick(tomogram_id='t00', position=position, source_picker='mine', **fields)
 
+# TestApplyPrior: class containing tests for apply_prior in src/stamp/picking/importers.py
+class TestApplyPrior:
+    # test_apply_prior_per_prior: normal passes picks through, axis demands orientations, none strips orientation and membrane fields
+    def test_apply_prior_per_prior(self) -> None:
+        from stamp.picking.importers import apply_prior
+        from stamp.schemas.particles import OrientationPrior
+        from stamp.schemas.picks import RawPick
+        bare = RawPick(tomogram_id='t', position=(1.0, 2.0, 3.0), source_picker='a')
+        oriented = bare.model_copy(update={'orientation': (1.0, 0.0, 0.0, 0.0), 'beam_angle_deviation_degrees': 10.0, 'vesicle_id': 'v1'})
+        assert apply_prior([bare], OrientationPrior.NORMAL) == [bare]
+        assert apply_prior([oriented], OrientationPrior.AXIS) == [oriented]
+        with pytest.raises(StampValidationError, match='1 of 2'):
+            apply_prior([bare, oriented], OrientationPrior.AXIS)
+        stripped = apply_prior([oriented], OrientationPrior.NONE)[0]
+        assert stripped.orientation is None and stripped.beam_angle_deviation_degrees is None and stripped.vesicle_id is None and stripped.position == oriented.position
+
 # TestReadPicks: class containing tests for read_picks
 class TestReadPicks:
     def test_csv_round_trip(self, tmp_path: Path) -> None:

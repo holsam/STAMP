@@ -233,16 +233,22 @@ def match_by_stem(
             matched[segmentation_path] = raw_path
     return matched, unmatched
 
-# load_tomogram_manifests: match segmentations to raw tomograms by filename stem, unmatched segmentations skipped with a warning
+# load_tomogram_manifests: match segmentations to raw tomograms by filename stem, unmatched segmentations skipped with a warning; without a segmentation directory every raw tomogram gets a manifest with no segmentation
 def load_tomogram_manifests(
-    segmentation_dir: Path,
+    segmentation_dir: Path | None,
     raw_tomogram_dir: Path,
     voxel_size_angstrom: float | None,
 ) -> list[TomogramManifest]:
     from stamp.utils.errors import StampPipelineError
     from stamp.utils.log import log
-    segmentation_paths = glob_mrc(segmentation_dir)
     raw_paths = glob_mrc(raw_tomogram_dir)
+    if segmentation_dir is None:
+        if voxel_size_angstrom is None:
+            voxel_size_angstrom = resolve_directory_voxel_size_angstrom(raw_paths)
+            if voxel_size_angstrom is None:
+                raise StampPipelineError(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
+        return [TomogramManifest(tomogram_id=path.stem, raw_tomogram_path=path, voxel_size_angstrom=voxel_size_angstrom) for path in raw_paths]
+    segmentation_paths = glob_mrc(segmentation_dir)
     matched, unmatched = match_by_stem(segmentation_paths, raw_paths)
     for segmentation_path in unmatched:
         log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')

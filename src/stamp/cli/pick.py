@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 # Import pick command functions/variables
 import stamp.commands.pick as pickfuncs
+from stamp.schemas.particles import OrientationPrior
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
 
@@ -25,14 +26,14 @@ def pick(
         list[Path],
         typer.Argument(exists=True, dir_okay=False, readable=True, help='Picks files to import (.csv, .star, .json, .jsonl); one picker per file.'),
     ],
-    segmentation_dir: Annotated[
-        Path,
-        typer.Option('-s', '--seg-dir', exists=True, file_okay=False, help='Directory of segmented MRC files; filename stems are tomogram IDs. Used to infer orientations.'),
-    ],
     raw_tomogram_dir: Annotated[
         Path,
         typer.Option('-r', '--raw-dir', exists=True, file_okay=False, help='Directory of raw tomogram MRCs, matched to segmentations by filename stem.')
     ],
+    segmentation_dir: Annotated[
+        Path | None,
+        typer.Option('-s', '--seg-dir', exists=True, file_okay=False, help='Directory of segmented MRC files; filename stems are tomogram IDs. Used to infer orientations. Required for the normal orientation prior.'),
+    ] = None,
     output_dir: Annotated[
         Path,
         typer.Option('-o', '--out-dir', file_okay=False, help='Directory to write outputs to.')
@@ -41,6 +42,10 @@ def pick(
         float | None,
         typer.Option('--voxel-size-a', help='Voxel size of the input tomograms, in Angstrom.')
     ] = None,
+    orientation_prior: Annotated[
+        OrientationPrior,
+        typer.Option('--orientation-prior', help='What is known about particle orientation: normal (membrane proteins, orientation inferred from --seg-dir), axis (filaments, every pick needs an orientation) or none (soluble particles, orientations are ignored).'),
+    ] = OrientationPrior.NORMAL,
     names: Annotated[
         list[str] | None,
         typer.Option('--name', help='Picker name for each picks file, in order (repeatable). Defaults to the file stem.', rich_help_panel = 'Consensus'),
@@ -120,4 +125,5 @@ def pick(
         vesicle_labels_mrc=vesicle_labels_mrc,
         max_surface_distance_angstrom=max_surface_distance_angstrom,
         keep_raw=keep_raw,
+        orientation_prior=orientation_prior,
     )

@@ -10,7 +10,7 @@ from typing import Literal
 
 # Import internal STAMP objects
 from stamp.utils.halfset import assign_half_sets
-from stamp.schemas.particles import Particle, ParticleSet
+from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel_ordered
@@ -125,6 +125,7 @@ def build_particle_set(
     consensus_rule: Literal['intersection', 'union'],
     contributing_pickers: list[str],
     half_set_seed: int,
+    orientation_prior: OrientationPrior = OrientationPrior.NORMAL,
 ) -> ParticleSet:
     particle_ids = [f'p{index:06d}' for index in range(len(reconciled_picks))]
     group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, reconciled_picks)}
@@ -148,4 +149,5 @@ def build_particle_set(
         particles=particles,
         consensus_rule=consensus_rule,
         contributing_pickers=contributing_pickers,
+        orientation_prior=orientation_prior,
     )

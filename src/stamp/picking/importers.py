@@ -11,6 +11,7 @@ from scipy.spatial import cKDTree
 from stamp.picking.geometry import beam_angle_deviation_degrees, extract_surface, quaternion_from_reference_to
 from stamp.picking.vesicles import load_vesicle_labels, vesicle_ids_at
 from stamp.schemas.manifest import TomogramManifest
+from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampError, StampValidationError
 from stamp.utils.io import read_mrc
@@ -49,6 +50,17 @@ def map_tomogram_ids(picks: list[RawPick], manifests: list[TomogramManifest]) ->
         raise StampValidationError(f'picks reference tomogram id(s) with no matching segmentation/tomogram pair: {unknown}; known ids: {sorted(by_key.values())}')
     return [pick.model_copy(update={'tomogram_id': by_key[_id_key(pick.tomogram_id)]}) for pick in picks]
 
+# apply_prior: picks checked or reduced for the orientation prior; normal picks pass through (orientations are inferred from the segmentation next), axis picks must all carry an orientation, none picks lose theirs and the membrane fields so nothing downstream can use them
+def apply_prior(picks: list[RawPick], prior: OrientationPrior) -> list[RawPick]:
+    if prior is OrientationPrior.NORMAL:
+        return picks
+    if prior is OrientationPrior.AXIS:
+        missing = [pick for pick in picks if pick.orientation is None]
+        if missing:
+            raise StampValidationError(f'orientation prior axis needs an orientation (filament axis as a quaternion) for every pick, {len(missing)} of {len(picks)} from {missing[0].source_picker!r} have none; supply qw,qx,qy,qz columns in CSV or an orientation in JSON')
+        return picks
+    return [pick.model_copy(update={'orientation': None, 'beam_angle_deviation_degrees': None, 'vesicle_id': None}) for pick in picks]
+
 # infer_orientations: fill missing orientation, beam angle and vesicle id from the nearest segmentation surface
 def infer_orientations(
     picks: list[RawPick],
@@ -69,6 +81,9 @@ def infer_orientations(
         labels_path = labels_by_tomogram.get(tomogram_id)
         todo = [index for index in indices if _needs_inference(picks[index], labels_path is not None)]
         if not todo:
+            continue
+        if manifest.segmentation_path is None:
+            log.warning(f'{tomogram_id}: no segmentation, cannot infer orientations')
             continue
         segmentation = read_mrc(manifest.segmentation_path)
         try:

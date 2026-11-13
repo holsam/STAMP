@@ -193,3 +193,18 @@ class TestClusterOrchestrate:
                 command.working_directory.mkdir(parents=True, exist_ok=True)
         submit_pipeline(fake_config, tmp_path, ['refine'], ClusterProfile(partition='cpu'))
         assert submits == [[]]
+
+# TestRunConfig: class containing tests for the cross-field rules of the run config
+class TestRunConfig:
+    # test_run_config_prior_rules: the normal prior needs a segmentation directory, other priors need none but a random-volume decoy
+    def test_run_config_prior_rules(self) -> None:
+        def build(run_extra: dict, drop_seg: bool = False, decoy: dict | None = None) -> RunConfig:
+            run = {**_CONFIG_DICT['run'], **run_extra}
+            if drop_seg:
+                del run['segmentation_dir']
+            return RunConfig.model_validate({**_CONFIG_DICT, 'run': run, 'decoy': decoy or _CONFIG_DICT['decoy']})
+        assert build({'orientation_prior': 'none'}, drop_seg=True, decoy={'enabled': True, 'method': 'random-volume'}).run.segmentation_dir is None
+        with pytest.raises(StampPipelineError, match='segmentation_dir is required'):
+            build({}, drop_seg=True)
+        with pytest.raises(StampPipelineError, match='membrane-based'):
+            build({'orientation_prior': 'axis'}, drop_seg=True)

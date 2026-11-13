@@ -11,7 +11,26 @@ from typer.testing import CliRunner
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
 from stamp.cli.cli import stamp_app
+from stamp.commands.classify import build_classify_commands
+from stamp.schemas.config import RunConfig
 from stamp.schemas.particles import HalfSet, Particle
+
+# _CONFIG_DICT: minimal valid [run]/[decoy]/[stage] config for building classify commands
+_CONFIG_DICT = {
+    'run': {
+        'segmentation_dir': 'seg',
+        'raw_tomogram_dir': 'tomo',
+        'output_dir': 'out',
+        'voxel_size_angstrom': 13.48,
+        'backend': 'local',
+    },
+    'decoy': {'enabled': True},
+    'stage': {
+        'pick': {'picks_files': ['picks.csv']},
+        'identify': {'candidates': 'candidates.yaml', 'resolution': 25.0},
+        'refine': {'tool': 'relion', 'backend': 'local'},
+    },
+}
 
 # Initialise runner
 runner = CliRunner()

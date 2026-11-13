@@ -12,10 +12,11 @@ from skimage import measure
 from stamp.backends.base import ToolCommand
 from stamp.picking.consensus import build_particle_set, reconcile_picks_for_tomograms
 from stamp.picking.geometry import extract_surface
-from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks
+from stamp.picking.importers import apply_prior, infer_orientations, map_tomogram_ids, read_picks
 from stamp.picking.vesicles import load_vesicle_labels, summarise_vesicles, vesicle_surface_area_angstrom2
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
+from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
@@ -33,9 +34,10 @@ def _import_picker(
     vesicle_labels_by_tomogram: dict[str, Path],
     max_surface_distance_angstrom: float,
     cache_dir: Path,
+    prior: OrientationPrior = OrientationPrior.NORMAL,
 ) -> list[RawPick]:
     picks_by_tomogram: dict[str, list[RawPick]] = {}
-    for pick in map_tomogram_ids(read_picks(path, source_picker=name), manifests):
+    for pick in map_tomogram_ids(apply_prior(read_picks(path, source_picker=name), prior), manifests):
         picks_by_tomogram.setdefault(pick.tomogram_id, []).append(pick)
     manifest_by_id = {manifest.tomogram_id: manifest for manifest in manifests}
 
@@ -49,7 +51,7 @@ def _import_picker(
             [manifest_by_id[tomogram_id]],
             vesicle_labels_by_tomogram=vesicle_labels_by_tomogram,
             max_surface_distance_angstrom=max_surface_distance_angstrom,
-        )
+        ) if prior is OrientationPrior.NORMAL else picks_by_tomogram[tomogram_id]    # only membrane picks are oriented from the segmentation
         cache_tomogram_picks(cache_dir, tomogram_id, oriented)
     return load_cached_picks(cache_dir, list(picks_by_tomogram))
 
@@ -108,7 +110,7 @@ def _write_vesicle_summary(
     for manifest in manifests:
         labels_mrc = vesicle_labels_mrc_by_tomogram.get(manifest.tomogram_id)
         picks = picks_by_tomogram.get(manifest.tomogram_id, [])
-        if labels_mrc is None or not any(p.vesicle_id for p in picks):
+        if manifest.segmentation_path is None or labels_mrc is None or not any(p.vesicle_id for p in picks):
             continue
         jobs.append(_VesicleSummaryJob(manifest.tomogram_id, manifest.segmentation_path, labels_mrc, manifest.voxel_size_angstrom, picks))
 
@@ -137,7 +139,7 @@ def _write_vesicle_summary(
 # run_pick: pick command orchestration
 def run_pick(
     picks_files: list[Path],
-    segmentation_dir: Path,
+    segmentation_dir: Path | None,
     raw_tomogram_dir: Path,
     output_dir: Path,
     voxel_size_angstrom: float | None,
@@ -155,7 +157,10 @@ def run_pick(
     vesicle_labels_mrc: Path | None = None,
     max_surface_distance_angstrom: float = 300.0,
     keep_raw: bool = False,
+    orientation_prior: OrientationPrior = OrientationPrior.NORMAL,
 ) -> None:
+    if orientation_prior is OrientationPrior.NORMAL and segmentation_dir is None:
+        raise StampPipelineError('--seg-dir is required for the normal orientation prior, orientations are inferred from the membrane segmentation')
     names = picker_names or [path.stem for path in picks_files]
     if len(names) != len(picks_files):
         raise StampPipelineError(f'{len(picks_files)} picks file(s) but {len(names)} picker name(s)')
@@ -165,7 +170,7 @@ def run_pick(
     # Load manifests to check for matching files
     manifests = load_tomogram_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
     if not manifests:
-        raise StampPipelineError(f'No .mrc files in {segmentation_dir} with a matching stem in {raw_tomogram_dir}')
+        raise StampPipelineError(f'No .mrc files in {segmentation_dir or raw_tomogram_dir} with a matching stem in {raw_tomogram_dir}')
     log.info(f'Matched {len(manifests)} tomograms/segmentations')
     resolved_voxel_size_angstrom = manifests[0].voxel_size_angstrom
     log.debug(f'Resolved voxel size: {resolved_voxel_size_angstrom} Å')
@@ -176,7 +181,8 @@ def run_pick(
     # everything that changes imported picks; consensus, seed, beam filter, workers and plots are left out so they can change between runs
     fingerprint = {
         'picks': {name: file_signature(path, content=True) for name, path in zip(names, picks_files)},
-        'segmentation': signatures({m.tomogram_id: m.segmentation_path for m in manifests}),
+        'segmentation': signatures({m.tomogram_id: m.segmentation_path for m in manifests if m.segmentation_path}),
+        'orientation_prior': orientation_prior.value,
         'raw': signatures({m.tomogram_id: m.raw_tomogram_path for m in manifests}),
         'vesicle_labels': signatures(vesicle_labels_mrc_by_tomogram),
         'voxel_size_angstrom': resolved_voxel_size_angstrom,
@@ -188,7 +194,7 @@ def run_pick(
     picks_by_picker: dict[str, list[RawPick]] = {}
     for name, path in zip(names, picks_files):
         log.progress(f'Importing {name} from {path.name}...')
-        picks_by_picker[name] = _import_picker(path, name, manifests, vesicle_labels_mrc_by_tomogram, max_surface_distance_angstrom, output_dir / 'raw' / name)
+        picks_by_picker[name] = _import_picker(path, name, manifests, vesicle_labels_mrc_by_tomogram, max_surface_distance_angstrom, output_dir / 'raw' / name, orientation_prior)
         log.info(f'{name}: {len(picks_by_picker[name])} raw picks')
 
     log.progress(f'Reconciling picks...')
@@ -208,6 +214,7 @@ def run_pick(
         consensus_rule=consensus_rule,  # type: ignore[arg-type]
         contributing_pickers=names,
         half_set_seed=half_set_seed,
+        orientation_prior=orientation_prior,
     )
     if max_beam_angle_deviation is not None:
         before = len(particle_set.particles)
@@ -219,7 +226,8 @@ def run_pick(
         log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {dropped} of {before} particles')
         if not particle_set.particles:
             raise StampPipelineError('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
-    report_beam_angle_distribution(particle_set.particles)
+    if orientation_prior is OrientationPrior.NORMAL:
+        report_beam_angle_distribution(particle_set.particles)
     particle_set_path = output_dir / 'particle_set.json'
     particle_set_path.write_text(particle_set.model_dump_json(indent=2))
     log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
@@ -238,18 +246,19 @@ def run_pick(
             'consensus_rule': consensus_rule,
             'distance_threshold': distance_threshold,
             'half_set_seed': half_set_seed,
+            'orientation_prior': orientation_prior.value,
             'voxel_size_angstrom': resolved_voxel_size_angstrom,
             'max_surface_distance_angstrom': max_surface_distance_angstrom,
             'vesicle_labels_mrc': {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()},
         },
         inputs=[(f'picks:{name}', path) for name, path in zip(names, picks_files)]
-        + [(f'segmentation:{m.tomogram_id}', m.segmentation_path) for m in manifests]
+        + [(f'segmentation:{m.tomogram_id}', m.segmentation_path) for m in manifests if m.segmentation_path]
         + [(f'raw_tomogram:{m.tomogram_id}', m.raw_tomogram_path) for m in manifests],
     )
 
     log.progress(f'Rendering plots...')
     if make_plots:
-        segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests}
+        segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests if m.segmentation_path}
         raw_tomogram_paths = {m.tomogram_id: m.raw_tomogram_path for m in manifests}
         plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
@@ -264,7 +273,7 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
     target = stage_dir(output_dir, 'real', 'pick')
     argv = [
         'stamp', 'pick', *[str(path) for path in config.stage.pick.picks_files],
-        '--seg-dir', str(config.run.segmentation_dir),
+        '--orientation-prior', config.run.orientation_prior.value,
         '--raw-dir', str(config.run.raw_tomogram_dir),
         '--out-dir', str(output_dir),
         '--voxel-size-a', str(config.run.voxel_size_angstrom),
@@ -274,6 +283,8 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--max-surface-distance-a', str(config.stage.pick.max_surface_distance_angstrom),
         '--n-processes', str(config.stage.pick.n_workers),
     ]
+    if config.run.segmentation_dir is not None:
+        argv += ['--seg-dir', str(config.run.segmentation_dir)]
     for name in config.stage.pick.picker_names or []:
         argv += ['--name', name]
     if config.plots.enabled:

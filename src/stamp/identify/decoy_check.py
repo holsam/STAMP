@@ -30,8 +30,17 @@ def evaluate_decoy_control(
     decoy_scores: list[float],
     min_separation_sigma: float = 2.0,
 ) -> DecoyControlResult:
-    if not real_scores or not decoy_scores:
-        raise ValueError('need at least one real and one decoy score')
+    if not real_scores:
+        raise ValueError('need at least one real score')
+    if not decoy_scores:     # the polish step rejects every decoy particle when nothing beats its null, which is the best outcome for a control
+        return DecoyControlResult(
+            passed=True,
+            reason=f'the decoy produced no classes, so there is nothing for the fit to match (best real fit {max(real_scores):.3f})',
+            real_best=max(real_scores),
+            decoy_best=0.0,
+            separation_sigma=float('inf'),
+            mann_whitney_p=float('nan'),
+        )
     real_best = max(real_scores)
     decoy_best = max(decoy_scores)
     decoy_spread = stdev(decoy_scores) if len(decoy_scores) > 1 else 0.0

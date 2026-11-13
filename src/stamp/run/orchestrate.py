@@ -46,6 +46,7 @@ def _real_pick(config: RunConfig, output_dir: Path) -> Path:
         max_surface_distance_angstrom=config.stage.pick.max_surface_distance_angstrom,
         n_workers=config.stage.pick.n_workers,
         keep_raw=config.stage.pick.keep_raw,
+        orientation_prior=config.run.orientation_prior,
     )
     return target / 'particle_set.json'
 
@@ -78,6 +79,7 @@ def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) ->
         min_distance_from_picks_angstrom=config.decoy.min_distance_from_picks_angstrom,
         min_shift_angstrom=config.decoy.min_shift_angstrom,
         max_shift_angstrom=config.decoy.max_shift_angstrom,
+        min_border_angstrom=config.decoy.min_border_angstrom,
         n_synthetic_tomograms=config.decoy.n_synthetic_tomograms,
         synthetic_shape=','.join(str(dimension) for dimension in shape),
         seed=config.stage.pick.half_set_seed,
@@ -176,6 +178,10 @@ def run_pipeline(
         mark_complete(output_dir, 'decoy', 'classify')
     elif config.decoy.enabled:
         log.debug('Stage classify (decoy) already complete, skipping')
+
+    if stop_after == 'classify':
+        log.info(f'Stopping after stage {stop_after!r} as configured')
+        return _finalise(outcome, output_dir)
 
     # --- identify ---
     identify_dir = stage_dir(output_dir, 'real', 'identify')

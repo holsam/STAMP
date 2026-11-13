@@ -68,13 +68,16 @@ def run_polish(store: ParticleStore, embedding: np.ndarray, seed_labels: np.ndar
     for round_number in range(first_round, config.n_polish_rounds):
         log.progress(f'Polish round {round_number + 1}/{config.n_polish_rounds}: {len(references)} reference(s)')
         references = _polish_round(store, references, space, config)
+        if not references:
+            log.warning('No reference beat the phase-randomised null, every particle is rejected: the particles share no consistent structure at this resolution')
+            return _rejected_everything(store, space)
         _save(checkpoint_dir, f'round{round_number}', seed_labels, references)
     assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads), space)
     threshold = null_threshold(store, references, space, quantile=config.reject_quantile, seed=config.seed, threads=config.threads)
     log.debug(f'Rejection threshold from the null: {threshold:.3f}')
     return _finalise(store, assignment, references, threshold, space, config)
 
-# _polish_round: reassign every particle, rebuild references, drop those that do not beat the null and merge those that are the same structure
+# _polish_round: reassign every particle, rebuild references, drop those that do not beat the null and merge those that are the same structure; empty when none beats the null
 def _polish_round(store: ParticleStore, references: list[np.ndarray], space: SearchSpace, config: PolishConfig) -> list[np.ndarray]:
     box_voxels = store.volumes.box_voxels
     assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads), space)
@@ -85,13 +88,18 @@ def _polish_round(store: ParticleStore, references: list[np.ndarray], space: Sea
     keep = [k for k, reference in enumerate(rebuilt) if reference is not None and ceilings[k] >= bar]
     log.debug(f'Null bar {bar:.3f}: kept {len(keep)} of {len(references)} reference(s)')
     if not keep:
-        raise StampPipelineError('no reference beat the phase-randomised null, the particles share no consistent structure at this resolution')
+        return []
     kept = [rebuilt[k] for k in keep]
     if len(kept) == 1:
         return kept
     similarity, poses = pairwise_similarity(kept, space, threads=config.threads)
     groups = merge_groups(similarity, pair_thresholds(ceilings[keep], config.merge_fraction))
     return _merge_references(store, assignment, keep, kept, groups, poses, space)
+
+# _rejected_everything: the outcome when no reference survives the null, which is the expected result for a decoy
+def _rejected_everything(store: ParticleStore, space: SearchSpace) -> PolishResult:
+    n = len(store)
+    return PolishResult(np.full(n, -1), np.zeros(n, dtype=np.float32), np.zeros(n, dtype=np.float32), np.tile(np.eye(3), (n, 1, 1)), np.zeros((n, 3), dtype=np.int64), np.ones(n, dtype=np.int8), [], np.zeros(0), space)
 
 # _merge_references: one reference per merge group, built from every member at its pose composed with the pose of its old reference against the group's largest reference
 def _merge_references(store: ParticleStore, assignment: Assignment, keep: list[int], kept: list[np.ndarray], groups: np.ndarray, poses, space: SearchSpace) -> list[np.ndarray]:
