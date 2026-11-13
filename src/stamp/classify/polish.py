@@ -50,6 +50,7 @@ class PolishResult:
     shifts: np.ndarray      # (n, 3), working voxels
     polarity: np.ndarray    # (n,), -1 where the pose contains the filament flip
     references: list[np.ndarray]
+    ceilings: np.ndarray    # (K,), half-split agreement of each final reference
     space: SearchSpace
 
 # run_polish: refine seed clusters into references, polish them against all particles and reject what matches nothing better than noise; each stage is checkpointed in checkpoint_dir when given
@@ -71,7 +72,7 @@ def run_polish(store: ParticleStore, embedding: np.ndarray, seed_labels: np.ndar
     assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads), space)
     threshold = null_threshold(store, references, space, quantile=config.reject_quantile, seed=config.seed, threads=config.threads)
     log.debug(f'Rejection threshold from the null: {threshold:.3f}')
-    return _finalise(assignment, references, threshold, space)
+    return _finalise(store, assignment, references, threshold, space, config)
 
 # _polish_round: reassign every particle, rebuild references, drop those that do not beat the null and merge those that are the same structure
 def _polish_round(store: ParticleStore, references: list[np.ndarray], space: SearchSpace, config: PolishConfig) -> list[np.ndarray]:
@@ -109,15 +110,16 @@ def _merge_references(store: ParticleStore, assignment: Assignment, keep: list[i
                 rotations[chosen] = rotations[chosen] @ relative_rotation
     return [reference for reference in rebuild_references(store, labels, rotations, shifts, len(np.unique(groups))) if reference is not None]
 
-# _finalise: reject particles below the null threshold and renumber the surviving references
-def _finalise(assignment: Assignment, references: list[np.ndarray], threshold: float, space: SearchSpace) -> PolishResult:
+# _finalise: reject particles below the null threshold, renumber the surviving references and measure their half-split agreement
+def _finalise(store: ParticleStore, assignment: Assignment, references: list[np.ndarray], threshold: float, space: SearchSpace, config: PolishConfig) -> PolishResult:
     labels = np.where(assignment.cc >= threshold, assignment.labels, -1)
     used = np.unique(labels[labels >= 0])
     renumbered = np.full_like(labels, -1)
     for new, old in enumerate(used):
         renumbered[labels == old] = new
     flipped = (assignment.rotations[:, 2, 2] < 0) & (space.prior is OrientationPrior.AXIS)  # a filament pose that sends +z to -z carries the polarity flip, other priors have no polarity
-    return PolishResult(renumbered, assignment.cc, assignment.margin, assignment.rotations, assignment.shifts, np.where(flipped, -1, 1).astype(np.int8), [references[k] for k in used], space)
+    ceilings = half_split_ceilings(store.batches(), renumbered, assignment.rotations, assignment.shifts, space, len(used), store.volumes.box_voxels, seed=config.seed)
+    return PolishResult(renumbered, assignment.cc, assignment.margin, assignment.rotations, assignment.shifts, np.where(flipped, -1, 1).astype(np.int8), [references[k] for k in used], ceilings, space)
 
 # _save: checkpoint the references after a stage together with the seeds they derive from
 def _save(checkpoint_dir: Path | None, stage: str, seed_labels: np.ndarray, references: list[np.ndarray]) -> None:

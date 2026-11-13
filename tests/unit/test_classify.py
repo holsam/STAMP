@@ -10,10 +10,12 @@ from scipy.spatial.transform import Rotation
 
 # Import internal STAMP objects
 from stamp.classify.align import roll_about_normal
+from stamp.classify.average import weighted_average
 from stamp.classify.cluster import ClusteringConfig, label_to_cluster_id, reduce_and_cluster, reduce_features
 from stamp.classify.extract import box_fits_inside, canonical_grid, extract_particle_set, extract_subvolume, quaternion_to_matrix
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
+from stamp.classify.halves import express_in_frame_of_a, run_polish_by_half
 from stamp.classify.match import align_to_reference, rank_rotations, wedge_filter
 from stamp.classify.merge import half_split_ceilings, merge_groups, pair_thresholds, pairwise_similarity
 from stamp.classify.null import null_bar, null_threshold
@@ -23,7 +25,7 @@ from stamp.classify.references import hard_assign, rebuild_references, score_aga
 from stamp.classify.search import rotated_bank, search_space
 from stamp.classify.shfeatures import build_sh_feature_matrix, sh_power
 from stamp.classify.spherical import fit_matrix, lm_pairs, real_sh_basis, sphere_grid
-from stamp.classify.store import build_store
+from stamp.classify.store import ParticleStore, build_store
 from stamp.classify.wedge import apply_wedge, box_wedge, observed_directions
 from stamp.picking.geometry import quaternion_from_reference_to
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
@@ -150,6 +152,14 @@ def _nearest_neighbour_accuracy(features: np.ndarray, labels: np.ndarray) -> flo
     distances = np.linalg.norm(features[:, None] - features[None], axis=2)
     np.fill_diagonal(distances, np.inf)
     return float((labels[distances.argmin(axis=1)] == labels).mean())
+
+# _split: interleaved halves of a synthetic set with seeds from the true labels, and the store
+def _split(data):
+    n = len(data.labels)
+    indices = {'A': list(range(0, n, 2)), 'B': list(range(1, n, 2))}
+    seeds = {h: data.labels[i] for h, i in indices.items()}
+    embeddings = {h: np.eye(2)[seeds[h]] + np.random.default_rng(0).normal(0, 0.05, (len(seeds[h]), 2)) for h in indices}
+    return indices, embeddings, seeds
 
 # TestAverage: class containing tests for subvolume averages
 class TestAverage:
@@ -626,6 +636,44 @@ class TestFrames:
         quaternion = quaternion_from_reference_to(normal)
         box = extract_subvolume(tomogram, tuple(position), quaternion, 21)
         assert _peak(box) == (10, 10, 18)   # centre 10, plus 8 along +z
+
+# TestHalves: class containing unit tests for src/stamp/classify/halves.py
+class TestHalves:
+    # test_half_a_does_not_read_half_b: replacing every half-B particle with noise leaves the half-A result bit-identical to the run that saw the real half B
+    def test_half_a_does_not_read_half_b(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path / 'data', objects, OrientationPrior.NORMAL, 30, seed=2)
+        indices, embeddings, seeds = _split(data)
+        real, _ = run_polish_by_half(data.store, indices, embeddings, seeds, _config(OrientationPrior.NORMAL))
+        volumes = np.stack([data.store.volumes[i] for i in range(len(data.store))])
+        volumes[indices['B']] = np.random.default_rng(9).normal(size=volumes[indices['B']].shape)
+        perturbed_dir = tmp_path / 'perturbed'
+        perturbed_dir.mkdir()
+        np.save(perturbed_dir / 'all.npy', volumes)
+        perturbed = ParticleStore(Subvolumes(perturbed_dir, [('all', i) for i in range(len(volumes))], _REF_BOX), data.store.orientations, data.store.tilt_max_degrees, data.store.tilt_axis_degrees)
+        alone = run_polish(perturbed.take(indices['A']), embeddings['A'], seeds['A'], _config(OrientationPrior.NORMAL))     # half B never enters
+        assert np.array_equal(real['A'].labels, alone.labels) and np.array_equal(real['A'].rotations, alone.rotations)
+        assert all(np.array_equal(a, b) for a, b in zip(real['A'].references, alone.references))
+
+    # test_halves_match_by_reference_and_share_a_frame: matched clusters are the same class, and half-B averages built with the re-expressed poses agree with half A
+    def test_halves_match_by_reference_and_share_a_frame(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NORMAL, 40, noise_sigma=0.1, seed=3)
+        indices, embeddings, seeds = _split(data)
+        results, matches = run_polish_by_half(data.store, indices, embeddings, seeds, _config(OrientationPrior.NORMAL))
+        assert len(matches) == 2
+        majority = lambda half, label: np.bincount(data.labels[indices[half]][results[half].labels == label]).argmax()
+        assert all(majority('A', m.label_a) == majority('B', label_b) for label_b, m in matches.items())
+        rotations, shifts = express_in_frame_of_a(results['B'], matches)
+        store_a, store_b = data.store.take(indices['A']), data.store.take(indices['B'])
+        for label_b, match in matches.items():
+            members_b = np.where(results['B'].labels == label_b)[0]
+            members_a = np.where(results['A'].labels == match.label_a)[0]
+            average_a = weighted_average(*store_a.load(members_a), results['A'].rotations[members_a], results['A'].shifts[members_a])
+            in_frame = weighted_average(*store_b.load(members_b), rotations[members_b], shifts[members_b])
+            own_frame = weighted_average(*store_b.load(members_b), results['B'].rotations[members_b], results['B'].shifts[members_b])
+            correlation = lambda x, y: float((x * y).sum() / np.linalg.norm(x) / np.linalg.norm(y))
+            assert correlation(average_a, in_frame) > 0.6 and correlation(average_a, in_frame) > correlation(average_a, own_frame) + 0.15
 
 # TestMatch: class containing unit tests for prior-aware particle alignment to reference
 class TestMatch:
