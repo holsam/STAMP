@@ -90,7 +90,6 @@ method = "kmeans"
 n_clusters = 2
 n_components = 3
 box_angstrom = 120
-strict_halfset_independence = false
 
 [stage.identify]
 candidates = "candidates.yaml"

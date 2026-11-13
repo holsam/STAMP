@@ -177,7 +177,14 @@ class TestClassifyCommand:
         assignments = json.loads((tmp_path / 'stamp' / 'classify' / 'class_assignments.json').read_text())
         assert assignments and all(a['vesicle_id'] == expected[a['particle_id']] for a in assignments)     # particles near the edge are skipped, so only those classified are compared
 
-    def test_strict_mode_is_refused_until_per_half_polish(self, tmp_path: Path) -> None:
-        '''Strict half-set mode is refused rather than silently pooling the halves.'''
-        result = self._invoke(tmp_path)
-        assert result.exit_code != 0 and 'half-set' in result.output
+    def test_polish_strict_halfsets(self, tmp_path: Path) -> None:
+        '''Strict mode runs polish per half, matches clusters by reference and writes pose fields for both halves.'''
+        result = self._invoke(tmp_path, '--strict-halfset-independence', '--bin-factor', '1', '--null-sigmas', '0.5')
+        assert result.exit_code == 0, result.output
+        assert 'Cross-half cluster matching' in result.output
+        output_dir = tmp_path / 'stamp' / 'classify'
+        assignments = json.loads((output_dir / 'class_assignments.json').read_text())
+        assert {a['classifier'] for a in assignments} == {'stamp-polish-classifier-strict'}
+        assert {a['cluster_id'] for a in assignments if a['cluster_id'] != 'noise'}
+        halves = {path.name.split('_half')[1][0] for path in (output_dir / 'class_averages').glob('*.mrc')}
+        assert halves == {'A', 'B'}

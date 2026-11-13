@@ -107,6 +107,30 @@ def classify(
         int,
         typer.Option('--bin-factor', help='Fourier binning factor of the polish working resolution.', min=1, rich_help_panel = 'Polish'),
     ] = 2,
+    n_rotations: Annotated[
+        int,
+        typer.Option('--n-rots', help='Candidate rotations of the none prior search.', min=2, rich_help_panel = 'Polish'),
+    ] = 3000,
+    shift_range_voxels: Annotated[
+        int,
+        typer.Option('--shift-range', help='Largest shift searched (the axis prior also searches a quarter box along the axis).', min=0, rich_help_panel = 'Polish'),
+    ] = 3,
+    polish_rounds: Annotated[
+        int,
+        typer.Option('--polish-rounds', help='Number of reassign, rebuild and merge rounds during polish.', min=1, rich_help_panel = 'Polish'),
+    ] = 2,
+    null_sigmas: Annotated[
+        float,
+        typer.Option('--null-sigmas', help='Number of null standard deviations that a reference must beat the phase-randomised null agreement by.', min=0.0, rich_help_panel = 'Polish'),
+    ] = 3.0,
+    reject_quantile: Annotated[
+        float,
+        typer.Option('--reject-quantile', help='Null quantile of the best correlation below which a particle is rejected as noise.', min=0.5, max=0.999, rich_help_panel = 'Polish'),
+    ] = 0.95,
+    merge_fraction: Annotated[
+        float,
+        typer.Option('--merge-fraction', help='Fraction of the higher half-split agreement two references must reach to be merged (and two halves to be matched).', min=0.0, rich_help_panel = 'Polish'),
+    ] = 1.0,
     n_workers: Annotated[
         int,
         typer.Option('-n', '--n-processes', help='Number of processes to use (1 = sequential).'),
@@ -153,4 +177,10 @@ def classify(
         tilt_max_degrees=tilt_max_degrees,
         tilt_axis_degrees=tilt_axis_degrees,
         bin_factor=bin_factor,
+        n_rotations=n_rotations,
+        shift_range_voxels=shift_range_voxels,
+        polish_rounds=polish_rounds,
+        null_sigmas=null_sigmas,
+        reject_quantile=reject_quantile,
+        merge_fraction=merge_fraction,
     )

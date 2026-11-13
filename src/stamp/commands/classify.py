@@ -12,6 +12,7 @@ from stamp.classify.cluster import ClusteringConfig, ClusteringResult, label_to_
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.classify.polish import PolishConfig, posed_class_averages, run_polish
 from stamp.classify.extract import extract_particle_set
+from stamp.classify.halves import express_in_frame_of_a, run_polish_by_half
 from stamp.classify.frames import azimuth_degrees, rotation_to_quaternion
 from stamp.classify.prepare import working_box
 from stamp.classify.shfeatures import build_sh_feature_matrix
@@ -20,6 +21,7 @@ from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.run.state import stage_dir
+from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, ParticleSet
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
@@ -55,9 +57,13 @@ def run_classify(
     tilt_max_degrees: float | None = None,
     tilt_axis_degrees: float = 90.0,
     bin_factor: int = 2,
+    n_rotations: int = 3000,
+    shift_range_voxels: int = 3,
+    polish_rounds: int = 2,
+    null_sigmas: float = 3.0,
+    reject_quantile: float = 0.95,
+    merge_fraction: float = 1.0,
 ) -> None:
-    if strict_halfset_independence:
-        raise StampPipelineError('half-set independent clustering is not available yet, use --no-strict-halfset-independence')
     if voxel_size_angstrom is None:
         voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(raw_tomogram_dir))
         if voxel_size_angstrom is None:
@@ -105,6 +111,12 @@ def run_classify(
         'tilt_max_degrees': tilt_max_degrees,
         'tilt_axis_degrees': tilt_axis_degrees,
         'bin_factor': bin_factor,
+        'n_rotations': n_rotations,
+        'shift_range_voxels': shift_range_voxels,
+        'polish_rounds': polish_rounds,
+        'null_sigmas': null_sigmas,
+        'reject_quantile': reject_quantile,
+        'merge_fraction': merge_fraction,
     }
     if sync_checkpoint(output_dir / 'raw', fingerprint):
         log.info('Found matching partial output, resuming')
@@ -160,9 +172,15 @@ def run_classify(
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    log.warning('half-A and half-B particles are classified together, FSC built on these classes will be inflated')
-    polish_config = PolishConfig(prior=prior, min_seed_size=min_cluster_size, seed=random_state, threads=n_workers)
-    assignments, result_by_half, averages_by_half = _classify_combined(kept, subvols, features, config, polish_config, working_box(box_voxels, bin_factor), (tilt_max_degrees, tilt_axis_degrees), output_dir, voxel_size_angstrom)
+    polish_config = PolishConfig(
+        prior=prior, angular_step_degrees=inplane_angular_step_degrees, n_rotations=n_rotations, shift_range_voxels=shift_range_voxels,
+        n_polish_rounds=polish_rounds, min_seed_size=min_cluster_size, merge_fraction=merge_fraction, null_sigmas=null_sigmas,
+        reject_quantile=reject_quantile, seed=random_state, threads=n_workers,
+    )
+    classify = _classify_strict if strict_halfset_independence else _classify_combined
+    if not strict_halfset_independence:
+        log.warning('--no-strict-halfset-independence used, half-A and half-B particles are classified together; FSC built on these classes will be inflated')
+    assignments, result_by_half, averages_by_half = classify(kept, subvols, features, config, polish_config, working_box(box_voxels, bin_factor), (tilt_max_degrees, tilt_axis_degrees), output_dir, voxel_size_angstrom)
 
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
@@ -193,6 +211,12 @@ def run_classify(
             'tilt_max_degrees': tilt_max_degrees,
             'tilt_axis_degrees': tilt_axis_degrees,
             'bin_factor': bin_factor,
+            'n_rotations': n_rotations,
+            'shift_range_voxels': shift_range_voxels,
+            'polish_rounds': polish_rounds,
+            'null_sigmas': null_sigmas,
+            'reject_quantile': reject_quantile,
+            'merge_fraction': merge_fraction,
             'azimuthal_modes': azimuthal_modes,
             'n_azimuthal_samples': n_azimuthal_samples,
             'min_radius_fraction': min_radius_fraction,
@@ -307,6 +331,50 @@ def _classify_combined(
         for index, (particle, cluster_id) in enumerate(zip(particles, cluster_ids))
     ]
     return assignments, {'combined': seeds}, averages_by_half
+
+# _classify_strict: seed and polish each half on its own, match half-B clusters to half A by reference similarity and express half-B poses in the half-A frame so the two half averages can be compared
+def _classify_strict(
+    particles,
+    subvols: Subvolumes,
+    features,
+    config,
+    polish_config: PolishConfig,
+    working_voxels: int,
+    tilt: tuple[float | None, float],
+    output_dir: Path,
+    voxel_size_angstrom: float,
+) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
+    half_a, half_b = split_by_half_set(list(particles))
+    index_of = {particle.particle_id: i for i, particle in enumerate(particles)}
+    members = {'A': [index_of[p.particle_id] for p in half_a], 'B': [index_of[p.particle_id] for p in half_b]}
+    if not members['A'] or not members['B']:
+        raise StampPipelineError('Strict mode needs particles in both half-sets')
+    seeds = {half: reduce_and_cluster(features[indices], config) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
+    orientations = [particle.orientation for particle in particles]
+    store = build_store(subvols, orientations, working_voxels, *tilt, output_dir / 'raw' / 'working')
+    results, matches = run_polish_by_half(store, members, {h: seeds[h].embedding for h in members}, {h: seeds[h].labels for h in members}, polish_config, checkpoint_dir=output_dir / 'raw' / 'polish')
+    for label_b, match in sorted(matches.items()):
+        log.debug(f'Cross-half cluster matching (B -> A, by reference): c{label_b:02d} -> c{match.label_a:02d}  similarity={match.similarity:.3f}')
+    n_a = len(results['A'].references)
+    renumber = {label_b: match.label_a for label_b, match in matches.items()}
+    unmatched = [label_b for label_b in range(len(results['B'].references)) if label_b not in matches]
+    renumber.update({label_b: n_a + position for position, label_b in enumerate(unmatched)})   # unmatched half-B clusters get ids that cannot collide with half A
+    rotations_b, shifts_b = express_in_frame_of_a(results['B'], matches)
+    poses = {'A': (results['A'].rotations, results['A'].shifts), 'B': (rotations_b, shifts_b)}
+    labels = {'A': results['A'].labels, 'B': np.array([renumber[int(l)] if l >= 0 else -1 for l in results['B'].labels])}
+    full = ParticleStore(subvols, orientations, *tilt)
+    scale = subvols.box_voxels / working_voxels
+    assignments: list[ClassAssignment] = []
+    averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
+    for half, indices in members.items():
+        averages = posed_class_averages(full.take(indices), labels[half], poses[half][0], poses[half][1] * scale)
+        write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half)
+        averages_by_half[half] = averages
+        result = results[half]
+        for local, index in enumerate(indices):
+            cluster_id = label_to_cluster_id(int(labels[half][local]))
+            assignments.append(_pose_assignment(particles[index], cluster_id, 'stamp-polish-classifier-strict', polish_config.prior, poses[half][0][local], poses[half][1][local] * scale, float(result.cc[local]), float(result.margin[local]), int(result.polarity[local])))
+    return assignments, {half: seeds[half] for half in seeds}, averages_by_half
 
 # _report_clusters: echo PCA variance and per-cluster sizes
 def _report_clusters(cluster_ids: list[str], explained_variance: np.ndarray) -> None:
