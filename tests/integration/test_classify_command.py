@@ -189,6 +189,28 @@ class TestClassifyCommand:
         halves = {path.name.split('_half')[1][0] for path in (output_dir / 'class_averages').glob('*.mrc')}
         assert halves == {'A', 'B'}
 
+    def test_polish_runs_for_every_prior(self, tmp_path: Path) -> None:
+        '''The axis and none priors run end to end from the same particle set, `none` without any orientation.'''
+        for prior in ('axis', 'none'):
+            root = tmp_path / prior
+            root.mkdir()
+            particle_set_path, raw_dir = _build_dataset(root)
+            payload = json.loads(particle_set_path.read_text())
+            payload['orientation_prior'] = prior
+            if prior == 'none':
+                for particle in payload['particles']:
+                    del particle['orientation']
+            particle_set_path.write_text(json.dumps(payload))
+            result = runner.invoke(stamp_app, [
+                '-d', str(root), 'classify', '--particles', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(root),
+                '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'leiden', '--min-cluster-size', '10', '--n-components', '10',
+                '--tilt-max', '60', '--bin-factor', '1', '--null-sigmas', '0.5', '--n-rots', '150', '--no-strict-halfset-independence',
+            ])
+            assert result.exit_code == 0, result.output
+            assignments = json.loads((root / 'stamp' / 'classify' / 'class_assignments.json').read_text())
+            posed = [a for a in assignments if a['cluster_id'] != 'noise']
+            assert posed and all((a['polarity'] in (1, -1)) == (prior == 'axis') for a in posed)
+
 # TestBuildClassifyCommands: class containing tests for the classify argv built from the run config
 class TestBuildClassifyCommands:
     # test_build_classify_commands_passes_polish_settings: the wedge and alignment settings reach the classify argv
