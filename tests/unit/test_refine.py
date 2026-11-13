@@ -105,3 +105,17 @@ class TestRefineHalfsetGuard:
     def test_output_tree_is_separate_per_half(self, tmp_path):
         tree = refine_output_tree(tmp_path, 'c00')
         assert tree['A'] != tree['B'] and tree['A'].is_dir() and tree['B'].is_dir()
+
+# TestRefineCommand: class containing tests for src/stamp/commands/refine.py
+class TestRefineCommand:
+    # test_full_poses_come_from_assignments_the_polish_step_posed: only rows with a rotation produce a pose, a missing shift is zero
+    def test_full_poses_come_from_assignments_the_polish_step_posed(self) -> None:
+        from stamp.commands.refine import _full_poses
+        from stamp.schemas.particles import ClassAssignment
+        rows = [
+            ClassAssignment(particle_id='a', cluster_id='c00', classifier='x', rotation=(1.0, 0.0, 0.0, 0.0), shift_voxels=(1.0, 2.0, 3.0)),
+            ClassAssignment(particle_id='b', cluster_id='c00', classifier='x', rotation=(1.0, 0.0, 0.0, 0.0)),
+            ClassAssignment(particle_id='c', cluster_id='c00', classifier='x', inplane_angle_degrees=10.0),
+        ]
+        poses = _full_poses(rows)
+        assert set(poses) == {'a', 'b'} and list(poses['a'][1]) == [1.0, 2.0, 3.0] and not poses['b'][1].any()
