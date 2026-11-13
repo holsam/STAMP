@@ -12,17 +12,18 @@ from scipy.spatial import cKDTree
 from stamp.utils.halfset import assign_half_sets
 from stamp.picking.geometry import extract_surface, quaternion_from_reference_to
 from stamp.schemas.manifest import TomogramManifest
-from stamp.schemas.particles import Particle, ParticleSet
+from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.errors import StampValidationError
-from stamp.utils.io import cache_tomogram_picks, load_cached_picks, new_mrc, read_mrc
+from stamp.utils.io import cache_tomogram_picks, load_cached_picks, new_mrc, open_mrc, read_mrc
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
 # Define constants
 METHOD_SHIFTED = 'shifted'
 METHOD_SYNTHETIC_NOISE = 'synthetic-noise'
+METHOD_RANDOM_VOLUME = 'random-volume'
 DECOY_SOURCE_PREFIX = 'decoy-'
 
 # DecoyGeometry: voxel size and density sign shared by the decoy generators
@@ -176,6 +177,56 @@ def generate_shifted_decoys(
     log.info(f'Generated {len(raw_picks)} decoy particles')
     return decoys
 
+# generate_random_volume_decoys: one decoy per real pick at a uniformly random position in the tomogram, clear of every real pick and of the border, with a random orientation where the prior has one; needs no segmentation so it serves every prior except the membrane normal
+def generate_random_volume_decoys(
+    real_particle_set: ParticleSet,
+    manifests: list[TomogramManifest],
+    config: DecoyGeometry,
+    min_distance_from_picks_angstrom: float,
+    border_angstrom: float,
+    seed: int,
+    max_attempts_per_particle: int = 200,
+) -> ParticleSet | None:
+    prior = real_particle_set.orientation_prior
+    if prior is OrientationPrior.NORMAL:
+        raise StampValidationError('random-volume decoys have no membrane normal to orient by, use the shifted method for the normal orientation prior')
+    log.progress('Generating random-volume decoys')
+    rng = np.random.default_rng(seed)
+    raw_path_by_tomogram = {manifest.tomogram_id: manifest.raw_tomogram_path for manifest in manifests}
+    positions_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
+    for particle in real_particle_set.particles:
+        positions_by_tomogram.setdefault(particle.tomogram_id, []).append(particle.position)
+    min_distance = config.to_voxels(min_distance_from_picks_angstrom)
+    border = config.to_voxels(border_angstrom)
+    raw_picks: list[RawPick] = []
+    for tomogram_id, positions in positions_by_tomogram.items():
+        if tomogram_id not in raw_path_by_tomogram:
+            continue
+        with open_mrc(raw_path_by_tomogram[tomogram_id], header_only=True) as mrc:
+            extent_xyz = np.array([int(mrc.header.nx), int(mrc.header.ny), int(mrc.header.nz)]) - 1
+        low, high = np.full(3, border), extent_xyz - border
+        if np.any(high <= low):
+            log.warning(f'{tomogram_id}: smaller than twice the {border_angstrom} Å border, no random-volume decoys placed')
+            continue
+        pick_tree = cKDTree(np.array(positions))
+        for _ in positions:
+            for _attempt in range(max_attempts_per_particle):
+                candidate = rng.uniform(low, high)
+                if pick_tree.query(candidate, k=1)[0] < min_distance:
+                    continue
+                axis = rng.normal(size=3)
+                raw_picks.append(RawPick(
+                    tomogram_id=tomogram_id,
+                    position=tuple(float(c) for c in candidate),
+                    orientation=quaternion_from_reference_to(axis / np.linalg.norm(axis)) if prior is OrientationPrior.AXIS else None,
+                    source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_RANDOM_VOLUME}',
+                ))
+                break
+            else:
+                log.debug(f'{tomogram_id}: exhausted {max_attempts_per_particle} attempts placing a random-volume decoy, skipping one particle')
+    log.info(f'Generated {len(raw_picks)} decoy particles')
+    return _finalise(raw_picks, seed, METHOD_RANDOM_VOLUME, prior)
+
 # _SyntheticNoiseJob: one noise volume's inputs
 @dataclass(frozen=True)
 class _SyntheticNoiseJob:
@@ -276,7 +327,7 @@ def generate_synthetic_noise_decoys(
     return decoys, manifests
 
 # _finalise: assign decoy particle IDs and half-sets, returning a decoy ParticleSet or None if no decoys were generated
-def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet | None:
+def _finalise(raw_picks: list[RawPick], seed: int, method: str, orientation_prior: OrientationPrior = OrientationPrior.NORMAL) -> ParticleSet | None:
     particle_ids = [f'decoy-{index:06d}' for index in range(len(raw_picks))]
     if not particle_ids:
         return None
@@ -298,4 +349,5 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet |
         particles=particles,
         consensus_rule='union',
         contributing_pickers=[f'{DECOY_SOURCE_PREFIX}{method}'],
+        orientation_prior=orientation_prior,
     )

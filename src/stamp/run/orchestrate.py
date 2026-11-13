@@ -79,6 +79,7 @@ def _decoy_pick(config: RunConfig, output_dir: Path, real_particle_set: Path) ->
         min_distance_from_picks_angstrom=config.decoy.min_distance_from_picks_angstrom,
         min_shift_angstrom=config.decoy.min_shift_angstrom,
         max_shift_angstrom=config.decoy.max_shift_angstrom,
+        min_border_angstrom=config.decoy.min_border_angstrom,
         n_synthetic_tomograms=config.decoy.n_synthetic_tomograms,
         synthetic_shape=','.join(str(dimension) for dimension in shape),
         seed=config.stage.pick.half_set_seed,

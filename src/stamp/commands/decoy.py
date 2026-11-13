@@ -9,15 +9,17 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.backends.base import ToolCommand
 from stamp.decoy.generate import (
+    METHOD_RANDOM_VOLUME,
     METHOD_SHIFTED,
     METHOD_SYNTHETIC_NOISE,
     DecoyGeometry,
+    generate_random_volume_decoys,
     generate_shifted_decoys,
     generate_synthetic_noise_decoys,
 )
 from stamp.decoy.validate import assert_comparable
 from stamp.run.state import stage_dir
-from stamp.schemas.particles import ParticleSet
+from stamp.schemas.particles import OrientationPrior, ParticleSet
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import archive_and_remove_directory, glob_mrc, load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
@@ -25,7 +27,7 @@ from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 
 # METHODS: decoy generation methods
-METHODS = (METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE)
+METHODS = (METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE, METHOD_RANDOM_VOLUME)
 
 # run_decoy: generate a decoy dataset to run through STAMP alongside real data
 def run_decoy(
@@ -51,6 +53,7 @@ def run_decoy(
     plot_format: str = 'tiff',
     pick_zstack_movie: bool = True,
     pick_plot_3d: bool = False,
+    min_border_angstrom: float = 200.0,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data'''
     if voxel_size_angstrom is None:
@@ -70,6 +73,7 @@ def run_decoy(
         'min_shift_angstrom': min_shift_angstrom,
         'max_shift_angstrom': max_shift_angstrom,
         'min_distance_from_picks_angstrom': min_distance_from_picks_angstrom,
+        'min_border_angstrom': min_border_angstrom,
         'n_synthetic_tomograms': n_synthetic_tomograms,
         'synthetic_shape': synthetic_shape,
         'real_particle_set': file_signature(real_particle_set, content=True) if uses_real_data and real_particle_set else None,
@@ -79,6 +83,10 @@ def run_decoy(
     if sync_checkpoint(output_dir / 'raw', fingerprint):
         log.info('Found matching partial output, resuming')
 
+    if method != METHOD_RANDOM_VOLUME and real_particle_set is not None:
+        prior = ParticleSet.model_validate(json.loads(real_particle_set.read_text())).orientation_prior
+        if prior is not OrientationPrior.NORMAL:
+            raise StampPipelineError(f'--method {method} is membrane-based and cannot be a control for the {prior.value!r} orientation prior, use --method {METHOD_RANDOM_VOLUME}')
     if method == METHOD_SYNTHETIC_NOISE:
         shape = tuple(int(value) for value in synthetic_shape.split(','))
         if len(shape) != 3:
@@ -100,21 +108,34 @@ def run_decoy(
             raise StampPipelineError(str(exc)) from exc
     else:
         real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
-        manifests = load_tomogram_manifests(segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
+        manifests = load_tomogram_manifests(None if method == METHOD_RANDOM_VOLUME else segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
         if not manifests:
             raise StampPipelineError('No matched segmentation/tomogram pairs found')
-        decoy_set = generate_shifted_decoys(
-            real_particle_set=real_set,
-            manifests=manifests,
-            config=config,
-            min_shift_angstrom=min_shift_angstrom,
-            max_shift_angstrom=max_shift_angstrom,
-            min_distance_from_surface_angstrom=min_distance_from_real_angstrom,
-            min_pick_distance=min_distance_from_picks_angstrom,
-            seed=seed,
-            n_workers=n_workers,
-            output_dir=output_dir,
-        )
+        if method == METHOD_RANDOM_VOLUME:
+            try:
+                decoy_set = generate_random_volume_decoys(
+                    real_particle_set=real_set,
+                    manifests=manifests,
+                    config=config,
+                    min_distance_from_picks_angstrom=min_distance_from_picks_angstrom,
+                    border_angstrom=min_border_angstrom,
+                    seed=seed,
+                )
+            except StampValidationError as exc:
+                raise StampPipelineError(str(exc)) from exc
+        else:
+            decoy_set = generate_shifted_decoys(
+                real_particle_set=real_set,
+                manifests=manifests,
+                config=config,
+                min_shift_angstrom=min_shift_angstrom,
+                max_shift_angstrom=max_shift_angstrom,
+                min_distance_from_surface_angstrom=min_distance_from_real_angstrom,
+                min_pick_distance=min_distance_from_picks_angstrom,
+                seed=seed,
+                n_workers=n_workers,
+                output_dir=output_dir,
+            )
 
     if decoy_set is None or not decoy_set.particles:
         raise StampPipelineError('No decoy positions generated. For shifted, check that the shift range fits inside the volume.')
@@ -143,6 +164,7 @@ def run_decoy(
             'min_distance_from_real_angstrom': min_distance_from_real_angstrom,
             'min_shift_angstrom': min_shift_angstrom,
             'max_shift_angstrom': max_shift_angstrom,
+            'min_border_angstrom': min_border_angstrom,
             'n_synthetic_tomograms': n_synthetic_tomograms,
             'synthetic_shape': synthetic_shape,
             'seed': seed,
@@ -156,7 +178,7 @@ def run_decoy(
     )
     log.info(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
     if make_plots:
-        segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests} if method != METHOD_SYNTHETIC_NOISE else {}
+        segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests if m.segmentation_path} if method != METHOD_SYNTHETIC_NOISE else {}
         style = pick_plot_style if segmentation_paths else 'none'
         plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths), plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
@@ -171,11 +193,13 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--voxel-size-a', str(config.run.voxel_size_angstrom),
         '--method', config.decoy.method,
         '--real-particle-set', str(real_particles),
-        '--seg-dir', str(config.run.segmentation_dir),
         '--raw-dir', str(config.run.raw_tomogram_dir),
+        '--min-border-a', str(config.decoy.min_border_angstrom),
         '--seed', str(config.stage.pick.half_set_seed),
         '--n-processes', str(config.decoy.n_workers),
     ]
+    if config.run.segmentation_dir is not None:
+        argv += ['--seg-dir', str(config.run.segmentation_dir)]
     if config.decoy.keep_raw:
         argv.append('--keep-raw')
     if config.plots.enabled:

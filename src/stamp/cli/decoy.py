@@ -31,7 +31,7 @@ def decoy(
         typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
     ] = Path('.'),
     method: Annotated[
-        Literal['shifted', 'synthetic-noise'],
+        Literal['shifted', 'synthetic-noise', 'random-volume'],
         typer.Option('--method', help='Decoy method to use.'),
     ] = 'shifted',
     real_particle_set: Annotated[
@@ -70,6 +70,10 @@ def decoy(
         float,
         typer.Option('--max-shift-a', help='Maximum displacement.', rich_help_panel = 'Shifted decoy'),
     ] = 600.0,
+    min_border_angstrom: Annotated[
+        float,
+        typer.Option('--min-border-a', help='Minimum distance from the tomogram border.', rich_help_panel = 'Random volume decoy'),
+    ] = 200.0,
     n_synthetic_tomograms: Annotated[
         int,
         typer.Option('--n-synthetic-tomograms', help='Noise volumes.', rich_help_panel = 'Synthetic noise decoy'),
@@ -117,7 +121,10 @@ def decoy(
         raise typer.BadParameter('--density-sign must be 1 or -1.')
 
     # Validate method requirements
-    if method in ['rejected-surface', 'shifted']:
+    if method == 'random-volume':
+        if any([real_particle_set is None, raw_tomogram_dir is None]):
+            raise StampPipelineError('--method random-volume requires --real-particle-set and -r/--raw-dir')
+    elif method == 'shifted':
         if any([real_particle_set is None, segmentation_dir is None, raw_tomogram_dir is None]):
             raise StampPipelineError(f'--method {method} requires --real-particle-set, -s/--seg-dir and -r/--raw--dir')
     else:

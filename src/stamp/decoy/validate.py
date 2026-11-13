@@ -37,6 +37,8 @@ def assert_comparable(real: ParticleSet, decoy: ParticleSet) -> None:
     if is_decoy_particle_set(real):
         raise StampPipelineError('The real ParticleSet contains decoy particles')
 
+    if real.orientation_prior != decoy.orientation_prior:
+        raise StampPipelineError(f'Decoy orientation prior {decoy.orientation_prior.value!r} differs from the real set\'s {real.orientation_prior.value!r}, the control would classify with a different search space')
     real_count = len(real.particles)
     decoy_count = len(decoy.particles)
     if decoy_count < 0.5 * real_count:

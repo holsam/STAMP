@@ -21,12 +21,13 @@ tilt_axis_degrees = 90.0                    # --tilt-axis  (tilt axis angle from
 
 [decoy]
 enabled = true                              # --no-decoy
-method = "shifted"                          # --method  (shifted|synthetic-noise)
+method = "shifted"                          # --method  (shifted|synthetic-noise|random-volume; random-volume for the axis and none priors)
 n_decoys_per_tomogram = 50                  # synthetic-noise only
 min_distance_from_real_angstrom = 100.0
 min_distance_from_picks_angstrom = 60.0
 min_shift_angstrom = 200.0
 max_shift_angstrom = 600.0
+min_border_angstrom = 200.0                 # random-volume only
 n_synthetic_tomograms = 3
 n_workers = 1
 synthetic_shape_voxels = ""                 # blank = match first real tomogram, or e.g. [128, 128, 128]

@@ -47,12 +47,13 @@ class PlotSettings(_Strict):
 # DecoySettings: the [decoy] table
 class DecoySettings(_Strict):
     enabled: bool = True
-    method: Literal['shifted', 'synthetic-noise'] = 'shifted'
+    method: Literal['shifted', 'synthetic-noise', 'random-volume'] = 'shifted'
     n_decoys_per_tomogram: int | None = None    # synthetic-noise only
     min_distance_from_real_angstrom: float = 100.0
     min_distance_from_picks_angstrom: float = 60.0
     min_shift_angstrom: float = 200.0
     max_shift_angstrom: float = 600.0
+    min_border_angstrom: float = 200.0
     n_synthetic_tomograms: int = 3
     synthetic_shape_voxels: tuple[int, int, int] | None = None  # None = match the first real tomogram
     n_workers: int = 1
@@ -124,6 +125,8 @@ class RunConfig(_Strict):
     def _cross_field(self) -> 'RunConfig':
         if self.run.orientation_prior is OrientationPrior.NORMAL and self.run.segmentation_dir is None:
             raise StampPipelineError('[run].segmentation_dir is required for orientation_prior "normal", orientations are inferred from the membrane segmentation')
+        if self.run.orientation_prior is not OrientationPrior.NORMAL and self.decoy.enabled and self.decoy.method != 'random-volume':
+            raise StampPipelineError(f'[decoy].method "{self.decoy.method}" is membrane-based, use "random-volume" (or disable the decoy) for orientation_prior "{self.run.orientation_prior.value}"')
         stop = self.run.stop_after
         needs_identify = stop in (None, 'identify', 'refine')
         if needs_identify and not self.stage.identify.candidates:
