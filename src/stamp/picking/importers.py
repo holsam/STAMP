@@ -70,6 +70,9 @@ def infer_orientations(
         todo = [index for index in indices if _needs_inference(picks[index], labels_path is not None)]
         if not todo:
             continue
+        if manifest.segmentation_path is None:
+            log.warning(f'{tomogram_id}: no segmentation, cannot infer orientations')
+            continue
         segmentation = read_mrc(manifest.segmentation_path)
         try:
             vertices_zyx, normals_zyx = extract_surface(segmentation)
