@@ -13,6 +13,7 @@ from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.relion import RelionRefineAdapter
 from stamp.backends.base import ToolCommand
 from stamp.backends.factory import check_backend_supports, select_runner
+from stamp.classify.extract import quaternion_to_matrix
 from stamp.picking.geometry import compose_roll_about_normal
 from stamp.refine.fsc import compute_fsc, soft_sphere_mask, write_fsc_files
 from stamp.refine.halfset_guard import (
@@ -52,6 +53,10 @@ def _with_inplane(particle, angle_by_particle: dict[str, float]):
         return particle
     return particle.model_copy(update={'orientation': compose_roll_about_normal(particle.orientation, angle)})
 
+# _full_poses: {particle_id: (rotation matrix, shift)} for assignments the polish step posed, which replace the in-plane angle
+def _full_poses(assignments: list[ClassAssignment]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    return {row.particle_id: (quaternion_to_matrix(row.rotation), np.array(row.shift_voxels if row.shift_voxels is not None else (0.0, 0.0, 0.0))) for row in assignments if row.rotation is not None}
+
 # _run_half: one independent half-set refinement, returns the final map path
 def _run_half(adapter, runner, particles, reference, workdir, parameters, backend) -> Path:
     inputs = AdapterInputs(
@@ -60,7 +65,7 @@ def _run_half(adapter, runner, particles, reference, workdir, parameters, backen
         parameters=parameters,
     )
     if backend != 'mock':
-        adapter.write_particle_star(particles, workdir / 'particles.star', {})
+        adapter.write_particle_star(particles, workdir / 'particles.star', {}, poses=parameters.get('poses'), voxel_size_angstrom=parameters['voxel_size_angstrom'])
     command = adapter.build_command(inputs)
     log.debug(f'{workdir.name}: dispatching {adapter.name} refinement')
     result = runner.run(command)
@@ -102,7 +107,8 @@ def run_refine(
         log.debug(f'Resolved voxel size from MRC headers: {voxel_size_angstrom} Å')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     assignments = [ClassAssignment.model_validate(row) for row in json.loads(class_assignments.read_text())]
-    angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None}
+    poses = _full_poses(assignments)
+    angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None and row.particle_id not in poses}    # a full pose already contains the in-plane angle
     class_averages_dir = class_assignments.parent / 'class_averages'
     identified = {row['cluster_id'] for row in json.loads(identification.read_text())}
 
@@ -111,7 +117,7 @@ def run_refine(
     adapter = get_mock_adapter('relion' if tool == 'relion' else 'm-refine') if backend == 'mock' else _ADAPTERS[tool]()
     check_backend_supports(adapter, backend)
     runner = select_runner(backend, requires_gpu=getattr(adapter, 'requires_gpu', False))
-    parameters = {'voxel_size_angstrom': voxel_size_angstrom, 'iterations': iterations}
+    parameters = {'voxel_size_angstrom': voxel_size_angstrom, 'iterations': iterations, 'poses': poses}     # poses ride along to the adapter that writes the particle file
 
     failed_targets: list[str] = []
     for target in targets:

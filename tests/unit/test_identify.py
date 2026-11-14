@@ -4,13 +4,21 @@ STAMP: unit tests for protein parsing, simulation, fitting and decoy checking
 
 # Import external dependencies
 import numpy as np, pytest
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import shift as shift_volume
+from scipy.spatial.transform import Rotation
 
 # Import internal STAMP objects
+from stamp.classify.frames import azimuth_matrix, rotate_density
 from stamp.identify.decoy_check import evaluate_decoy_control
-from stamp.identify.fit import fit_candidate, rank_candidates
+from stamp.identify.fit import rank_candidates
 from stamp.identify.panel import load_candidate_panel
-from stamp.identify.simulate import azimuthal_smear, simulate_density, to_comparable
+from stamp.identify.register import register_score
+from stamp.identify.simulate import simulate_density
+from stamp.schemas.particles import OrientationPrior
+from synthetic import asymmetric_object
+
+# _REGISTER_BOX: box edge of the registration tests
+_REGISTER_BOX = 25
 
 # _write_panel: helper to drop a candidates.yaml plus a stub PDB next to it
 def _write_panel(tmp_path, body):
@@ -19,10 +27,25 @@ def _write_panel(tmp_path, body):
     path.write_text(body)
     return path
 
-def _blob(box, offset=0):
-    volume = np.zeros((box, box, box))
-    volume[box // 2 + offset, box // 2, box // 2] = 1.0
-    return gaussian_filter(volume, 2.0)
+# _write_cloud: a PDB of eight Gaussian-scattered atom clusters, different for each seed, so rotated copies are distinguishable from other clouds
+def _write_cloud(path, seed):
+    rng = np.random.default_rng(seed)
+    centres = rng.normal(scale=22.0, size=(8, 3))
+    atoms = np.vstack([c + rng.normal(scale=4.0, size=(6, 3)) for c in centres])
+    path.write_text(''.join(f'ATOM  {i + 1:>5}  CA  ALA A{i + 1:>4}    {x:8.3f}{y:8.3f}{z:8.3f}  1.00  0.00           C\n' for i, (x, y, z) in enumerate(atoms)))
+
+# TestAlignedIdentify: class containing tests for scoring candidates against 3D-aligned class averages
+class TestAlignedIdentify:
+    # test_aligned_average_picks_its_own_candidate_in_any_orientation: a randomly rotated average of candidate a scores highest against a
+    def test_aligned_average_picks_its_own_candidate_in_any_orientation(self, tmp_path):
+        from stamp.commands.identify import _score_panel
+        for name in ('a', 'b'):
+            _write_cloud(tmp_path / f'{name}.pdb', {'a': 1, 'b': 2}[name])
+        (tmp_path / 'candidates.yaml').write_text('candidates:\n  - name: a\n    structure_path: a.pdb\n  - name: b\n    structure_path: b.pdb\n')
+        panel = load_candidate_panel(tmp_path / 'candidates.yaml')
+        average = rotate_density(simulate_density(tmp_path / 'a.pdb', 25, 4.0, 16.0), Rotation.random(random_state=3).as_matrix())
+        scores = _score_panel({'c00': (average, 4.0)}, panel, 16.0, 'native', 'local', aligned_prior=OrientationPrior.NONE)['c00']
+        assert scores['a'] > 0.9 and scores['a'] > scores['b'] + 0.08
 
 # TestPanel: class containing unit tests for src/stamp/identify/panel.py
 class TestPanel:
@@ -47,6 +70,30 @@ class TestPanel:
         with pytest.raises(ValueError, match='candidates'):
             load_candidate_panel(path)
 
+# TestRegister: class containing unit tests for src/stamp/identify/register.py
+class TestRegister:
+    # test_registration_finds_the_matching_candidate_after_any_rotation: for the none prior a randomly rotated and shifted copy of candidate A scores far above candidate B
+    def test_registration_finds_the_matching_candidate_after_any_rotation(self) -> None:
+        candidate_a, candidate_b = asymmetric_object(_REGISTER_BOX, 1), asymmetric_object(_REGISTER_BOX, 2)
+        average = shift_volume(rotate_density(candidate_a, Rotation.random(random_state=5).as_matrix()), (1, -1, 0), order=1)
+        score_a = register_score(average, candidate_a, OrientationPrior.NONE, n_rotations=800)
+        score_b = register_score(average, candidate_b, OrientationPrior.NONE, n_rotations=800)
+        assert score_a > 0.85 and score_a > score_b + 0.2
+
+    # test_registration_matches_through_inverted_contrast: a class average with opposite contrast still matches when match_contrast is on
+    def test_registration_matches_through_inverted_contrast(self) -> None:
+        candidate = asymmetric_object(_REGISTER_BOX, 3)
+        average = -rotate_density(candidate, azimuth_matrix(40.0))
+        assert register_score(average, candidate, OrientationPrior.NORMAL) > 0.85
+        assert register_score(average, candidate, OrientationPrior.NORMAL, match_contrast=False) < 0.5
+
+    # test_normal_prior_searches_only_azimuth_and_flip: an off-axis tilt of 60 degrees is not recovered by the membrane search, unlike the none prior
+    def test_normal_prior_searches_only_azimuth_and_flip(self) -> None:
+        candidate = asymmetric_object(_REGISTER_BOX, 4)
+        tilted = rotate_density(candidate, Rotation.from_euler('x', 70, degrees=True).as_matrix())
+        assert register_score(tilted, candidate, OrientationPrior.NORMAL, n_local=1) < 0.7
+        assert register_score(tilted, candidate, OrientationPrior.NONE, n_rotations=800) > 0.85
+
 # TestSimulate: class containing unit tests for src/stamp/identify/simulate.py
 class TestSimulate:
     def test_simulated_map_is_centred(self, tmp_path):
@@ -55,13 +102,6 @@ class TestSimulate:
         volume = simulate_density(pdb, box_voxels=21, voxel_size_angstrom=3.0, resolution_angstrom=12.0)
         centre = np.array(np.unravel_index(np.argmax(volume), volume.shape))
         assert np.allclose(centre, 10, atol=1)
-
-    def test_smear_is_rotation_invariant(self):
-        rng = np.random.default_rng(0)
-        volume = rng.random((16, 16, 16))
-        smeared = azimuthal_smear(volume, n_angles=36)
-        rotated = azimuthal_smear(np.rot90(volume, k=1, axes=(0, 1)), n_angles=36)
-        assert np.corrcoef(smeared.ravel(), np.rot90(rotated, k=-1, axes=(0, 1)).ravel())[0, 1] > 0.95
 
     def test_orient_puts_slab_normal_on_z(self):
         from stamp.identify.simulate import orient_to_membrane_slab
@@ -80,77 +120,13 @@ class TestSimulate:
         _coords, weights, elements = read_pdb_atoms(pdb)
         assert weights[0] == 1.0 and elements[0] == 'H'
 
-# TestFit: class containing unit tests for src/stamp/identify/fit.py
-class TestFit:
-    def test_fit_recovers_planted_match(self):
-        target = _blob(21)
-        match_score = fit_candidate(target, target.copy())
-        mismatch_score = fit_candidate(target, np.random.default_rng(1).random((21, 21, 21)))
-        assert match_score > mismatch_score
-        assert match_score > 0.8
-
+# TestRank: class containing unit tests for src/stamp/identify/fit.py
+class TestRank:
     def test_gap_widens_without_distractor(self):
         with_distractor = rank_candidates('c00', {'real': 0.9, 'near': 0.85, 'far': 0.2}, 'm')
         without = rank_candidates('c00', {'real': 0.9, 'far': 0.2}, 'm')
         assert without.score_gap_to_runner_up > with_distractor.score_gap_to_runner_up
         assert with_distractor.candidate_protein == 'real'
-
-    def test_species_discrimination(self):
-        box, voxel, resolution = 32, 4.0, 20.0
-
-        def cylinder(height_voxels):
-            centre = box // 2
-            yy, xx = np.ogrid[-centre:box - centre, -centre:box - centre]
-            disk = (xx * xx + yy * yy) <= 16
-            mask = np.zeros((box, box, box), dtype=bool)
-            z0, z1 = centre - height_voxels // 2, centre + height_voxels // 2
-            mask[..., z0:z1] = disk[..., None]
-            volume = np.zeros((box, box, box))
-            volume[mask] = 1.0
-            return volume
-
-        tall_template = to_comparable(cylinder(20), voxel, resolution)
-        short_template = to_comparable(cylinder(6), voxel, resolution)
-
-        rng = np.random.default_rng(0)
-        average = -1.0 * cylinder(20) + rng.normal(0.0, 0.2, (box, box, box))
-        comparable_average = to_comparable(average, voxel, resolution)
-
-        tall_score = fit_candidate(comparable_average, tall_template)
-        short_score = fit_candidate(comparable_average, short_template)
-        assert tall_score > short_score
-
-    def test_matches_through_opposite_contrast(self):
-        # a protein-dark class average must recognise its own (protein-bright) template, flipped the way _score_panel flips it, above a mismatched one
-        box, voxel, resolution = 32, 4.0, 20.0
-
-        def cylinder(height_voxels):
-            centre = box // 2
-            yy, xx = np.ogrid[-centre:box - centre, -centre:box - centre]
-            disk = (xx * xx + yy * yy) <= 16
-            mask = np.zeros((box, box, box), dtype=bool)
-            z0, z1 = centre - height_voxels // 2, centre + height_voxels // 2
-            mask[..., z0:z1] = disk[..., None]
-            volume = np.zeros((box, box, box))
-            volume[mask] = 1.0
-            return volume
-
-        rng = np.random.default_rng(0)
-        average = to_comparable(-1.0 * cylinder(20) + rng.normal(0.0, 0.2, (box, box, box)), voxel, resolution)
-        tall = -to_comparable(cylinder(20), voxel, resolution)
-        short = -to_comparable(cylinder(6), voxel, resolution)
-
-        assert fit_candidate(average, tall) > 0.3
-        assert fit_candidate(average, tall) > fit_candidate(average, short)
-
-    def test_fit_is_contrast_blind(self):
-        target = _blob(21)
-        assert fit_candidate(target, -target.copy()) > 0.8
-
-    def test_fit_recovers_ninety_degree_misorientation(self):
-        target = _blob(21) + _blob(21, offset=5)
-        rolled = np.rot90(target, 1, axes=(0, 1))
-        assert fit_candidate(target, rolled) > 0.8
 
     def test_single_candidate_has_no_gap(self):
         result = rank_candidates('c00', {'only': 0.7}, 'm')

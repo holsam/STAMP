@@ -5,6 +5,7 @@ STAMP: subprocess adapter for a single half-set RELION-5 tomography refinement
 # Import external dependencies
 import numpy as np, starfile
 from pathlib import Path
+from scipy.spatial.transform import Rotation
 
 # Import STAMP objects
 from stamp.adapters.base import AdapterInputs, AdapterOutput
@@ -27,6 +28,21 @@ def normal_to_tilt_psi(orientation: tuple[float, float, float, float] | None) ->
     psi = float(np.degrees(np.arctan2(normal[1], normal[0])))
     return tilt, psi
 
+# ParticlePose: a particle's class pose as classify wrote it, class average moved by rotation then shift (box x, y, z voxels) gives the subvolume
+ParticlePose = tuple[np.ndarray, np.ndarray]
+
+# relion_euler_angles: (rot, tilt, psi) in degrees such that RELION's matrix A(rot, tilt, psi) equals the reference-to-tomogram rotation; Euler::anglesToMatrix3 in RELION 5 gives A = (Rz(rot) Ry(tilt) Rz(psi)).T with active rotations, so decode R.T as scipy's extrinsic zyz and read the angles in reverse
+def relion_euler_angles(rotation: np.ndarray) -> tuple[float, float, float]:
+    psi, tilt, rot = Rotation.from_matrix(np.asarray(rotation).T).as_euler('zyz', degrees=True)
+    return float(rot), float(tilt), float(psi)
+
+# pose_to_relion: Euler angles and origin (Angstrom) of a particle from its box orientation and class pose (reference-to-tomogram rotation is orientation @ rotation, and origin is minus of shift taken to tomogram frame because RELION's origin is shift that centres particle)
+def pose_to_relion(orientation: tuple[float, float, float, float] | None, pose: ParticlePose, voxel_size_angstrom: float) -> dict[str, float]:
+    box_to_tomogram = np.eye(3) if orientation is None else quaternion_to_matrix(orientation)
+    rot, tilt, psi = relion_euler_angles(box_to_tomogram @ pose[0])
+    origin = -(box_to_tomogram @ pose[1]) * voxel_size_angstrom
+    return {'rlnAngleRot': rot, 'rlnAngleTilt': tilt, 'rlnAnglePsi': psi, 'rlnOriginXAngst': float(origin[0]), 'rlnOriginYAngst': float(origin[1]), 'rlnOriginZAngst': float(origin[2])}
+
 # RelionRefineAdapter: one half-set RELION-5 Refine3D job
 class RelionRefineAdapter:
     name = 'relion'
@@ -37,16 +53,31 @@ class RelionRefineAdapter:
     batches_natively = True
     runs_in_process = False
 
-    # write_particle_star: RELION-5 particles.star with normal-derived angle priors (A5)
+    # write_particle_star: RELION-5 particles.star, with the full class pose as angles and origins where classify estimated one, else normal-derived angle priors
     def write_particle_star(
         self,
         particles: list[Particle],
         path: Path,
-        raw_tomogram_paths: dict[str, Path]
+        raw_tomogram_paths: dict[str, Path],
+        poses: dict[str, ParticlePose] | None = None,
+        voxel_size_angstrom: float | None = None,
     ) -> None:
         rows = []
         for particle in particles:
             tilt_prior, psi_prior = normal_to_tilt_psi(particle.orientation)
+            pose = (poses or {}).get(particle.particle_id)
+            if pose is not None:
+                if voxel_size_angstrom is None:
+                    raise StampAdapterError('voxel_size_angstrom is required to write particle poses')
+                rows.append({
+                    'rlnTomoName': particle.tomogram_id,
+                    'rlnCoordinateX': particle.position[0],
+                    'rlnCoordinateY': particle.position[1],
+                    'rlnCoordinateZ': particle.position[2],
+                    **pose_to_relion(particle.orientation, pose, voxel_size_angstrom),
+                    'rlnTomoParticleName': particle.particle_id,
+                })
+                continue
             rows.append({
                 'rlnTomoName': particle.tomogram_id,
                 'rlnCoordinateX': particle.position[0],
