@@ -213,6 +213,17 @@ class TestConsensus:
         assert len({particle.particle_id for particle in particle_set.particles}) == 2
         assert all(particle.half_set is not None for particle in particle_set.particles)
 
+    # test_conflicting_priors_exclude_the_cluster: pickers agreeing on position but not on prior lose that particle, with a warning; agreeing clusters survive
+    def test_conflicting_priors_exclude_the_cluster(self, caplog) -> None:
+        near = lambda picker, prior, x: _pick('t', (x, 10.0, 10.0), picker).model_copy(update={'prior': prior})
+        picks = {
+            'a': [near('a', OrientationPrior.NORMAL, 10.0), near('a', OrientationPrior.AXIS, 80.0)],
+            'b': [near('b', OrientationPrior.AXIS, 11.0), near('b', OrientationPrior.AXIS, 81.0)],
+        }
+        reconciled = reconcile_picks(picks, 'intersection', 5.0, 't')
+        assert [pick.prior for pick in reconciled] == [OrientationPrior.AXIS]
+        assert 'disagree on the orientation prior' in caplog.text
+
 # TestVesicle: class containing unit tests for picking/vesicle.py
 class TestVesicle:
     def test_load_vesicle_labels_rejects_shape_mismatch(self, tmp_path: Path) -> None:

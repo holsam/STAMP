@@ -55,6 +55,11 @@ def reconcile_picks(
         contributing_pickers = {picker_of[index] for index in member_indices}
         if len(contributing_pickers) < min_agreement:
             continue
+        priors = {all_picks[index].prior for index in member_indices}
+        if len(priors) > 1:
+            centre = positions[member_indices].mean(axis=0)
+            log.warning(f'{tomogram_id}: excluded {len(member_indices)} pick(s) near ({centre[0]:.0f}, {centre[1]:.0f}, {centre[2]:.0f}) from {sorted(contributing_pickers)} as their orientation priors disagree: ({sorted(prior.value for prior in priors if prior is not None)})')
+            continue
         # one representative pick per picker (the member nearest that picker's own mean)
         picker_mean: dict[str, np.ndarray] = {}
         for picker in contributing_pickers:
