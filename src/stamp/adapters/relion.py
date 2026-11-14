@@ -31,9 +31,9 @@ def normal_to_tilt_psi(orientation: tuple[float, float, float, float] | None) ->
 # ParticlePose: a particle's class pose as classify wrote it, class average moved by rotation then shift (box x, y, z voxels) gives the subvolume
 ParticlePose = tuple[np.ndarray, np.ndarray]
 
-# relion_euler_angles: (rot, tilt, psi) in degrees of rotation taking reference into tomogram frame, RELION's A = Rz(psi) Ry(tilt) Rz(rot) acting on column vectors, so scipy's extrinsic zyz
+# relion_euler_angles: (rot, tilt, psi) in degrees such that RELION's matrix A(rot, tilt, psi) equals the reference-to-tomogram rotation; Euler::anglesToMatrix3 in RELION 5 gives A = (Rz(rot) Ry(tilt) Rz(psi)).T with active rotations, so decode R.T as scipy's extrinsic zyz and read the angles in reverse
 def relion_euler_angles(rotation: np.ndarray) -> tuple[float, float, float]:
-    rot, tilt, psi = Rotation.from_matrix(rotation).as_euler('zyz', degrees=True)
+    psi, tilt, rot = Rotation.from_matrix(np.asarray(rotation).T).as_euler('zyz', degrees=True)
     return float(rot), float(tilt), float(psi)
 
 # pose_to_relion: Euler angles and origin (Angstrom) of a particle from its box orientation and class pose (reference-to-tomogram rotation is orientation @ rotation, and origin is minus of shift taken to tomogram frame because RELION's origin is shift that centres particle)

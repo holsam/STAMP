@@ -50,6 +50,13 @@ class TestAdapters:
         }
         assert set(MOCK_ADAPTERS) == expected
 
+# _relion_matrix: RELION 5 Euler::anglesToMatrix3 (jaz/math/Euler_angles_relion.h), the matrix mapping particle space to tomogram space
+def _relion_matrix(rot: float, tilt: float, psi: float):
+    import numpy as np
+    p, t, c = np.radians([rot, tilt, psi])
+    sp, cp, st, ct, sc, cc = np.sin(p), np.cos(p), np.sin(t), np.cos(t), np.sin(c), np.cos(c)
+    return np.array([[cc * ct * cp - sc * sp, cc * ct * sp + sc * cp, -cc * st], [-sc * ct * cp - cc * sp, -sc * ct * sp + cc * cp, sc * st], [st * cp, st * sp, ct]])
+
 # TestRelionPoses: class containing tests for writing class poses into RELION particle files
 class TestRelionPoses:
     def test_euler_angles_round_trip(self) -> None:
@@ -59,7 +66,8 @@ class TestRelionPoses:
         for seed in range(5):
             rotation = Rotation.random(random_state=seed).as_matrix()
             rot, tilt, psi = relion_euler_angles(rotation)
-            assert np.allclose(Rotation.from_euler('zyz', [rot, tilt, psi], degrees=True).as_matrix(), rotation)
+            assert np.allclose(_relion_matrix(rot, tilt, psi), rotation)
+            assert 0.0 <= tilt <= 180.0
 
     def test_pose_is_composed_with_the_box_orientation_and_origin_is_in_angstrom(self) -> None:
         import numpy as np
@@ -69,7 +77,7 @@ class TestRelionPoses:
         orientation = rotation_to_quaternion(Rotation.from_euler('y', 90, degrees=True).as_matrix())
         row = pose_to_relion(orientation, (azimuth_matrix(30.0), np.array([2.0, 0.0, 0.0])), 5.0)
         composed = Rotation.from_euler('y', 90, degrees=True).as_matrix() @ azimuth_matrix(30.0)
-        assert np.allclose(Rotation.from_euler('zyz', [row['rlnAngleRot'], row['rlnAngleTilt'], row['rlnAnglePsi']], degrees=True).as_matrix(), composed)
+        assert np.allclose(_relion_matrix(row['rlnAngleRot'], row['rlnAngleTilt'], row['rlnAnglePsi']), composed)
         # a 2 voxel box x shift is -z in the tomogram under this orientation, the origin is the negative of it, 5 A per voxel
         assert np.allclose([row['rlnOriginXAngst'], row['rlnOriginYAngst'], row['rlnOriginZAngst']], [0.0, 0.0, 10.0], atol=1e-6)
 
