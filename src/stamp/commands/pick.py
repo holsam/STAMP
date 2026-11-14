@@ -34,25 +34,30 @@ def _import_picker(
     vesicle_labels_by_tomogram: dict[str, Path],
     max_surface_distance_angstrom: float,
     cache_dir: Path,
-    prior: OrientationPrior = OrientationPrior.NORMAL,
+    default_prior: OrientationPrior = OrientationPrior.NORMAL,
 ) -> list[RawPick]:
     picks_by_tomogram: dict[str, list[RawPick]] = {}
-    for pick in map_tomogram_ids(resolve_priors(read_picks(path, source_picker=name), prior), manifests):
+    for pick in map_tomogram_ids(resolve_priors(read_picks(path, source_picker=name), default_prior), manifests):
         picks_by_tomogram.setdefault(pick.tomogram_id, []).append(pick)
     manifest_by_id = {manifest.tomogram_id: manifest for manifest in manifests}
+    n_normal = sum(pick.prior is OrientationPrior.NORMAL for picks in picks_by_tomogram.values() for pick in picks)
+    if n_normal and all(manifest.segmentation_path is None for manifest in manifests):
+        raise StampValidationError(f'{name}: {n_normal} pick(s) have the normal orientation prior, which needs --seg-dir (orientations are inferred from the membrane segmentation)')
 
     # a tomogram's cache file is written atomically on completion, so its presence means it is done
     pending = [tomogram_id for tomogram_id in picks_by_tomogram if not (cache_dir / f'{tomogram_id}.json').is_file()]
     if len(pending) < len(picks_by_tomogram):
         log.info(f'Resuming {name}: {len(picks_by_tomogram) - len(pending)} tomogram(s) loaded from checkpoint')
     for tomogram_id in pending:
-        oriented = infer_orientations(
-            picks_by_tomogram[tomogram_id],
+        picks = picks_by_tomogram[tomogram_id]
+        normal = [pick for pick in picks if pick.prior is OrientationPrior.NORMAL]    # only membrane picks are oriented from the segmentation
+        oriented_normal = iter(infer_orientations(
+            normal,
             [manifest_by_id[tomogram_id]],
             vesicle_labels_by_tomogram=vesicle_labels_by_tomogram,
             max_surface_distance_angstrom=max_surface_distance_angstrom,
-        ) if prior is OrientationPrior.NORMAL else picks_by_tomogram[tomogram_id]    # only membrane picks are oriented from the segmentation
-        cache_tomogram_picks(cache_dir, tomogram_id, oriented)
+        ) if normal else [])
+        cache_tomogram_picks(cache_dir, tomogram_id, [next(oriented_normal) if pick.prior is OrientationPrior.NORMAL else pick for pick in picks])
     return load_cached_picks(cache_dir, list(picks_by_tomogram))
 
 # _resolve_vesicle_labels: match --vesicle-labels-mrc (file or directory) to manifests by tomogram_id, warning per unmatched tomogram
@@ -159,8 +164,6 @@ def run_pick(
     keep_raw: bool = False,
     orientation_prior: OrientationPrior = OrientationPrior.NORMAL,
 ) -> None:
-    if orientation_prior is OrientationPrior.NORMAL and segmentation_dir is None:
-        raise StampPipelineError('--seg-dir is required for the normal orientation prior, orientations are inferred from the membrane segmentation')
     names = picker_names or [path.stem for path in picks_files]
     if len(names) != len(picks_files):
         raise StampPipelineError(f'{len(picks_files)} picks file(s) but {len(names)} picker name(s)')
@@ -225,8 +228,9 @@ def run_pick(
         log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {dropped} of {before} particles')
         if not particle_set.particles:
             raise StampPipelineError('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
-    if orientation_prior is OrientationPrior.NORMAL:
-        report_beam_angle_distribution(particle_set.particles)
+    normal_particles = [particle for particle in particle_set.particles if particle.prior is OrientationPrior.NORMAL]
+    if normal_particles:
+        report_beam_angle_distribution(normal_particles)
     particle_set_path = output_dir / 'particle_set.json'
     particle_set_path.write_text(particle_set.model_dump_json(indent=2))
     log.info(f'Wrote {len(particle_set.particles)} consensus particles to {particle_set_path}')
@@ -246,6 +250,7 @@ def run_pick(
             'distance_threshold': distance_threshold,
             'half_set_seed': half_set_seed,
             'orientation_prior': orientation_prior.value,
+            'n_particles_by_prior': {prior.value: len(group) for prior, group in particle_set.by_prior().items()},
             'voxel_size_angstrom': resolved_voxel_size_angstrom,
             'max_surface_distance_angstrom': max_surface_distance_angstrom,
             'vesicle_labels_mrc': {tomogram_id: str(path) for tomogram_id, path in vesicle_labels_mrc_by_tomogram.items()},
