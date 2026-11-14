@@ -187,7 +187,7 @@ def generate_random_volume_decoys(
     seed: int,
     max_attempts_per_particle: int = 200,
 ) -> ParticleSet | None:
-    prior = real_particle_set.orientation_prior
+    prior = real_particle_set.sole_prior()
     if prior is OrientationPrior.NORMAL:
         raise StampValidationError('random-volume decoys have no membrane normal to orient by, use the shifted method for the normal orientation prior')
     log.progress('Generating random-volume decoys')
@@ -339,6 +339,7 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str, orientation_prio
             tomogram_id=pick.tomogram_id,
             position=pick.position,
             orientation=pick.orientation,
+            prior=orientation_prior,
             source_picker=pick.source_picker,
             confidence=pick.confidence,
             half_set=half_set_by_id[particle_id],
@@ -349,5 +350,4 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str, orientation_prio
         particles=particles,
         consensus_rule='union',
         contributing_pickers=[f'{DECOY_SOURCE_PREFIX}{method}'],
-        orientation_prior=orientation_prior,
     )

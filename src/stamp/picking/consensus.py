@@ -10,7 +10,7 @@ from typing import Literal
 
 # Import internal STAMP objects
 from stamp.utils.halfset import assign_half_sets
-from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet
+from stamp.schemas.particles import Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel_ordered
@@ -76,6 +76,7 @@ def reconcile_picks(
                 tomogram_id=tomogram_id,
                 position=tuple(float(coord) for coord in centroid),
                 orientation=all_picks[nearest].orientation,
+                prior=all_picks[nearest].prior,
                 confidence=(sum(confidences) / len(confidences) if confidences else None),
                 source_picker='+'.join(sorted(contributing_pickers)),
                 beam_angle_deviation_degrees=all_picks[nearest].beam_angle_deviation_degrees,
@@ -125,7 +126,6 @@ def build_particle_set(
     consensus_rule: Literal['intersection', 'union'],
     contributing_pickers: list[str],
     half_set_seed: int,
-    orientation_prior: OrientationPrior = OrientationPrior.NORMAL,
 ) -> ParticleSet:
     particle_ids = [f'p{index:06d}' for index in range(len(reconciled_picks))]
     group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, reconciled_picks)}
@@ -138,6 +138,7 @@ def build_particle_set(
             tomogram_id=pick.tomogram_id,
             position=pick.position,
             orientation=pick.orientation,
+            prior=pick.prior,                       # always set by the importer, pydantic rejects None
             source_picker=pick.source_picker,
             confidence=pick.confidence,
             half_set=half_set_by_id[particle_id],
@@ -149,5 +150,4 @@ def build_particle_set(
         particles=particles,
         consensus_rule=consensus_rule,
         contributing_pickers=contributing_pickers,
-        orientation_prior=orientation_prior,
     )

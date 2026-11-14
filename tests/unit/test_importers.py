@@ -43,12 +43,12 @@ class TestApplyPrior:
         from stamp.schemas.picks import RawPick
         bare = RawPick(tomogram_id='t', position=(1.0, 2.0, 3.0), source_picker='a')
         oriented = bare.model_copy(update={'orientation': (1.0, 0.0, 0.0, 0.0), 'beam_angle_deviation_degrees': 10.0, 'vesicle_id': 'v1'})
-        assert apply_prior([bare], OrientationPrior.NORMAL) == [bare]
-        assert apply_prior([oriented], OrientationPrior.AXIS) == [oriented]
+        assert apply_prior([bare], OrientationPrior.NORMAL) == [bare.model_copy(update={'prior': OrientationPrior.NORMAL})]
+        assert apply_prior([oriented], OrientationPrior.AXIS) == [oriented.model_copy(update={'prior': OrientationPrior.AXIS})]
         with pytest.raises(StampValidationError, match='1 of 2'):
             apply_prior([bare, oriented], OrientationPrior.AXIS)
         stripped = apply_prior([oriented], OrientationPrior.NONE)[0]
-        assert stripped.orientation is None and stripped.beam_angle_deviation_degrees is None and stripped.vesicle_id is None and stripped.position == oriented.position
+        assert stripped.prior is OrientationPrior.NONE and stripped.orientation is None and stripped.beam_angle_deviation_degrees is None and stripped.vesicle_id is None and stripped.position == oriented.position
 
 # TestReadPicks: class containing tests for read_picks
 class TestReadPicks:

@@ -214,7 +214,6 @@ def run_pick(
         consensus_rule=consensus_rule,  # type: ignore[arg-type]
         contributing_pickers=names,
         half_set_seed=half_set_seed,
-        orientation_prior=orientation_prior,
     )
     if max_beam_angle_deviation is not None:
         before = len(particle_set.particles)

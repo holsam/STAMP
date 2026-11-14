@@ -84,7 +84,7 @@ def run_decoy(
         log.info('Found matching partial output, resuming')
 
     if method != METHOD_RANDOM_VOLUME and real_particle_set is not None:
-        prior = ParticleSet.model_validate(json.loads(real_particle_set.read_text())).orientation_prior
+        prior = ParticleSet.model_validate(json.loads(real_particle_set.read_text())).sole_prior()
         if prior is not OrientationPrior.NORMAL:
             raise StampPipelineError(f'--method {method} is membrane-based and cannot be a control for the {prior.value!r} orientation prior, use --method {METHOD_RANDOM_VOLUME}')
     if method == METHOD_SYNTHETIC_NOISE:

@@ -8,15 +8,15 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.filter.state import load_filter_state
-from stamp.schemas.particles import Particle, ParticleSet
+from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet
 from stamp.utils.errors import StampPipelineError
 
 # _write_particle_set: write a minimal particle_set.json with two tomograms
 def _write_particle_set(path: Path) -> None:
     particles = [
-        Particle(particle_id='p0', tomogram_id='tomo000', position=(1.0, 1.0, 1.0), source_picker='mocked-particle', half_set = 'A'),
-        Particle(particle_id='p1', tomogram_id='tomo000', position=(2.0, 2.0, 2.0), source_picker='mocked-particle', half_set='A'),
-        Particle(particle_id='p2', tomogram_id='tomo001', position=(3.0, 3.0, 3.0), source_picker='mocked-particle', half_set='B'),
+        Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='tomo000', position=(1.0, 1.0, 1.0), source_picker='mocked-particle', half_set = 'A'),
+        Particle(prior=OrientationPrior.NORMAL, particle_id='p1', tomogram_id='tomo000', position=(2.0, 2.0, 2.0), source_picker='mocked-particle', half_set='A'),
+        Particle(prior=OrientationPrior.NORMAL, particle_id='p2', tomogram_id='tomo001', position=(3.0, 3.0, 3.0), source_picker='mocked-particle', half_set='B'),
     ]
     path.write_text(ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['mocked-particle']).model_dump_json())
 

@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 # Import internal STAMP objects
 from stamp.cli.cli import stamp_app
-from stamp.schemas.particles import Particle, ParticleSet
+from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet
 
 # Initialise runner
 runner = CliRunner()
@@ -17,8 +17,8 @@ runner = CliRunner()
 # _write_particle_set: write a minimal particle_set.json with two tomograms, one particle each
 def _write_particle_set(path: Path) -> ParticleSet:
     particles = [
-        Particle(particle_id='p0', tomogram_id='tomo000', position=(30.0, 30.0, 30.0), source_picker='mocked-particle', half_set='A'),
-        Particle(particle_id='p1', tomogram_id='tomo001', position=(30.0, 30.0, 30.0), source_picker='mocked-particle', half_set='B'),
+        Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='tomo000', position=(30.0, 30.0, 30.0), source_picker='mocked-particle', half_set='A'),
+        Particle(prior=OrientationPrior.NORMAL, particle_id='p1', tomogram_id='tomo001', position=(30.0, 30.0, 30.0), source_picker='mocked-particle', half_set='B'),
     ]
     particle_set = ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['mocked-particle'])
     path.write_text(particle_set.model_dump_json())

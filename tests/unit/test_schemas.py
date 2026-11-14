@@ -54,7 +54,7 @@ class TestParticleSchema:
             confidence=0.9,
             half_set=HalfSet.A,
         )
-        return Particle(**{**defaults, **overrides})
+        return Particle(prior=OrientationPrior.NORMAL, **{**defaults, **overrides})
 
     def test_particle_accepts_valid_unit_quaternion(self):
         '''Particle should accept a valid quaternion when passed'''
@@ -215,15 +215,15 @@ class TestSubvolumes:
             np.testing.assert_array_equal(new_subvols[i], subvols[i] * 2)
 
 
-# test_particle_set_without_prior_loads_as_normal: particle sets written before orientation priors existed load as membrane sets and round-trip
-def test_particle_set_without_prior_loads_as_normal() -> None:
+# test_particle_set_round_trips_prior: a particle's prior is read from its JSON dict and survives a round trip
+def test_particle_set_round_trips_prior() -> None:
     legacy = {
-        'particles': [{'particle_id': 'p0', 'tomogram_id': 't0', 'position': [1.0, 2.0, 3.0], 'source_picker': 'x', 'half_set': 'A'}],
+        'particles': [{'particle_id': 'p0', 'tomogram_id': 't0', 'position': [1.0, 2.0, 3.0], 'prior': 'normal', 'source_picker': 'x', 'half_set': 'A'}],
         'consensus_rule': 'union',
         'contributing_pickers': ['x'],
     }
     loaded = ParticleSet.model_validate(legacy)
-    assert loaded.orientation_prior is OrientationPrior.NORMAL
+    assert loaded.particles[0].prior is OrientationPrior.NORMAL
     assert ParticleSet.model_validate(loaded.model_dump(mode='json')) == loaded
 
 

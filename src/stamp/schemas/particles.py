@@ -28,6 +28,7 @@ class Particle(BaseModel):
     tomogram_id: str
     position: tuple[float, float, float] = Field(description='Voxel coordinates (x, y, z) within the source tomogram')
     orientation: tuple[float, float, float, float] | None = Field(default=None, description=('Orientation as a unit quaternion (w, x, y, z), if the picker provides one'))
+    prior: OrientationPrior = Field(description='Particle orientation prior, to fix the alignment search space.')
     source_picker: str
     confidence: float | None = None
     half_set: HalfSet
@@ -47,7 +48,6 @@ class ParticleSet(BaseModel):
     particles: list[Particle]
     consensus_rule: Literal['intersection', 'union']
     contributing_pickers: list[str]
-    orientation_prior: OrientationPrior = OrientationPrior.NORMAL  # files written before priors existed are membrane sets
 
     @field_validator('particles')
     @classmethod
@@ -55,6 +55,18 @@ class ParticleSet(BaseModel):
         if not value:
             raise StampPipelineError('ParticleSet must contain at least one particle')
         return value
+
+    # by_prior: particles grouped by orientation prior, in OrientationPrior declaration order, empty groups omitted
+    def by_prior(self) -> dict[OrientationPrior, list[Particle]]:
+        grouped = {prior: [particle for particle in self.particles if particle.prior is prior] for prior in OrientationPrior}
+        return {prior: members for prior, members in grouped.items() if members}
+
+    # sole_prior: the one prior every particle shares; temporary shim for stages not yet converted to mixed priors
+    def sole_prior(self) -> OrientationPrior:
+        priors = self.by_prior()
+        if len(priors) > 1:
+            raise StampPipelineError(f'ParticleSet mixes orientation priors {[prior.value for prior in priors]}, this stage does not support that yet')
+        return next(iter(priors))
 
 # ClassAssignment: class for a single particles's cluster membership
 class ClassAssignment(BaseModel):

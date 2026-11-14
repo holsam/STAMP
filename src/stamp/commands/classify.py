@@ -72,7 +72,7 @@ def run_classify(
     log.progress('Classifying particle set')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
-    prior = particle_set.orientation_prior
+    prior = particle_set.sole_prior()
     log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles')
     tomogram_ids = sorted({particle.tomogram_id for particle in particle_set.particles})
     matched, unmatched = match_by_stem([Path(f'{tomogram_id}.mrc') for tomogram_id in tomogram_ids], glob_mrc(raw_tomogram_dir))

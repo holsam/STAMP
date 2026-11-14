@@ -50,8 +50,9 @@ def map_tomogram_ids(picks: list[RawPick], manifests: list[TomogramManifest]) ->
         raise StampValidationError(f'picks reference tomogram id(s) with no matching segmentation/tomogram pair: {unknown}; known ids: {sorted(by_key.values())}')
     return [pick.model_copy(update={'tomogram_id': by_key[_id_key(pick.tomogram_id)]}) for pick in picks]
 
-# apply_prior: picks checked or reduced for the orientation prior; normal picks pass through (orientations are inferred from the segmentation next), axis picks must all carry an orientation, none picks lose theirs and the membrane fields so nothing downstream can use them
+# apply_prior: picks with their run prior checked & applied; normal picks pass through (orientations are inferred from the segmentation next), axis picks must all carry an orientation, none picks lose theirs and the membrane fields so nothing downstream can use them
 def apply_prior(picks: list[RawPick], prior: OrientationPrior) -> list[RawPick]:
+    picks = [pick.model_copy(update={'prior': prior}) for pick in picks]
     if prior is OrientationPrior.NORMAL:
         return picks
     if prior is OrientationPrior.AXIS:

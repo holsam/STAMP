@@ -13,7 +13,7 @@ from stamp.classify.features import build_feature_matrix
 from stamp.cli.cli import stamp_app
 from stamp.commands.classify import build_classify_commands
 from stamp.schemas.config import RunConfig
-from stamp.schemas.particles import HalfSet, Particle
+from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 
 # _CONFIG_DICT: minimal valid [run]/[decoy]/[stage] config for building classify commands
 _CONFIG_DICT = {
@@ -61,6 +61,7 @@ def _build_dataset(tmp_path: Path) -> tuple[Path, Path]:
                 'source_picker': 'stamp-native',
                 'confidence': 5.0,
                 'half_set': 'A' if index % 2 == 0 else 'B',
+                'prior': 'normal',
             }
         )
 
@@ -140,6 +141,7 @@ class TestClassifyChunking:
             for index, (x, y, z) in enumerate(grid):
                 particles.append(
                     Particle(
+                        prior=OrientationPrior.NORMAL,
                         particle_id=f'{tomogram_id}_p{index:03d}',
                         tomogram_id=tomogram_id,
                         position=(float(x), float(y), float(z)),
@@ -215,7 +217,8 @@ class TestClassifyCommand:
             root.mkdir()
             particle_set_path, raw_dir = _build_dataset(root)
             payload = json.loads(particle_set_path.read_text())
-            payload['orientation_prior'] = prior
+            for particle in payload['particles']:
+                particle['prior'] = prior
             if prior == 'none':
                 for particle in payload['particles']:
                     del particle['orientation']
