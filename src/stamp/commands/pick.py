@@ -12,7 +12,7 @@ from skimage import measure
 from stamp.backends.base import ToolCommand
 from stamp.picking.consensus import build_particle_set, reconcile_picks_for_tomograms
 from stamp.picking.geometry import extract_surface
-from stamp.picking.importers import apply_prior, infer_orientations, map_tomogram_ids, read_picks
+from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks, resolve_priors
 from stamp.picking.vesicles import load_vesicle_labels, summarise_vesicles, vesicle_surface_area_angstrom2
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
@@ -37,7 +37,7 @@ def _import_picker(
     prior: OrientationPrior = OrientationPrior.NORMAL,
 ) -> list[RawPick]:
     picks_by_tomogram: dict[str, list[RawPick]] = {}
-    for pick in map_tomogram_ids(apply_prior(read_picks(path, source_picker=name), prior), manifests):
+    for pick in map_tomogram_ids(resolve_priors(read_picks(path, source_picker=name), prior), manifests):
         picks_by_tomogram.setdefault(pick.tomogram_id, []).append(pick)
     manifest_by_id = {manifest.tomogram_id: manifest for manifest in manifests}
 

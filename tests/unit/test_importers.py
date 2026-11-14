@@ -8,8 +8,9 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.picking.geometry import quaternion_from_reference_to
-from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks
+from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks, resolve_priors
 from stamp.schemas.manifest import TomogramManifest
+from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampValidationError
 from stamp.utils.io import new_mrc
@@ -34,21 +35,28 @@ def _slab_manifest(tmp_path: Path) -> TomogramManifest:
 def _at(position: tuple[float, float, float], **fields) -> RawPick:
     return RawPick(tomogram_id='t00', position=position, source_picker='mine', **fields)
 
-# TestApplyPrior: class containing tests for apply_prior in src/stamp/picking/importers.py
-class TestApplyPrior:
-    # test_apply_prior_per_prior: normal passes picks through, axis demands orientations, none strips orientation and membrane fields
-    def test_apply_prior_per_prior(self) -> None:
-        from stamp.picking.importers import apply_prior
-        from stamp.schemas.particles import OrientationPrior
-        from stamp.schemas.picks import RawPick
+# TestResolvePriors: class containing tests for resolve_priors in src/stamp/picking/importers.py
+class TestResolvePriors:
+    # test_default_fills_unstated_priors: picks without a prior take the default, picks with one keep it
+    def test_default_fills_unstated_priors(self) -> None:
+        bare = RawPick(tomogram_id='t', position=(1.0, 2.0, 3.0), source_picker='a')
+        stated = bare.model_copy(update={'prior': OrientationPrior.NONE})
+        resolved = resolve_priors([bare, stated], OrientationPrior.NORMAL)
+        assert [pick.prior for pick in resolved] == [OrientationPrior.NORMAL, OrientationPrior.NONE]
+
+    # test_each_prior_is_checked_for_its_own_picks: axis demands orientations, none strips orientation and membrane fields, a mix applies each rule to its own picks
+    def test_each_prior_is_checked_for_its_own_picks(self) -> None:
         bare = RawPick(tomogram_id='t', position=(1.0, 2.0, 3.0), source_picker='a')
         oriented = bare.model_copy(update={'orientation': (1.0, 0.0, 0.0, 0.0), 'beam_angle_deviation_degrees': 10.0, 'vesicle_id': 'v1'})
-        assert apply_prior([bare], OrientationPrior.NORMAL) == [bare.model_copy(update={'prior': OrientationPrior.NORMAL})]
-        assert apply_prior([oriented], OrientationPrior.AXIS) == [oriented.model_copy(update={'prior': OrientationPrior.AXIS})]
+        axis = oriented.model_copy(update={'prior': OrientationPrior.AXIS})
+        none = oriented.model_copy(update={'prior': OrientationPrior.NONE})
+        normal = bare.model_copy(update={'prior': OrientationPrior.NORMAL})
+        resolved = resolve_priors([axis, none, normal], OrientationPrior.NORMAL)
+        assert resolved[0] == axis
+        assert resolved[1].orientation is None and resolved[1].beam_angle_deviation_degrees is None and resolved[1].vesicle_id is None
+        assert resolved[2] == normal
         with pytest.raises(StampValidationError, match='1 of 2'):
-            apply_prior([bare, oriented], OrientationPrior.AXIS)
-        stripped = apply_prior([oriented], OrientationPrior.NONE)[0]
-        assert stripped.prior is OrientationPrior.NONE and stripped.orientation is None and stripped.beam_angle_deviation_degrees is None and stripped.vesicle_id is None and stripped.position == oriented.position
+            resolve_priors([bare.model_copy(update={'prior': OrientationPrior.AXIS}), normal], OrientationPrior.NORMAL)
 
 # TestReadPicks: class containing tests for read_picks
 class TestReadPicks:
@@ -127,6 +135,23 @@ class TestReadPicks:
         (tmp_path / 'empty.csv').write_text('tomogram_id,x,y,z\n')
         with pytest.raises(StampValidationError, match='no picks'):
             read_picks(tmp_path / 'empty.csv', source_picker='mine')
+
+    def test_csv_prior_column_is_read(self, tmp_path: Path) -> None:
+        path = tmp_path / 'picks.csv'
+        path.write_text('tomogram_id,x,y,z,prior\nt,1,2,3,axis\nt,4,5,6,\nt,7,8,9,none\n')
+        picks = read_picks(path, source_picker='a')
+        assert [pick.prior for pick in picks] == [OrientationPrior.AXIS, None, OrientationPrior.NONE]
+
+    def test_csv_unknown_prior_reports_line_number(self, tmp_path: Path) -> None:
+        path = tmp_path / 'picks.csv'
+        path.write_text('tomogram_id,x,y,z,prior\nt,1,2,3,helix\n')
+        with pytest.raises(StampValidationError, match='line 2'):
+            read_picks(path, source_picker='a')
+
+    def test_json_prior_key_is_read(self, tmp_path: Path) -> None:
+        path = tmp_path / 'picks.json'
+        path.write_text('[{"tomogram_id": "t", "position": [1, 2, 3], "source_picker": "x", "prior": "none"}]')
+        assert read_picks(path, source_picker='a')[0].prior is OrientationPrior.NONE
 
 # TestMapTomogramIds: class containing tests for map_tomogram_ids
 class TestMapTomogramIds:
