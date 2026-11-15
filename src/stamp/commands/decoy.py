@@ -12,6 +12,7 @@ from stamp.decoy.generate import (
     METHOD_RANDOM_VOLUME,
     METHOD_SHIFTED,
     METHOD_SYNTHETIC_NOISE,
+    SUPPORTED_PRIORS,
     DecoyGeometry,
     generate_random_volume_decoys,
     generate_shifted_decoys,
@@ -19,7 +20,7 @@ from stamp.decoy.generate import (
 )
 from stamp.decoy.validate import assert_comparable
 from stamp.run.state import stage_dir
-from stamp.schemas.particles import OrientationPrior, ParticleSet
+from stamp.schemas.particles import ParticleSet
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import archive_and_remove_directory, glob_mrc, load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
@@ -83,10 +84,14 @@ def run_decoy(
     if sync_checkpoint(output_dir / 'raw', fingerprint):
         log.info('Found matching partial output, resuming')
 
-    if method != METHOD_RANDOM_VOLUME and real_particle_set is not None:
-        prior = ParticleSet.model_validate(json.loads(real_particle_set.read_text())).sole_prior()
-        if prior is not OrientationPrior.NORMAL:
-            raise StampPipelineError(f'--method {method} is membrane-based and cannot be a control for the {prior.value!r} orientation prior, use --method {METHOD_RANDOM_VOLUME}')
+    if real_particle_set is not None:
+        present = ParticleSet.model_validate(json.loads(real_particle_set.read_text())).by_prior()
+        uncovered = {prior.value: len(group) for prior, group in present.items() if prior not in SUPPORTED_PRIORS[method]}
+        if len(uncovered) == len(present):
+            suggestions = [name for name, priors in SUPPORTED_PRIORS.items() if priors & set(present)]
+            raise StampPipelineError(f'--method {method} cannot be a control for the {sorted(uncovered)} orientation prior(s) of this particle set, use --method {" or ".join(suggestions)}')
+        if uncovered:
+            log.warning(f'--method {method} makes no decoys for particles of the {uncovered} orientation prior(s), the decoy control will not cover them')
     if method == METHOD_SYNTHETIC_NOISE:
         shape = tuple(int(value) for value in synthetic_shape.split(','))
         if len(shape) != 3:

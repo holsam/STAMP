@@ -177,3 +177,21 @@ class TestDecoyCommand:
         clean = _shifted_args(tmp_path, tmp_path / 'clean', seg_dir, raw_dir, particle_set_path)
         assert runner.invoke(stamp_app, clean).exit_code == 0
         assert _positions(tmp_path / 'stamp' / 'decoy' / 'decoy_particle_set.json') == _positions(tmp_path / 'clean' / 'stamp' / 'decoy' / 'decoy_particle_set.json')
+
+    def test_decoy_rejects_axis_only_set_for_shifted(self, tmp_path: Path) -> None:
+        '''A set with no normal particles fails under shifted and names random-volume'''
+        seg_dir, raw_dir, particle_set_path = _run_pick(tmp_path)
+        data = json.loads(particle_set_path.read_text())
+        for particle in data['particles']:
+            particle['prior'] = 'axis'
+        particle_set_path.write_text(json.dumps(data))
+        result = runner.invoke(stamp_app, _shifted_args(tmp_path, tmp_path, seg_dir, raw_dir, particle_set_path))
+        assert result.exit_code != 0
+        assert 'use --method random-volume' in result.output
+
+    def test_decoy_random_volume_rejects_normal_only_set(self, tmp_path: Path) -> None:
+        '''A normal-only set fails under random-volume and names the methods that work'''
+        seg_dir, raw_dir, particle_set_path = _run_pick(tmp_path)
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'decoy', '--method', 'random-volume', '--real-particle-set', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0', '--seed', '2', '--n-processes', '1'])
+        assert result.exit_code != 0
+        assert 'use --method shifted or synthetic-noise' in result.output

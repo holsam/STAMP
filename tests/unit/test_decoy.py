@@ -7,7 +7,7 @@ import mrcfile, numpy as np, pytest
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.decoy.generate import DecoyGeometry, generate_shifted_decoys, generate_synthetic_noise_decoys
+from stamp.decoy.generate import DecoyGeometry, generate_random_volume_decoys, generate_shifted_decoys, generate_synthetic_noise_decoys
 from stamp.decoy.validate import (
     assert_comparable,
     check_manifest_purity,
@@ -61,6 +61,18 @@ def _real_set(tomogram_id: str = 'tomo000') -> ParticleSet:
         consensus_rule='union',
         contributing_pickers=['mine'],
     )
+
+# _mixed_set: real particles at the given (position, prior) pairs in one tomogram
+def _mixed_set(entries: list[tuple[tuple[float, float, float], OrientationPrior]]) -> ParticleSet:
+    particles = [
+        Particle(
+            particle_id=f'p{i}', tomogram_id='tomo000', position=position, prior=prior,
+            orientation=(1.0, 0.0, 0.0, 0.0) if prior is not OrientationPrior.NONE else None,
+            source_picker='mine', half_set=HalfSet.A if i % 2 == 0 else HalfSet.B,
+        )
+        for i, (position, prior) in enumerate(entries)
+    ]
+    return ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['mine'])
 
 # TestDecoyGenerate: class containing unit tests for decoy/generate.py
 class TestDecoyGenerate:
@@ -256,3 +268,32 @@ class TestRandomVolumeDecoys:
         assert_comparable(real, decoys)
         with pytest.raises(StampPipelineError, match='orientation prior'):
             assert_comparable(real.model_copy(update={'particles': [p.model_copy(update={'prior': OrientationPrior.AXIS}) for p in real.particles]}), decoys)
+
+# TestMixedPriorDecoys: class containing tests for decoys built from particle sets with several priors
+class TestMixedPriorDecoys:
+    def test_random_volume_covers_axis_and_none_only(self, tmp_path: Path) -> None:
+        '''Random-volume gives one decoy per axis or none particle, with that prior, and none for normal'''
+        manifest = _write_vesicle_pair(tmp_path)
+        real = _mixed_set([((20.0, 20.0, 20.0), OrientationPrior.AXIS), ((30.0, 30.0, 30.0), OrientationPrior.NONE), ((40.0, 40.0, 40.0), OrientationPrior.NORMAL)])
+        decoys = generate_random_volume_decoys(real, [manifest], DecoyGeometry(voxel_size_angstrom=10.0), 20.0, 5.0, seed=1)
+        assert sorted(p.prior.value for p in decoys.particles) == ['axis', 'none']
+        assert all(p.orientation is not None for p in decoys.particles if p.prior is OrientationPrior.AXIS)
+        assert all(p.orientation is None for p in decoys.particles if p.prior is OrientationPrior.NONE)
+
+    def test_shifted_displaces_normal_particles_only(self, tmp_path: Path) -> None:
+        '''Shifted decoys come from normal particles only, while axis particles still exclude decoy positions'''
+        manifest = _write_vesicle_pair(tmp_path)
+        real = _mixed_set([((30.0, 30.0, 44.0), OrientationPrior.NORMAL), ((30.0, 30.0, 16.0), OrientationPrior.AXIS)])
+        decoys = generate_shifted_decoys(
+            real_particle_set=real, manifests=[manifest], config=DecoyGeometry(voxel_size_angstrom=10.0),
+            min_shift_angstrom=100.0, max_shift_angstrom=180.0,
+            min_distance_from_surface_angstrom=50.0, min_pick_distance=60.0, seed=2,
+        )
+        assert {p.prior for p in decoys.particles} == {OrientationPrior.NORMAL}
+        assert len(decoys.particles) == 1
+
+    def test_random_volume_rejects_a_normal_only_set(self, tmp_path: Path) -> None:
+        '''Random-volume with nothing it supports raises and points at the shifted method'''
+        manifest = _write_vesicle_pair(tmp_path)
+        with pytest.raises(StampValidationError, match='shifted'):
+            generate_random_volume_decoys(_mixed_set([((20.0, 20.0, 20.0), OrientationPrior.NORMAL)]), [manifest], DecoyGeometry(voxel_size_angstrom=10.0), 20.0, 5.0, seed=1)
