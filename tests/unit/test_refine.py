@@ -10,12 +10,13 @@ from stamp.refine.fsc import compute_fsc, soft_sphere_mask, _shell_fsc, _shell_m
 from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
 )
-from stamp.schemas.particles import ClassAssignment, HalfSet, Particle
+from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle
 from stamp.utils.errors import StampValidationError
 
 # _particle: construct a Particle instance for tests
 def _particle(pid, half):
     return Particle(
+        prior=OrientationPrior.NORMAL,
         particle_id=pid,
         tomogram_id='t0',
         position=(1.0, 1.0, 1.0),

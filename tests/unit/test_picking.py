@@ -21,7 +21,7 @@ from stamp.picking.vesicles import (
     vesicle_ids_at,
     vesicle_surface_area_angstrom2,
 )
-from stamp.schemas.particles import HalfSet, Particle
+from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.schemas.picks import RawPick
 
 # _hollow_sphere: a hollow spherical shell segmentation volume
@@ -42,6 +42,7 @@ def _pick(tomogram_id: str, position, picker: str, confidence=0.8, orientation=N
         tomogram_id=tomogram_id,
         position=position,
         orientation=orientation,
+        prior=OrientationPrior.NORMAL,
         confidence=confidence,
         source_picker=picker,
     )
@@ -101,16 +102,16 @@ class TestGeometry:
 
     def test_filter_removes_polar_picks_when_enabled(self) -> None:
         particles = [
-            Particle(particle_id='p0', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=5.0),
-            Particle(particle_id='p1', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=85.0),
+            Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=5.0),
+            Particle(prior=OrientationPrior.NORMAL, particle_id='p1', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=85.0),
         ]
         kept = [p for p in particles if p.beam_angle_deviation_degrees is None or p.beam_angle_deviation_degrees <= 45.0]
         assert [p.particle_id for p in kept] == ['p0']
 
     def test_filter_retains_all_when_disabled(self) -> None:
         particles = [
-            Particle(particle_id='p0', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=5.0),
-            Particle(particle_id='p1', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=85.0),
+            Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=5.0),
+            Particle(prior=OrientationPrior.NORMAL, particle_id='p1', tomogram_id='t', position=(0, 0, 0), source_picker='x', half_set=HalfSet.A, beam_angle_deviation_degrees=85.0),
         ]
         # max_beam_angle_deviation is None: no filtering happens at all
         max_beam_angle_deviation = None
@@ -211,6 +212,17 @@ class TestConsensus:
         assert len(particle_set.particles) == 2
         assert len({particle.particle_id for particle in particle_set.particles}) == 2
         assert all(particle.half_set is not None for particle in particle_set.particles)
+
+    # test_conflicting_priors_exclude_the_cluster: pickers agreeing on position but not on prior lose that particle, with a warning; agreeing clusters survive
+    def test_conflicting_priors_exclude_the_cluster(self, caplog) -> None:
+        near = lambda picker, prior, x: _pick('t', (x, 10.0, 10.0), picker).model_copy(update={'prior': prior})
+        picks = {
+            'a': [near('a', OrientationPrior.NORMAL, 10.0), near('a', OrientationPrior.AXIS, 80.0)],
+            'b': [near('b', OrientationPrior.AXIS, 11.0), near('b', OrientationPrior.AXIS, 81.0)],
+        }
+        reconciled = reconcile_picks(picks, 'intersection', 5.0, 't')
+        assert [pick.prior for pick in reconciled] == [OrientationPrior.AXIS]
+        assert 'orientation priors disagree' in caplog.text
 
 # TestVesicle: class containing unit tests for picking/vesicle.py
 class TestVesicle:

@@ -10,6 +10,7 @@ from sklearn.decomposition import PCA
 from sklearn.neighbors import kneighbors_graph
 
 # Import internal STAMP objects
+from stamp.schemas.particles import OrientationPrior
 from stamp.utils.log import log, log_config
 
 # NOISE_CLUSTER_ID: id for noise cluster
@@ -88,6 +89,10 @@ def reduce_and_cluster(features: np.ndarray, config: ClusteringConfig) -> Cluste
     log.progress(f'Clustering complete: {len(set(labels) - {-1})} cluster(s), {int((labels == -1).sum())} noise')
     return ClusteringResult(labels=labels, embedding=embedding, explained_variance_ratio=explained_variance_ratio, centroids=centroids)
 
-# label_to_cluster_id: turn a raw cluster label into a stable string id
-def label_to_cluster_id(label: int) -> str:
-    return NOISE_CLUSTER_ID if label == -1 else f'c{label:02d}'
+# label_to_cluster_id: turn a raw cluster label into a stable string id, prefixed by its orientation prior so classes of different priors never collide
+def label_to_cluster_id(label: int, prior: OrientationPrior) -> str:
+    return NOISE_CLUSTER_ID if label == -1 else f'{prior.value}-c{label:02d}'
+
+# prior_of_class: orientation prior a class was aligned under, read from its id prefix
+def prior_of_class(class_id: str) -> OrientationPrior:
+    return OrientationPrior(class_id.split('-', 1)[0])

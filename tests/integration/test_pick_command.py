@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 # Import internal STAMP objects
 from stamp.cli.cli import stamp_app
-from stamp.schemas.particles import ParticleSet
+from stamp.schemas.particles import OrientationPrior, ParticleSet
 
 # Initialise runner
 runner = CliRunner()
@@ -223,6 +223,38 @@ class TestPickCommand:
         runner.invoke(stamp_app, _pick_args(tmp_path, seg_dir, raw_dir, picks))
         assert oriented == ['tomo000', 'tomo001']
 
+    # check a picks file can mix priors and each particle keeps its own
+    def test_pick_mixed_priors(self, tmp_path: Path) -> None:
+        seg_dir, raw_dir = tmp_path / 'seg', tmp_path / 'raw'
+        _write_pair(seg_dir, raw_dir, 'tomo000')
+        picks = tmp_path / 'mixed.csv'
+        picks.write_text('\n'.join([
+            'tomogram_id,x,y,z,qw,qx,qy,qz,prior',
+            'tomo000,30,30,44,,,,,normal',
+            'tomo000,30,30,16,,,,,',                  # blank: the default (normal)
+            'tomo000,30,44,30,1,0,0,0,axis',
+            'tomo000,30,16,30,,,,,none',
+        ]) + '\n')
+        result = runner.invoke(stamp_app, _pick_args(tmp_path, seg_dir, raw_dir, picks, extra=['--consensus-rule', 'union', '--distance-threshold', '3', '--half-set-seed', '0']))
+        assert result.exit_code == 0, result.output
+        particle_set = ParticleSet.model_validate(json.loads((tmp_path / 'stamp' / 'pick' / 'particle_set.json').read_text()))
+        assert {prior.value: len(group) for prior, group in particle_set.by_prior().items()} == {'normal': 2, 'axis': 1, 'none': 1}
+        assert all(p.orientation is not None for p in particle_set.particles if p.prior.value in ('normal', 'axis'))
+        assert all(p.orientation is None for p in particle_set.particles if p.prior.value == 'none')
+
+    # check normal picks without a segmentation directory are rejected, other priors are not
+    def test_pick_normal_needs_segmentation_only_when_present(self, tmp_path: Path) -> None:
+        seg_dir, raw_dir = tmp_path / 'seg', tmp_path / 'raw'
+        _write_pair(seg_dir, raw_dir, 'tomo000')
+        axis_only = tmp_path / 'axis.csv'
+        axis_only.write_text('tomogram_id,x,y,z,qw,qx,qy,qz,prior\ntomo000,30,30,44,1,0,0,0,axis\n')
+        args = ['-d', str(tmp_path), 'pick', str(axis_only), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0', '--consensus-rule', 'union', '--distance-threshold', '3', '--half-set-seed', '0']
+        assert runner.invoke(stamp_app, args).exit_code == 0
+        normal_only = tmp_path / 'normal.csv'
+        normal_only.write_text('tomogram_id,x,y,z\ntomo000,30,30,44\n')
+        args[3] = str(normal_only)
+        result = runner.invoke(stamp_app, args)
+        assert result.exit_code != 0 and 'needs --seg-dir' in str(result.output) + str(result.exception)
 
 # TestPickOrientationPrior: class containing tests for --orientation-prior
 class TestPickOrientationPrior:
@@ -235,7 +267,7 @@ class TestPickOrientationPrior:
         result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'pick', str(picks), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0', '--orientation-prior', 'none'])
         assert result.exit_code == 0, result.output
         particle_set = ParticleSet.model_validate(json.loads((tmp_path / 'stamp' / 'pick' / 'particle_set.json').read_text()))
-        assert particle_set.orientation_prior.value == 'none'
+        assert list(particle_set.by_prior()) == [OrientationPrior.NONE]
         assert len(particle_set.particles) == len(PARTICLES_XYZ) and all(p.orientation is None for p in particle_set.particles)
 
     # check the axis prior keeps the supplied axis and refuses picks without one
@@ -248,7 +280,7 @@ class TestPickOrientationPrior:
         ok = runner.invoke(stamp_app, [*base[:2], base[2], str(with_axis), *base[3:]])
         assert ok.exit_code == 0, ok.output
         particle_set = ParticleSet.model_validate(json.loads((tmp_path / 'stamp' / 'pick' / 'particle_set.json').read_text()))
-        assert particle_set.orientation_prior.value == 'axis' and all(p.orientation is not None for p in particle_set.particles)
+        assert list(particle_set.by_prior()) == [OrientationPrior.AXIS] and all(p.orientation is not None for p in particle_set.particles)
         without = _write_picks(tmp_path / 'without.csv', ['tomo000'])
         bad = runner.invoke(stamp_app, [*base[:2], base[2], str(without), *base[3:]])
         assert bad.exit_code != 0 and 'axis needs an orientation' in bad.output
@@ -259,4 +291,4 @@ class TestPickOrientationPrior:
         _write_pair(tmp_path / 'seg', raw_dir, 'tomo000')
         picks = _write_picks(tmp_path / 'picks.csv', ['tomo000'])
         result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'pick', str(picks), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0'])
-        assert result.exit_code != 0 and '--seg-dir is required' in result.output
+        assert result.exit_code != 0 and 'needs --seg-dir' in result.output

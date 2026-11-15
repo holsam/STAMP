@@ -32,7 +32,7 @@ def pick(
     ],
     segmentation_dir: Annotated[
         Path | None,
-        typer.Option('-s', '--seg-dir', exists=True, file_okay=False, help='Directory of segmented MRC files; filename stems are tomogram IDs. Used to infer orientations. Required for the normal orientation prior.'),
+        typer.Option('-s', '--seg-dir', exists=True, file_okay=False, help='Directory of segmented MRC files; filename stems are tomogram IDs. Used to infer orientations. Required when any pick has the normal orientation prior.'),
     ] = None,
     output_dir: Annotated[
         Path,
@@ -44,7 +44,7 @@ def pick(
     ] = None,
     orientation_prior: Annotated[
         OrientationPrior,
-        typer.Option('--orientation-prior', help='What is known about particle orientation: normal (membrane proteins, orientation inferred from --seg-dir), axis (filaments, every pick needs an orientation) or none (soluble particles, orientations are ignored).'),
+        typer.Option('--orientation-prior', help='Default orientation prior for picks that do not state one in a prior column (CSV) or key (JSON): normal (membrane proteins, orientation inferred from --seg-dir), axis (filaments, every pick needs an orientation) or none (soluble particles, orientations are ignored).'),
     ] = OrientationPrior.NORMAL,
     names: Annotated[
         list[str] | None,

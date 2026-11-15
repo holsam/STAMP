@@ -88,6 +88,6 @@ class TestRunCommand:
         assert result.exit_code == 0, result.output
         for classify_dir in (tmp_path / 'stamp' / 'classify_real', tmp_path / 'stamp' / 'classify_decoy'):
             assert (classify_dir / 'class_assignments.json').is_file()
-        assert json.loads((tmp_path / 'stamp' / 'pick' / 'particle_set.json').read_text())['orientation_prior'] == prior
+        assert {p['prior'] for p in json.loads((tmp_path / 'stamp' / 'pick' / 'particle_set.json').read_text())['particles']} == {prior}
         decoy_assignments = json.loads((tmp_path / 'stamp' / 'classify_decoy' / 'class_assignments.json').read_text())
         assert {a['cluster_id'] for a in decoy_assignments} == {'noise'}     # random positions share no structure, polish rejects them all

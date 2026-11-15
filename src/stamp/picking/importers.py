@@ -50,16 +50,16 @@ def map_tomogram_ids(picks: list[RawPick], manifests: list[TomogramManifest]) ->
         raise StampValidationError(f'picks reference tomogram id(s) with no matching segmentation/tomogram pair: {unknown}; known ids: {sorted(by_key.values())}')
     return [pick.model_copy(update={'tomogram_id': by_key[_id_key(pick.tomogram_id)]}) for pick in picks]
 
-# apply_prior: picks checked or reduced for the orientation prior; normal picks pass through (orientations are inferred from the segmentation next), axis picks must all carry an orientation, none picks lose theirs and the membrane fields so nothing downstream can use them
-def apply_prior(picks: list[RawPick], prior: OrientationPrior) -> list[RawPick]:
-    if prior is OrientationPrior.NORMAL:
-        return picks
-    if prior is OrientationPrior.AXIS:
-        missing = [pick for pick in picks if pick.orientation is None]
-        if missing:
-            raise StampValidationError(f'orientation prior axis needs an orientation (filament axis as a quaternion) for every pick, {len(missing)} of {len(picks)} from {missing[0].source_picker!r} have none; supply qw,qx,qy,qz columns in CSV or an orientation in JSON')
-        return picks
-    return [pick.model_copy(update={'orientation': None, 'beam_angle_deviation_degrees': None, 'vesicle_id': None}) for pick in picks]
+# resolve_priors: fill each pick's missing prior from the default, then apply; axis picks must all carry an orientation, none picks lose theirs and the membrane fields so nothing downstream can use them, normal picks pass through for inference
+def resolve_priors(picks: list[RawPick], default: OrientationPrior) -> list[RawPick]:
+    resolved = [pick if pick.prior is not None else pick.model_copy(update={'prior': default}) for pick in picks]
+    missing = [pick for pick in resolved if pick.prior is OrientationPrior.AXIS and pick.orientation is None]
+    if missing:
+        raise StampValidationError(f'orientation prior axis needs an orientation (filament axis as a quaternion) for every axis pick, {len(missing)} of {len(picks)} from {missing[0].source_picker!r} have none; supply qw,qx,qy,qz columns in CSV or an orientation in JSON')
+    return [
+        pick.model_copy(update={'orientation': None, 'beam_angle_deviation_degrees': None, 'vesicle_id': None}) if pick.prior is OrientationPrior.NONE else pick
+        for pick in resolved
+    ]
 
 # infer_orientations: fill missing orientation, beam angle and vesicle id from the nearest segmentation surface
 def infer_orientations(
@@ -134,7 +134,7 @@ def _id_key(tomogram_id: str) -> str:
 def _cell(row: dict, key: str) -> str:
     return (row.get(key) or '').strip()
 
-# _read_csv: picks from a CSV with tomogram_id,x,y,z[,confidence][,qw,qx,qy,qz]
+# _read_csv: picks from a CSV with tomogram_id,x,y,z[,confidence][,qw,qx,qy,qz][,prior]
 def _read_csv(path: Path, source_picker: str) -> list[RawPick]:
     with path.open(newline='') as handle:
         reader = csv.DictReader(handle)
@@ -155,6 +155,7 @@ def _read_csv(path: Path, source_picker: str) -> list[RawPick]:
                 tomogram_id=_cell(row, 'tomogram_id'),
                 position=(float(row['x']), float(row['y']), float(row['z'])),
                 orientation=tuple(float(value) for value in quaternion) if quaternion and all(quaternion) else None,
+                prior=_cell(row, 'prior') or None,      # blank means the run default
                 confidence=float(_cell(row, 'confidence')) if _cell(row, 'confidence') else None,
                 source_picker=source_picker,
             ))

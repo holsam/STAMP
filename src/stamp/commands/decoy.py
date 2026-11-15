@@ -9,17 +9,22 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.backends.base import ToolCommand
 from stamp.decoy.generate import (
+    METHOD_AUTO,
     METHOD_RANDOM_VOLUME,
     METHOD_SHIFTED,
     METHOD_SYNTHETIC_NOISE,
+    SUPPORTED_PRIORS,
     DecoyGeometry,
     generate_random_volume_decoys,
     generate_shifted_decoys,
     generate_synthetic_noise_decoys,
+    merge_decoy_sets,
+    resolve_methods,
 )
 from stamp.decoy.validate import assert_comparable
 from stamp.run.state import stage_dir
-from stamp.schemas.particles import OrientationPrior, ParticleSet
+from stamp.schemas.manifest import TomogramManifest
+from stamp.schemas.particles import ParticleSet
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import archive_and_remove_directory, glob_mrc, load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
@@ -27,7 +32,54 @@ from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 
 # METHODS: decoy generation methods
-METHODS = (METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE, METHOD_RANDOM_VOLUME)
+METHODS = (METHOD_AUTO, METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE, METHOD_RANDOM_VOLUME)
+
+# _generate_for_method: run one concrete method on the full real set, loading the manifests that method needs
+def _generate_for_method(
+    method: str,
+    real_set: ParticleSet,
+    config: DecoyGeometry,
+    output_dir: Path,
+    segmentation_dir: Path | None,
+    raw_tomogram_dir: Path | None,
+    voxel_size_angstrom: float,
+    min_shift_angstrom: float,
+    max_shift_angstrom: float,
+    min_distance_from_real_angstrom: float,
+    min_distance_from_picks_angstrom: float,
+    min_border_angstrom: float,
+    seed: int,
+    n_workers: int,
+) -> tuple[ParticleSet | None, list[TomogramManifest]]:
+    manifests = load_tomogram_manifests(None if method == METHOD_RANDOM_VOLUME else segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
+    if not manifests:
+        raise StampPipelineError('No matched segmentation/tomogram pairs found')
+    if method == METHOD_RANDOM_VOLUME:
+        try:
+            decoys = generate_random_volume_decoys(
+                real_particle_set=real_set,
+                manifests=manifests,
+                config=config,
+                min_distance_from_picks_angstrom=min_distance_from_picks_angstrom,
+                border_angstrom=min_border_angstrom,
+                seed=seed,
+            )
+        except StampValidationError as exc:
+            raise StampPipelineError(str(exc)) from exc
+    else:
+        decoys = generate_shifted_decoys(
+            real_particle_set=real_set,
+            manifests=manifests,
+            config=config,
+            min_shift_angstrom=min_shift_angstrom,
+            max_shift_angstrom=max_shift_angstrom,
+            min_distance_from_surface_angstrom=min_distance_from_real_angstrom,
+            min_pick_distance=min_distance_from_picks_angstrom,
+            seed=seed,
+            n_workers=n_workers,
+            output_dir=output_dir,
+        )
+    return decoys, manifests
 
 # run_decoy: generate a decoy dataset to run through STAMP alongside real data
 def run_decoy(
@@ -83,10 +135,20 @@ def run_decoy(
     if sync_checkpoint(output_dir / 'raw', fingerprint):
         log.info('Found matching partial output, resuming')
 
-    if method != METHOD_RANDOM_VOLUME and real_particle_set is not None:
-        prior = ParticleSet.model_validate(json.loads(real_particle_set.read_text())).orientation_prior
-        if prior is not OrientationPrior.NORMAL:
-            raise StampPipelineError(f'--method {method} is membrane-based and cannot be a control for the {prior.value!r} orientation prior, use --method {METHOD_RANDOM_VOLUME}')
+    if method == METHOD_AUTO and real_particle_set is None:
+        raise StampPipelineError('--method auto needs --real-particle-set')
+    if real_particle_set is not None:
+        present = ParticleSet.model_validate(json.loads(real_particle_set.read_text())).by_prior()
+        if method == METHOD_AUTO:
+            if METHOD_SHIFTED in resolve_methods(method, set(present)) and segmentation_dir is None:
+                raise StampPipelineError('--method auto needs --seg-dir for the normal-prior particles of this particle set')
+        else:
+            uncovered = {prior.value: len(group) for prior, group in present.items() if prior not in SUPPORTED_PRIORS[method]}
+            if len(uncovered) == len(present):
+                suggestions = [name for name, priors in SUPPORTED_PRIORS.items() if priors & set(present)]
+                raise StampPipelineError(f'--method {method} cannot be a control for the {sorted(uncovered)} orientation prior(s) of this particle set, use --method {" or ".join(suggestions)}')
+            if uncovered:
+                log.warning(f'--method {method} makes no decoys for particles of the {uncovered} orientation prior(s), the decoy control will not cover them')
     if method == METHOD_SYNTHETIC_NOISE:
         shape = tuple(int(value) for value in synthetic_shape.split(','))
         if len(shape) != 3:
@@ -108,34 +170,25 @@ def run_decoy(
             raise StampPipelineError(str(exc)) from exc
     else:
         real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
-        manifests = load_tomogram_manifests(None if method == METHOD_RANDOM_VOLUME else segmentation_dir, raw_tomogram_dir, voxel_size_angstrom)
-        if not manifests:
-            raise StampPipelineError('No matched segmentation/tomogram pairs found')
-        if method == METHOD_RANDOM_VOLUME:
-            try:
-                decoy_set = generate_random_volume_decoys(
-                    real_particle_set=real_set,
-                    manifests=manifests,
-                    config=config,
-                    min_distance_from_picks_angstrom=min_distance_from_picks_angstrom,
-                    border_angstrom=min_border_angstrom,
-                    seed=seed,
-                )
-            except StampValidationError as exc:
-                raise StampPipelineError(str(exc)) from exc
-        else:
-            decoy_set = generate_shifted_decoys(
-                real_particle_set=real_set,
-                manifests=manifests,
-                config=config,
-                min_shift_angstrom=min_shift_angstrom,
-                max_shift_angstrom=max_shift_angstrom,
-                min_distance_from_surface_angstrom=min_distance_from_real_angstrom,
-                min_pick_distance=min_distance_from_picks_angstrom,
-                seed=seed,
-                n_workers=n_workers,
-                output_dir=output_dir,
+        decoy_sets: list[ParticleSet] = []
+        manifests: list[TomogramManifest] = []
+        for resolved in resolve_methods(method, set(real_set.by_prior())):
+            decoys, method_manifests = _generate_for_method(
+                resolved, real_set, config, output_dir, segmentation_dir, raw_tomogram_dir, voxel_size_angstrom,
+                min_shift_angstrom, max_shift_angstrom, min_distance_from_real_angstrom, min_distance_from_picks_angstrom,
+                min_border_angstrom, seed, n_workers,
             )
+            if decoys is not None:
+                decoy_sets.append(decoys)
+            manifests += method_manifests
+        decoy_set = merge_decoy_sets(decoy_sets, seed)
+        # one entry per tomogram, keeping the segmentation path where any method has one for plotting
+        by_tomogram: dict[str, TomogramManifest] = {}
+        for manifest in manifests:
+            kept = by_tomogram.get(manifest.tomogram_id)
+            if kept is None or (kept.segmentation_path is None and manifest.segmentation_path is not None):
+                by_tomogram[manifest.tomogram_id] = manifest
+        manifests = list(by_tomogram.values())
 
     if decoy_set is None or not decoy_set.particles:
         raise StampPipelineError('No decoy positions generated. For shifted, check that the shift range fits inside the volume.')

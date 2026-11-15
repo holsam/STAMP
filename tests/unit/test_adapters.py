@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.adapters.base import AdapterInputs
+from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.adapters.mock import MOCK_ADAPTERS, get_mock_adapter
 from stamp.backends.mock import MockRunner
 
@@ -85,7 +86,7 @@ class TestRelionPoses:
         import numpy as np, starfile
         from stamp.adapters.relion import RelionRefineAdapter
         from stamp.schemas.particles import HalfSet, Particle
-        make = lambda i: Particle(particle_id=f'p{i}', tomogram_id='t', position=(1.0, 2.0, 3.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='x', half_set=HalfSet.A)
+        make = lambda i: Particle(prior=OrientationPrior.NORMAL, particle_id=f'p{i}', tomogram_id='t', position=(1.0, 2.0, 3.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='x', half_set=HalfSet.A)
         RelionRefineAdapter().write_particle_star([make(0), make(1)], tmp_path / 'p.star', {}, poses={'p0': (np.eye(3), np.zeros(3))}, voxel_size_angstrom=4.0)
         table = starfile.read(tmp_path / 'p.star').set_index('rlnTomoParticleName')
         assert 'rlnOriginXAngst' in table.columns and table.loc['p0', 'rlnOriginXAngst'] == 0.0

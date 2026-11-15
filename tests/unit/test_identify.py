@@ -8,12 +8,14 @@ from scipy.ndimage import shift as shift_volume
 from scipy.spatial.transform import Rotation
 
 # Import internal STAMP objects
+from stamp.classify.cluster import prior_of_class
 from stamp.classify.frames import azimuth_matrix, rotate_density
 from stamp.identify.decoy_check import evaluate_decoy_control
 from stamp.identify.fit import rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.identify.register import register_score
 from stamp.identify.simulate import simulate_density
+from stamp.utils.io import new_mrc
 from stamp.schemas.particles import OrientationPrior
 from synthetic import asymmetric_object
 
@@ -44,8 +46,20 @@ class TestAlignedIdentify:
         (tmp_path / 'candidates.yaml').write_text('candidates:\n  - name: a\n    structure_path: a.pdb\n  - name: b\n    structure_path: b.pdb\n')
         panel = load_candidate_panel(tmp_path / 'candidates.yaml')
         average = rotate_density(simulate_density(tmp_path / 'a.pdb', 25, 4.0, 16.0), Rotation.random(random_state=3).as_matrix())
-        scores = _score_panel({'c00': (average, 4.0)}, panel, 16.0, 'native', 'local', aligned_prior=OrientationPrior.NONE)['c00']
+        scores = _score_panel({'none-c00': (average, 4.0)}, panel, 16.0, 'native', 'local')['none-c00']
         assert scores['a'] > 0.9 and scores['a'] > scores['b'] + 0.08
+
+# TestClassPriors: class containing tests for reading the orientation prior from class ids
+class TestClassPriors:
+    def test_class_prior_is_read_from_its_id(self):
+        assert prior_of_class('axis-c02') is OrientationPrior.AXIS
+        assert prior_of_class('none-c00') is OrientationPrior.NONE
+
+    def test_load_class_averages_keeps_priors_apart(self, tmp_path):
+        from stamp.commands.identify import load_class_averages
+        for name in ('normal-c00_halfA_n5.mrc', 'axis-c00_halfA_n5.mrc'):
+            new_mrc(tmp_path / name, np.zeros((5, 5, 5), dtype=np.float32), voxel_size=10.0)
+        assert sorted(load_class_averages(tmp_path)) == ['axis-c00', 'normal-c00']
 
 # TestPanel: class containing unit tests for src/stamp/identify/panel.py
 class TestPanel:

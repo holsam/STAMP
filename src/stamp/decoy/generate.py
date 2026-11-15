@@ -25,6 +25,20 @@ METHOD_SHIFTED = 'shifted'
 METHOD_SYNTHETIC_NOISE = 'synthetic-noise'
 METHOD_RANDOM_VOLUME = 'random-volume'
 DECOY_SOURCE_PREFIX = 'decoy-'
+# METHOD_AUTO: resolve the decoy method per orientation prior
+METHOD_AUTO = 'auto'
+# AUTO_METHOD_BY_PRIOR: the method auto uses for each orientation prior
+AUTO_METHOD_BY_PRIOR = {
+    OrientationPrior.NORMAL: METHOD_SHIFTED,
+    OrientationPrior.AXIS: METHOD_RANDOM_VOLUME,
+    OrientationPrior.NONE: METHOD_RANDOM_VOLUME,
+}
+# SUPPORTED_PRIORS: orientation priors each decoy method can build a control for
+SUPPORTED_PRIORS = {
+    METHOD_SHIFTED: {OrientationPrior.NORMAL},
+    METHOD_SYNTHETIC_NOISE: {OrientationPrior.NORMAL},
+    METHOD_RANDOM_VOLUME: {OrientationPrior.AXIS, OrientationPrior.NONE},
+}
 
 # DecoyGeometry: voxel size and density sign shared by the decoy generators
 @dataclass(frozen=True)
@@ -115,8 +129,11 @@ def generate_shifted_decoys(
     run_parallel(pending, _extract_surface_for_manifest, max_workers=n_workers, label='decoy-surface-extract', on_success=_on_success, on_error=_on_error)
 
     real_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
+    normal_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
     for particle in real_particle_set.particles:
-        real_by_tomogram.setdefault(particle.tomogram_id, []).append(particle.position)
+        real_by_tomogram.setdefault(particle.tomogram_id, []).append(particle.position)     # exclusion uses every real pick
+        if particle.prior is OrientationPrior.NORMAL:
+            normal_by_tomogram.setdefault(particle.tomogram_id, []).append(particle.position)
 
     min_shift = config.to_voxels(min_shift_angstrom)
     max_shift = config.to_voxels(max_shift_angstrom)
@@ -136,7 +153,7 @@ def generate_shifted_decoys(
         extent_xyz = np.array(shape)[::-1] - 1
 
         tomogram_picks: list[RawPick] = []
-        for position in positions:
+        for position in normal_by_tomogram.get(tomogram_id, []):      # only membrane-normal particles are displaced
             origin = np.array(position)
             for _attempt in range(max_attempts_per_particle):
                 direction = rng.normal(size=3)
@@ -157,6 +174,7 @@ def generate_shifted_decoys(
                         tomogram_id=tomogram_id,
                         position=tuple(float(c) for c in candidate),
                         orientation=quaternion_from_reference_to(surface_normals_xyz[nearest_vertex]),
+                        prior=OrientationPrior.NORMAL,
                         confidence=None,
                         source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_SHIFTED}',
                     )
@@ -187,15 +205,18 @@ def generate_random_volume_decoys(
     seed: int,
     max_attempts_per_particle: int = 200,
 ) -> ParticleSet | None:
-    prior = real_particle_set.orientation_prior
-    if prior is OrientationPrior.NORMAL:
-        raise StampValidationError('random-volume decoys have no membrane normal to orient by, use the shifted method for the normal orientation prior')
+    supported = [particle for particle in real_particle_set.particles if particle.prior in SUPPORTED_PRIORS[METHOD_RANDOM_VOLUME]]
+    if not supported:
+        raise StampValidationError('random-volume decoys have no membrane normal to orient by, use the shifted method for normal-prior particles')
     log.progress('Generating random-volume decoys')
     rng = np.random.default_rng(seed)
     raw_path_by_tomogram = {manifest.tomogram_id: manifest.raw_tomogram_path for manifest in manifests}
     positions_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
     for particle in real_particle_set.particles:
-        positions_by_tomogram.setdefault(particle.tomogram_id, []).append(particle.position)
+        positions_by_tomogram.setdefault(particle.tomogram_id, []).append(particle.position)    # exclusion uses every real pick
+    priors_by_tomogram: dict[str, list[OrientationPrior]] = {}
+    for particle in supported:
+        priors_by_tomogram.setdefault(particle.tomogram_id, []).append(particle.prior)
     min_distance = config.to_voxels(min_distance_from_picks_angstrom)
     border = config.to_voxels(border_angstrom)
     raw_picks: list[RawPick] = []
@@ -209,7 +230,7 @@ def generate_random_volume_decoys(
             log.warning(f'{tomogram_id}: smaller than twice the {border_angstrom} Å border, no random-volume decoys placed')
             continue
         pick_tree = cKDTree(np.array(positions))
-        for _ in positions:
+        for prior in priors_by_tomogram.get(tomogram_id, []):          # one decoy per supported real particle, carrying its prior
             for _attempt in range(max_attempts_per_particle):
                 candidate = rng.uniform(low, high)
                 if pick_tree.query(candidate, k=1)[0] < min_distance:
@@ -219,13 +240,14 @@ def generate_random_volume_decoys(
                     tomogram_id=tomogram_id,
                     position=tuple(float(c) for c in candidate),
                     orientation=quaternion_from_reference_to(axis / np.linalg.norm(axis)) if prior is OrientationPrior.AXIS else None,
+                    prior=prior,
                     source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_RANDOM_VOLUME}',
                 ))
                 break
             else:
                 log.debug(f'{tomogram_id}: exhausted {max_attempts_per_particle} attempts placing a random-volume decoy, skipping one particle')
     log.info(f'Generated {len(raw_picks)} decoy particles')
-    return _finalise(raw_picks, seed, METHOD_RANDOM_VOLUME, prior)
+    return _finalise(raw_picks, seed, METHOD_RANDOM_VOLUME)
 
 # _SyntheticNoiseJob: one noise volume's inputs
 @dataclass(frozen=True)
@@ -281,6 +303,7 @@ def _generate_one_synthetic_noise_tomogram(job: _SyntheticNoiseJob) -> tuple[Tom
                 tomogram_id=tomogram_id,
                 position=tuple(float(c) for c in position_zyx[::-1]),
                 orientation=quaternion_from_reference_to(radial_xyz),
+                prior=OrientationPrior.NORMAL,
                 confidence=None,
                 source_picker=f'{DECOY_SOURCE_PREFIX}{METHOD_SYNTHETIC_NOISE}',
             )
@@ -327,7 +350,7 @@ def generate_synthetic_noise_decoys(
     return decoys, manifests
 
 # _finalise: assign decoy particle IDs and half-sets, returning a decoy ParticleSet or None if no decoys were generated
-def _finalise(raw_picks: list[RawPick], seed: int, method: str, orientation_prior: OrientationPrior = OrientationPrior.NORMAL) -> ParticleSet | None:
+def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet | None:
     particle_ids = [f'decoy-{index:06d}' for index in range(len(raw_picks))]
     if not particle_ids:
         return None
@@ -339,6 +362,7 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str, orientation_prio
             tomogram_id=pick.tomogram_id,
             position=pick.position,
             orientation=pick.orientation,
+            prior=pick.prior,
             source_picker=pick.source_picker,
             confidence=pick.confidence,
             half_set=half_set_by_id[particle_id],
@@ -349,5 +373,28 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str, orientation_prio
         particles=particles,
         consensus_rule='union',
         contributing_pickers=[f'{DECOY_SOURCE_PREFIX}{method}'],
-        orientation_prior=orientation_prior,
     )
+
+# resolve_methods: methods to run for the priors present, in a fixed order
+def resolve_methods(method: str, present: set[OrientationPrior]) -> list[str]:
+    if method != METHOD_AUTO:
+        return [method]
+    return sorted({AUTO_METHOD_BY_PRIOR[prior] for prior in present})
+
+# merge_decoy_sets: combine decoy sets from several methods under fresh ids and one half-set assignment
+def merge_decoy_sets(decoy_sets: list[ParticleSet], seed: int) -> ParticleSet | None:
+    raw_picks = [
+        RawPick(
+            tomogram_id=particle.tomogram_id,
+            position=particle.position,
+            orientation=particle.orientation,
+            prior=particle.prior,
+            confidence=particle.confidence,
+            source_picker=particle.source_picker,    # keeps which method made each decoy
+        )
+        for decoy_set in decoy_sets for particle in decoy_set.particles
+    ]
+    merged = _finalise(raw_picks, seed, METHOD_AUTO)
+    if merged is None:
+        return None
+    return merged.model_copy(update={'contributing_pickers': sorted({picker for decoy_set in decoy_sets for picker in decoy_set.contributing_pickers})})

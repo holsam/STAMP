@@ -8,7 +8,7 @@ from pathlib import Path
 
 # Import internal functions and schema
 from stamp.utils.halfset import assign_half_sets, split_by_half_set, validate_single_half_set
-from stamp.schemas.particles import HalfSet, Particle
+from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.utils import io as io_utils
 from stamp.schemas.provenance import ProvenanceSidecar
 from stamp.utils.errors import StampConfigError, StampPipelineError, StampValidationError
@@ -18,6 +18,7 @@ from stamp.utils.parallel import run_parallel, run_parallel_ordered
 # _particle: returns a valid Particle instance
 def _particle(particle_id: str, half_set: HalfSet) -> Particle:
     return Particle(
+        prior=OrientationPrior.NORMAL,
         particle_id=particle_id,
         tomogram_id='tomo000',
         position=(0.0, 0.0, 0.0),

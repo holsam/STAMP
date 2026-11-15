@@ -6,6 +6,7 @@ STAMP: raw pick schema
 from pydantic import BaseModel, Field, field_validator
 
 # Import internal STAMP objects
+from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.utils import assert_unit_quaternion
 
 # RawPick: class for a candidate position reported by a picker for a tomogram
@@ -13,6 +14,7 @@ class RawPick(BaseModel):
     tomogram_id: str
     position: tuple[float, float, float]
     orientation: tuple[float, float, float, float] | None = None
+    prior: OrientationPrior | None = Field(default=None, description='Pick orientation prior')
     confidence: float | None = None
     source_picker: str
     metadata: dict = {}

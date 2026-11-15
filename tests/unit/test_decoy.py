@@ -7,14 +7,14 @@ import mrcfile, numpy as np, pytest
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.decoy.generate import DecoyGeometry, generate_shifted_decoys, generate_synthetic_noise_decoys
+from stamp.decoy.generate import DecoyGeometry, generate_random_volume_decoys, generate_shifted_decoys, generate_synthetic_noise_decoys
 from stamp.decoy.validate import (
     assert_comparable,
     check_manifest_purity,
     is_decoy_particle_set,
 )
 from stamp.schemas.manifest import TomogramManifest
-from stamp.schemas.particles import HalfSet, Particle, ParticleSet
+from stamp.schemas.particles import HalfSet, OrientationPrior, Particle, ParticleSet
 from stamp.utils.errors import StampPipelineError, StampValidationError
 
 # _write_vesicle_pair: write a matched segmentation/tomogram vesicle pair and return its manifest
@@ -49,6 +49,7 @@ def _real_set(tomogram_id: str = 'tomo000') -> ParticleSet:
     return ParticleSet(
         particles=[
             Particle(
+                prior=OrientationPrior.NORMAL,
                 particle_id=f'p{index:06d}',
                 tomogram_id=tomogram_id,
                 position=tuple(float(c) for c in position),
@@ -60,6 +61,29 @@ def _real_set(tomogram_id: str = 'tomo000') -> ParticleSet:
         consensus_rule='union',
         contributing_pickers=['mine'],
     )
+
+# _mixed_set: real particles at the given (position, prior) pairs in one tomogram
+def _mixed_set(entries: list[tuple[tuple[float, float, float], OrientationPrior]]) -> ParticleSet:
+    particles = [
+        Particle(
+            particle_id=f'p{i}', tomogram_id='tomo000', position=position, prior=prior,
+            orientation=(1.0, 0.0, 0.0, 0.0) if prior is not OrientationPrior.NONE else None,
+            source_picker='mine', half_set=HalfSet.A if i % 2 == 0 else HalfSet.B,
+        )
+        for i, (position, prior) in enumerate(entries)
+    ]
+    return ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['mine'])
+
+# _decoy_like: a decoy ParticleSet built from the real particles whose prior is in keep, truncated to n
+def _decoy_like(real: ParticleSet, keep: set[OrientationPrior], n: int | None = None) -> ParticleSet:
+    particles = [
+        Particle(
+            particle_id=f'decoy-{i:06d}', tomogram_id=p.tomogram_id, position=p.position, prior=p.prior,
+            orientation=p.orientation, source_picker='decoy-test', half_set=HalfSet.A if i % 2 == 0 else HalfSet.B,
+        )
+        for i, p in enumerate(p for p in real.particles if p.prior in keep)
+    ][:n]
+    return ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['decoy-test'])
 
 # TestDecoyGenerate: class containing unit tests for decoy/generate.py
 class TestDecoyGenerate:
@@ -155,6 +179,7 @@ class TestDecoyValidate:
         '''A mixed decoy/real set raises DecoyContaminationError'''
         def _particle(particle_id: str, picker: str) -> Particle:
             return Particle(
+                prior=OrientationPrior.NORMAL,
                 particle_id=particle_id, tomogram_id='tomo000', position=(1.0, 1.0, 1.0),
                 source_picker=picker, half_set=HalfSet.A,
             )
@@ -187,6 +212,7 @@ class TestDecoyValidate:
             return ParticleSet(
                 particles=[
                     Particle(
+                        prior=OrientationPrior.NORMAL,
                         particle_id=f'{prefix}{i}', tomogram_id='tomo000',
                         position=(1.0, 1.0, 1.0), source_picker=picker, half_set=HalfSet.A,
                     )
@@ -207,10 +233,10 @@ class TestDecoyValidate:
 def _real_set_for(prior, n: int = 12) -> ParticleSet:
     rng = np.random.default_rng(0)
     particles = [
-        Particle(particle_id=f'p{i}', tomogram_id='tomo000', position=tuple(float(v) for v in rng.uniform(20, 40, 3)), source_picker='x', half_set=HalfSet.A if i % 2 else HalfSet.B)
+        Particle(prior=prior, particle_id=f'p{i}', tomogram_id='tomo000', position=tuple(float(v) for v in rng.uniform(20, 40, 3)), source_picker='x', half_set=HalfSet.A if i % 2 else HalfSet.B)
         for i in range(n)
     ]
-    return ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['x'], orientation_prior=prior)
+    return ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['x'])
 
 
 # TestRandomVolumeDecoys: class containing tests for the prior-agnostic decoy method
@@ -226,7 +252,7 @@ class TestRandomVolumeDecoys:
         assert len(positions) == len(real.particles)
         assert (cKDTree(np.array([p.position for p in real.particles])).query(positions)[0] >= 6.0).all()     # 60 A at 10 A/voxel
         assert (positions >= 10.0).all() and (positions <= 59 - 10.0).all()                                   # 100 A border
-        assert decoys.orientation_prior is OrientationPrior.NONE and all(p.orientation is None for p in decoys.particles)
+        assert list(decoys.by_prior()) == [OrientationPrior.NONE] and all(p.orientation is None for p in decoys.particles)
         assert all(p.source_picker == 'decoy-random-volume' for p in decoys.particles)
 
     def test_axis_prior_gets_random_axes_and_is_deterministic(self, tmp_path: Path) -> None:
@@ -251,5 +277,74 @@ class TestRandomVolumeDecoys:
         real = _real_set_for(OrientationPrior.NONE)
         decoys = generate_random_volume_decoys(real, [_write_vesicle_pair(tmp_path)], DecoyGeometry(voxel_size_angstrom=10.0), 60.0, 100.0, seed=1)
         assert_comparable(real, decoys)
-        with pytest.raises(StampPipelineError, match='orientation prior'):
-            assert_comparable(real.model_copy(update={'orientation_prior': OrientationPrior.AXIS}), decoys)
+        with pytest.raises(StampPipelineError, match='real set lacks'):
+            assert_comparable(real.model_copy(update={'particles': [p.model_copy(update={'prior': OrientationPrior.AXIS}) for p in real.particles]}), decoys)
+
+# TestMixedPriorDecoys: class containing tests for decoys built from particle sets with several priors
+class TestMixedPriorDecoys:
+    def test_random_volume_covers_axis_and_none_only(self, tmp_path: Path) -> None:
+        '''Random-volume gives one decoy per axis or none particle, with that prior, and none for normal'''
+        manifest = _write_vesicle_pair(tmp_path)
+        real = _mixed_set([((20.0, 20.0, 20.0), OrientationPrior.AXIS), ((30.0, 30.0, 30.0), OrientationPrior.NONE), ((40.0, 40.0, 40.0), OrientationPrior.NORMAL)])
+        decoys = generate_random_volume_decoys(real, [manifest], DecoyGeometry(voxel_size_angstrom=10.0), 20.0, 5.0, seed=1)
+        assert sorted(p.prior.value for p in decoys.particles) == ['axis', 'none']
+        assert all(p.orientation is not None for p in decoys.particles if p.prior is OrientationPrior.AXIS)
+        assert all(p.orientation is None for p in decoys.particles if p.prior is OrientationPrior.NONE)
+
+    def test_shifted_displaces_normal_particles_only(self, tmp_path: Path) -> None:
+        '''Shifted decoys come from normal particles only, while axis particles still exclude decoy positions'''
+        manifest = _write_vesicle_pair(tmp_path)
+        real = _mixed_set([((30.0, 30.0, 44.0), OrientationPrior.NORMAL), ((30.0, 30.0, 16.0), OrientationPrior.AXIS)])
+        decoys = generate_shifted_decoys(
+            real_particle_set=real, manifests=[manifest], config=DecoyGeometry(voxel_size_angstrom=10.0),
+            min_shift_angstrom=100.0, max_shift_angstrom=180.0,
+            min_distance_from_surface_angstrom=50.0, min_pick_distance=60.0, seed=2,
+        )
+        assert {p.prior for p in decoys.particles} == {OrientationPrior.NORMAL}
+        assert len(decoys.particles) == 1
+
+    def test_random_volume_rejects_a_normal_only_set(self, tmp_path: Path) -> None:
+        '''Random-volume with nothing it supports raises and points at the shifted method'''
+        manifest = _write_vesicle_pair(tmp_path)
+        with pytest.raises(StampValidationError, match='shifted'):
+            generate_random_volume_decoys(_mixed_set([((20.0, 20.0, 20.0), OrientationPrior.NORMAL)]), [manifest], DecoyGeometry(voxel_size_angstrom=10.0), 20.0, 5.0, seed=1)
+
+# TestDecoyComparablePerPrior: class containing tests for per-prior comparison of real and decoy sets
+class TestDecoyComparablePerPrior:
+    def test_decoy_may_cover_fewer_priors(self) -> None:
+        '''A decoy covering one of two real priors is comparable'''
+        real = _mixed_set([((1.0, 1.0, 1.0), OrientationPrior.NORMAL), ((2.0, 2.0, 2.0), OrientationPrior.NONE)])
+        assert_comparable(real, _decoy_like(real, keep={OrientationPrior.NORMAL}))
+
+    def test_each_covered_prior_is_size_checked(self) -> None:
+        '''A normal decoy covering one of ten real normal particles fails even when the totals look fine'''
+        real = _mixed_set([((float(i), 1.0, 1.0), OrientationPrior.NORMAL) for i in range(10)] + [((1.0, 2.0, 2.0), OrientationPrior.NONE)])
+        with pytest.raises(StampPipelineError, match='real normal set'):
+            assert_comparable(real, _decoy_like(real, keep={OrientationPrior.NORMAL}, n=1))
+
+# TestAutoMethod: class containing tests for --method auto resolution and merging
+class TestAutoMethod:
+    def test_resolve_methods_follows_the_priors_present(self) -> None:
+        '''auto maps each prior to its method, and an explicit method passes through'''
+        from stamp.decoy.generate import METHOD_AUTO, METHOD_RANDOM_VOLUME, METHOD_SHIFTED, resolve_methods
+        assert resolve_methods(METHOD_AUTO, {OrientationPrior.NORMAL, OrientationPrior.NONE}) == [METHOD_RANDOM_VOLUME, METHOD_SHIFTED]
+        assert resolve_methods(METHOD_AUTO, {OrientationPrior.AXIS}) == [METHOD_RANDOM_VOLUME]
+        assert resolve_methods(METHOD_SHIFTED, {OrientationPrior.NONE}) == [METHOD_SHIFTED]
+
+    def test_merge_decoy_sets_keeps_ids_unique(self, tmp_path: Path) -> None:
+        '''Merged decoys get fresh unique ids and keep the method that made each one'''
+        from stamp.decoy.generate import generate_random_volume_decoys, merge_decoy_sets
+        manifest = _write_vesicle_pair(tmp_path)
+        config = DecoyGeometry(voxel_size_angstrom=10.0)
+        real = _mixed_set([((30.0, 30.0, 44.0), OrientationPrior.NORMAL), ((30.0, 30.0, 16.0), OrientationPrior.NONE)])
+        shifted = generate_shifted_decoys(
+            real_particle_set=real, manifests=[manifest], config=config,
+            min_shift_angstrom=100.0, max_shift_angstrom=180.0,
+            min_distance_from_surface_angstrom=50.0, min_pick_distance=60.0, seed=2,
+        )
+        volume = generate_random_volume_decoys(real, [manifest], config, 60.0, 50.0, seed=1)
+        merged = merge_decoy_sets([shifted, volume], seed=1)
+        ids = [p.particle_id for p in merged.particles]
+        assert len(set(ids)) == len(ids) == len(shifted.particles) + len(volume.particles)
+        assert {p.source_picker for p in merged.particles} == {'decoy-shifted', 'decoy-random-volume'}
+        assert {p.prior for p in merged.particles} == {OrientationPrior.NORMAL, OrientationPrior.NONE}

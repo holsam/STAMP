@@ -29,7 +29,8 @@ def _fixture(tmp_path, mixed=False):
                 'tomogram_id': 't0',
                 'position': [8.0, 8.0, 8.0],
                 'source_picker': 'x',
-                'half_set': halves[i]
+                'half_set': halves[i],
+                'prior': 'normal',
             }
             for i in range(2)
         ],

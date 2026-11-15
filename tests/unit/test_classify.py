@@ -226,9 +226,9 @@ class TestCluster:
             )
 
     def test_noise_label_becomes_named_id(self) -> None:
-        '''Label -1 becomes 'noise', other labels become 'cNN'.'''
-        assert label_to_cluster_id(-1) == 'noise'
-        assert label_to_cluster_id(3) == 'c03'
+        '''Label -1 becomes 'noise', other labels become '{prior}-cNN'.'''
+        assert label_to_cluster_id(-1, OrientationPrior.NORMAL) == 'noise'
+        assert label_to_cluster_id(3, OrientationPrior.AXIS) == 'axis-c03'
 
     # test_leiden_finds_blobs_and_applies_min_size: three well separated blobs give three clusters, and communities under min_cluster_size are noise
     def test_leiden_finds_blobs_and_applies_min_size(self) -> None:
@@ -324,7 +324,7 @@ class TestExtract:
             mrc.set_data(segmentation)
             mrc.voxel_size = 1.0
 
-        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        particle = Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
         subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, segmentation_paths={'t': str(tmp_path / 's.mrc')}, cache_dir=tmp_path)
         assert len(kept) == 1
         # the box centre sampled the membrane plane; it must now sit near background
@@ -337,7 +337,7 @@ class TestExtract:
         with mrcfile.new(tmp_path / 't.mrc', overwrite=True) as mrc:
             mrc.set_data(tomogram)
             mrc.voxel_size = 1.0
-        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        particle = Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
         subvolumes, kept, _ = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, cache_dir=tmp_path)
         assert float(subvolumes[0][5, 5, 5]) == 50.0
 
@@ -351,7 +351,7 @@ class TestExtract:
         with mrcfile.new(tmp_path / 's.mrc', overwrite=True) as mrc:
             mrc.set_data(segmentation)
             mrc.voxel_size = 1.0
-        particle = Particle(particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        particle = Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
         subvolumes, kept, skipped = extract_particle_set([particle], {'t': str(tmp_path / 't.mrc')}, 11, segmentation_paths={'t': str(tmp_path / 's.mrc')}, cache_dir=tmp_path)
         assert len(kept) == 1 and not skipped
         assert float(subvolumes[0][5, 5, 5]) == 50.0  # raw density, membrane untouched
@@ -366,7 +366,7 @@ class TestExtract:
             with mrcfile.new(tmp_path / f'{name}.mrc', overwrite=True) as mrc:
                 mrc.set_data(np.random.default_rng(0).normal(size=(40, 40, 40)).astype(np.float32))
             paths[name] = str(tmp_path / f'{name}.mrc')
-            particles.append(Particle(particle_id=f'p_{name}', tomogram_id=name, position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A))
+            particles.append(Particle(prior=OrientationPrior.NORMAL, particle_id=f'p_{name}', tomogram_id=name, position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A))
         cache = tmp_path / 'cache'
         full, kept_full, _ = extract_particle_set(particles, paths, 11, cache_dir=cache)
 
@@ -392,7 +392,7 @@ class TestExtract:
         volume[20, 20, 26] = 1.0       # zyx: 6 voxels along +x of the particle at (20, 20, 20)
         with mrcfile.new(tmp_path / 't0.mrc', overwrite=True) as mrc:
             mrc.set_data(volume)
-        plain = Particle(particle_id='a', tomogram_id='t0', position=(20.0, 20.0, 20.0), source_picker='x', half_set=HalfSet.A)
+        plain = Particle(prior=OrientationPrior.NORMAL, particle_id='a', tomogram_id='t0', position=(20.0, 20.0, 20.0), source_picker='x', half_set=HalfSet.A)
         tilted = plain.model_copy(update={'particle_id': 'b', 'orientation': quaternion_from_reference_to(np.array([1.0, 0.0, 1.0]))})
         subvols, kept, skipped = extract_particle_set([plain, tilted], {'t0': str(tmp_path / 't0.mrc')}, 17, cache_dir=tmp_path / 'cache', prior=OrientationPrior.NONE)
         assert len(kept) == 2 and not skipped
