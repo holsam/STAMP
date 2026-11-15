@@ -30,16 +30,19 @@ def check_manifest_purity(manifests: list[TomogramManifest]) -> bool:
         raise StampPipelineError('Manifest list mixes decoy and real tomograms, these should be processed separately')
     return flags.pop()
 
-# assert_comparable: confirm a decoy set is a fair comparator for a real set
+# assert_comparable: confirm a decoy set is a fair comparator for a real set, prior by prior
 def assert_comparable(real: ParticleSet, decoy: ParticleSet) -> None:
     if not is_decoy_particle_set(decoy):
         raise StampPipelineError('The decoy ParticleSet contains real particles')
     if is_decoy_particle_set(real):
         raise StampPipelineError('The real ParticleSet contains decoy particles')
 
-    if real.sole_prior() != decoy.sole_prior():
-        raise StampPipelineError(f'Decoy orientation prior {decoy.sole_prior().value!r} differs from the real set\'s {real.sole_prior().value!r}, the control would classify with a different search space')
-    real_count = len(real.particles)
-    decoy_count = len(decoy.particles)
-    if decoy_count < 0.5 * real_count:
-        raise StampPipelineError(f'Decoy set ({decoy_count}) is less than half the size of the real set ({real_count}), a weaker decoy result is explicable by particle count alone rather than by absence of signal; increase --n-decoys-per-tomogram')
+    real_by_prior, decoy_by_prior = real.by_prior(), decoy.by_prior()
+    extra = sorted(prior.value for prior in decoy_by_prior if prior not in real_by_prior)
+    if extra:
+        raise StampPipelineError(f'The decoy set has {extra} orientation prior particles the real set lacks, the control would classify with a different search space')
+    for prior, decoy_particles in decoy_by_prior.items():
+        real_count = len(real_by_prior[prior])
+        decoy_count = len(decoy_particles)
+        if decoy_count < 0.5 * real_count:
+            raise StampPipelineError(f'Decoy set ({decoy_count}) is less than half the size of the real {prior.value} set ({real_count}), a weaker decoy result is explicable by particle count alone rather than by absence of signal; increase --n-decoys-per-tomogram')

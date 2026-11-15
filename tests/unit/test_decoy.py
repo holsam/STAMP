@@ -74,6 +74,17 @@ def _mixed_set(entries: list[tuple[tuple[float, float, float], OrientationPrior]
     ]
     return ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['mine'])
 
+# _decoy_like: a decoy ParticleSet built from the real particles whose prior is in keep, truncated to n
+def _decoy_like(real: ParticleSet, keep: set[OrientationPrior], n: int | None = None) -> ParticleSet:
+    particles = [
+        Particle(
+            particle_id=f'decoy-{i:06d}', tomogram_id=p.tomogram_id, position=p.position, prior=p.prior,
+            orientation=p.orientation, source_picker='decoy-test', half_set=HalfSet.A if i % 2 == 0 else HalfSet.B,
+        )
+        for i, p in enumerate(p for p in real.particles if p.prior in keep)
+    ][:n]
+    return ParticleSet(particles=particles, consensus_rule='union', contributing_pickers=['decoy-test'])
+
 # TestDecoyGenerate: class containing unit tests for decoy/generate.py
 class TestDecoyGenerate:
     def test_shifted_decoys_stay_away_from_surface(self, tmp_path: Path) -> None:
@@ -266,7 +277,7 @@ class TestRandomVolumeDecoys:
         real = _real_set_for(OrientationPrior.NONE)
         decoys = generate_random_volume_decoys(real, [_write_vesicle_pair(tmp_path)], DecoyGeometry(voxel_size_angstrom=10.0), 60.0, 100.0, seed=1)
         assert_comparable(real, decoys)
-        with pytest.raises(StampPipelineError, match='orientation prior'):
+        with pytest.raises(StampPipelineError, match='real set lacks'):
             assert_comparable(real.model_copy(update={'particles': [p.model_copy(update={'prior': OrientationPrior.AXIS}) for p in real.particles]}), decoys)
 
 # TestMixedPriorDecoys: class containing tests for decoys built from particle sets with several priors
@@ -297,3 +308,16 @@ class TestMixedPriorDecoys:
         manifest = _write_vesicle_pair(tmp_path)
         with pytest.raises(StampValidationError, match='shifted'):
             generate_random_volume_decoys(_mixed_set([((20.0, 20.0, 20.0), OrientationPrior.NORMAL)]), [manifest], DecoyGeometry(voxel_size_angstrom=10.0), 20.0, 5.0, seed=1)
+
+# TestDecoyComparablePerPrior: class containing tests for per-prior comparison of real and decoy sets
+class TestDecoyComparablePerPrior:
+    def test_decoy_may_cover_fewer_priors(self) -> None:
+        '''A decoy covering one of two real priors is comparable'''
+        real = _mixed_set([((1.0, 1.0, 1.0), OrientationPrior.NORMAL), ((2.0, 2.0, 2.0), OrientationPrior.NONE)])
+        assert_comparable(real, _decoy_like(real, keep={OrientationPrior.NORMAL}))
+
+    def test_each_covered_prior_is_size_checked(self) -> None:
+        '''A normal decoy covering one of ten real normal particles fails even when the totals look fine'''
+        real = _mixed_set([((float(i), 1.0, 1.0), OrientationPrior.NORMAL) for i in range(10)] + [((1.0, 2.0, 2.0), OrientationPrior.NONE)])
+        with pytest.raises(StampPipelineError, match='real normal set'):
+            assert_comparable(real, _decoy_like(real, keep={OrientationPrior.NORMAL}, n=1))

@@ -195,3 +195,14 @@ class TestDecoyCommand:
         result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'decoy', '--method', 'random-volume', '--real-particle-set', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0', '--seed', '2', '--n-processes', '1'])
         assert result.exit_code != 0
         assert 'use --method shifted or synthetic-noise' in result.output
+
+    def test_decoy_shifted_mixed_set_warns_and_runs(self, tmp_path: Path) -> None:
+        '''A mixed set runs under shifted with a warning naming the uncovered axis prior'''
+        seg_dir, raw_dir, particle_set_path = _run_pick(tmp_path)
+        data = json.loads(particle_set_path.read_text())
+        extra = dict(data['particles'][0], particle_id='p-axis', position=[16.0, 30.0, 30.0], prior='axis')
+        data['particles'].append(extra)
+        particle_set_path.write_text(json.dumps(data))
+        result = runner.invoke(stamp_app, _shifted_args(tmp_path, tmp_path, seg_dir, raw_dir, particle_set_path))
+        assert result.exit_code == 0, result.output
+        assert "makes no decoys for particles of the {'axis': 1}" in result.output
