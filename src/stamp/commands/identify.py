@@ -3,13 +3,14 @@ STAMP: identification against predicted structures
 '''
 
 # Import external dependencies
-import json, matplotlib.pyplot as plt, numpy as np, re, shutil, tomllib
+import json, matplotlib.pyplot as plt, numpy as np, re, shutil
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 # Import STAMP objects
 from stamp.adapters.base import AdapterInputs
+from stamp.classify.cluster import prior_of_class
 from stamp.adapters.mock import get_mock_adapter
 from stamp.backends.base import ToolCommand
 from stamp.backends.local import LocalRunner
@@ -29,15 +30,8 @@ from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.core import PlotFormat, finish, plot_path
 from stamp.utils.plotting.identify import decoy_hist, score_heatmap
 
-# _CLASS_ID: leading cNN token of a class-average filename
-_CLASS_ID = re.compile(r'^(c\d+)')
-
-# _aligned_prior: the orientation prior the class averages were aligned under, read from the classify sidecar (normal when it is absent)
-def _aligned_prior(classes: Path) -> OrientationPrior:
-    sidecar = classes.parent / 'params.toml'
-    if not sidecar.is_file():
-        return OrientationPrior.NORMAL
-    return OrientationPrior(tomllib.loads(sidecar.read_text()).get('parameters', {}).get('orientation_prior', 'normal'))
+# _CLASS_ID: leading {prior}-cNN token of a class-average filename
+_CLASS_ID = re.compile(rf'^((?:{"|".join(prior.value for prior in OrientationPrior)})-c\d+)')
 
 # load_class_averages: {class_id: (mean_volume, voxel_size)} merged across half-set MRCs
 def load_class_averages(directory: Path, *, allow_empty: bool = False) -> dict[str, tuple[np.ndarray, float]]:
@@ -53,7 +47,7 @@ def load_class_averages(directory: Path, *, allow_empty: bool = False) -> dict[s
     if not grouped:
         if allow_empty:
             return {}
-        raise StampPipelineError(f'No cNN-named class averages in {directory}')
+        raise StampPipelineError(f'No {{prior}}-cNN class averages in {directory}')
     return {cid: (np.mean(volumes, axis=0), voxel_sizes[cid]) for cid, volumes in grouped.items()}
 
 # _FitJob: one (class, candidate) pair
@@ -91,14 +85,14 @@ def _load_score(checkpoint_dir: Path | None, class_id: str, candidate_name: str)
         return None
 
 # _score_panel: fit every candidate to every class average, each finished fit checkpointed in checkpoint_dir when given, returns {class_id: {candidate: score}}
-def _score_panel(class_averages, panel, resolution, fitter, backend, n_workers: int = 1, checkpoint_dir: Path | None = None, aligned_prior: OrientationPrior = OrientationPrior.NORMAL):
+def _score_panel(class_averages, panel, resolution, fitter, backend, n_workers: int = 1, checkpoint_dir: Path | None = None):
     all_scores: dict[str, dict[str, float]] = {class_id: {} for class_id in class_averages}
     jobs = []
     for class_id, (average, voxel_size) in class_averages.items():
         for candidate in panel:
             saved = _load_score(checkpoint_dir, class_id, candidate.name)
             if saved is None:
-                jobs.append(_FitJob(class_id, to_comparable(average, voxel_size, resolution), average.shape[-1], voxel_size, resolution, candidate, aligned_prior))
+                jobs.append(_FitJob(class_id, to_comparable(average, voxel_size, resolution), average.shape[-1], voxel_size, resolution, candidate, prior_of_class(class_id)))
             else:
                 all_scores[class_id][candidate.name] = saved
     n_resumed = sum(len(scores) for scores in all_scores.values())
@@ -136,7 +130,6 @@ def run_identify(
     log.info(f'Loaded {len(panel)} candidates')
     class_averages = load_class_averages(classes)
     log.info(f'Loaded {len(class_averages)} class averages')
-    aligned_prior = _aligned_prior(classes)
 
     # everything that changes scores; n_workers, backend and plots are left out so a run can resume with different resources
     fingerprint = {
@@ -145,14 +138,13 @@ def run_identify(
         'candidates': signatures({'panel': candidates, **{f'structure:{candidate.name}': candidate.structure_path for candidate in panel}}),
         'resolution': resolution,
         'fitter': fitter,
-        'aligned_prior': aligned_prior.value,
-    }
+    }     # the prior is part of each class id, so the class signatures already cover it
     checkpoint_dir = output_dir / 'raw'
     if sync_checkpoint(checkpoint_dir, fingerprint):
         log.info('Found matching partial output, resuming')
 
     log.progress(f'Fitting {len(panel)} candidates against {len(class_averages)} classes')
-    real_scores = _score_panel(class_averages, panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'real', aligned_prior)
+    real_scores = _score_panel(class_averages, panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'real')
     results = [rank_candidates(class_id, scores, method=f'stamp-{fitter}') for class_id, scores in sorted(real_scores.items())]
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -162,7 +154,7 @@ def run_identify(
     real_best, decoy_best = None, None
     if decoy_classes is not None:
         log.progress('Fitting candidates against decoy classes for control')
-        decoy_scores = _score_panel(load_class_averages(decoy_classes, allow_empty=True), panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'decoy', aligned_prior)
+        decoy_scores = _score_panel(load_class_averages(decoy_classes, allow_empty=True), panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'decoy')
         real_best = [max(s.values()) for s in real_scores.values()]
         decoy_best = [max(s.values()) for s in decoy_scores.values()]
         decoy_control = evaluate_decoy_control(real_best, decoy_best)
@@ -175,7 +167,7 @@ def run_identify(
         log.debug('No --decoy-classes given, skipping decoy control')
 
     log.progress('Writing identification report')
-    _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control, resolution, aligned_prior)
+    _write_report(output_dir / 'identification_report.txt', results, real_scores, decoy_control, resolution)
 
     write_sidecar(
         output_dir,
@@ -187,7 +179,7 @@ def run_identify(
             'backend': backend,
             'resolution_angstrom': resolution,
             'symmetry': 'C1',
-            'orientation_prior': aligned_prior.value,
+            'orientation_priors': sorted({prior_of_class(class_id).value for class_id in class_averages}),
             'n_candidates': len(panel), 'n_classes': len(class_averages),
             'n_workers': n_workers,
             'decoy_control': decoy_control.model_dump() if decoy_control else None,
@@ -239,8 +231,8 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
     return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present
-def _write_report(path: Path, results, all_scores, decoy_control, resolution, aligned_prior: OrientationPrior) -> None:
-    space = f'low-pass {resolution:.1f} Å, class averages aligned in 3D by classify (C1), candidates registered over the {aligned_prior.value} orientation prior'
+def _write_report(path: Path, results, all_scores, decoy_control, resolution) -> None:
+    space = f'low-pass {resolution:.1f} Å, class averages aligned in 3D by classify (C1), candidates registered over each class\'s own orientation prior (see id prefix)'
     lines: list[str] = [
         f'Comparison space: {space}.',
         '',

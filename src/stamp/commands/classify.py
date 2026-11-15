@@ -326,7 +326,7 @@ def _classify_combined(
     orientations = [particle.orientation for particle in particles]
     store = build_store(subvols, orientations, working_voxels, *tilt, output_dir / 'raw' / 'working')
     outcome = run_polish(store, seeds.embedding, seeds.labels, polish_config, checkpoint_dir=output_dir / 'raw' / 'polish')
-    cluster_ids = [label_to_cluster_id(int(label)) for label in outcome.labels]
+    cluster_ids = [label_to_cluster_id(int(label), polish_config.prior) for label in outcome.labels]
     _report_clusters(cluster_ids, seeds.explained_variance_ratio)
     full = ParticleStore(subvols, orientations, *tilt)
     scale = subvols.box_voxels / working_voxels     # polish shifts are in working voxels
@@ -335,7 +335,7 @@ def _classify_combined(
         half_indices = [i for i, particle in enumerate(particles) if particle.half_set == half_set]
         if not half_indices:
             continue
-        averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale)
+        averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale, polish_config.prior)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_set.value)
         averages_by_half[half_set.value] = averages
     assignments = [
@@ -380,12 +380,12 @@ def _classify_strict(
     assignments: list[ClassAssignment] = []
     averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
     for half, indices in members.items():
-        averages = posed_class_averages(full.take(indices), labels[half], poses[half][0], poses[half][1] * scale)
+        averages = posed_class_averages(full.take(indices), labels[half], poses[half][0], poses[half][1] * scale, polish_config.prior)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half)
         averages_by_half[half] = averages
         result = results[half]
         for local, index in enumerate(indices):
-            cluster_id = label_to_cluster_id(int(labels[half][local]))
+            cluster_id = label_to_cluster_id(int(labels[half][local]), polish_config.prior)
             assignments.append(_pose_assignment(particles[index], cluster_id, 'stamp-polish-classifier-strict', polish_config.prior, poses[half][0][local], poses[half][1][local] * scale, float(result.cc[local]), float(result.margin[local]), int(result.polarity[local])))
     return assignments, {half: seeds[half] for half in seeds}, averages_by_half
 

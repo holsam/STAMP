@@ -151,7 +151,7 @@ def _resume(checkpoint_dir: Path | None, seed_labels: np.ndarray, config: Polish
     return None, 0
 
 # posed_class_averages: coverage-corrected average per cluster id from particles at their polish poses
-def posed_class_averages(store: ParticleStore, labels: np.ndarray, rotations: np.ndarray, shifts: np.ndarray) -> dict[str, tuple[np.ndarray, int]]:
+def posed_class_averages(store: ParticleStore, labels: np.ndarray, rotations: np.ndarray, shifts: np.ndarray, prior: OrientationPrior) -> dict[str, tuple[np.ndarray, int]]:
     n_labels = int(labels.max()) + 1 if (labels >= 0).any() else 0
     averages = rebuild_references(store, labels, rotations, shifts, n_labels, min_members=1)
-    return {label_to_cluster_id(k): (average, int((labels == k).sum())) for k, average in enumerate(averages) if average is not None}
+    return {label_to_cluster_id(k, prior): (average, int((labels == k).sum())) for k, average in enumerate(averages) if average is not None}

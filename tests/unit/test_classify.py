@@ -226,9 +226,9 @@ class TestCluster:
             )
 
     def test_noise_label_becomes_named_id(self) -> None:
-        '''Label -1 becomes 'noise', other labels become 'cNN'.'''
-        assert label_to_cluster_id(-1) == 'noise'
-        assert label_to_cluster_id(3) == 'c03'
+        '''Label -1 becomes 'noise', other labels become '{prior}-cNN'.'''
+        assert label_to_cluster_id(-1, OrientationPrior.NORMAL) == 'noise'
+        assert label_to_cluster_id(3, OrientationPrior.AXIS) == 'axis-c03'
 
     # test_leiden_finds_blobs_and_applies_min_size: three well separated blobs give three clusters, and communities under min_cluster_size are noise
     def test_leiden_finds_blobs_and_applies_min_size(self) -> None:

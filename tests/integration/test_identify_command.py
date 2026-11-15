@@ -35,9 +35,9 @@ class TestIdentifyCommand:
         decoys = tmp_path / 'decoys'
         classes.mkdir()
         decoys.mkdir()
-        _write_average(classes / 'c00_halfA_n40.mrc', 21, 2.0)
-        _write_average(classes / 'c01_halfA_n30.mrc', 21, 5.0)
-        _write_average(decoys / 'c00_halfA_n40.mrc', 21, 9.0)
+        _write_average(classes / 'normal-c00_halfA_n40.mrc', 21, 2.0)
+        _write_average(classes / 'normal-c01_halfA_n30.mrc', 21, 5.0)
+        _write_average(decoys / 'normal-c00_halfA_n40.mrc', 21, 9.0)
 
         _write_pdb(tmp_path / 'small.pdb', 6)
         _write_pdb(tmp_path / 'large.pdb', 60)
@@ -60,7 +60,7 @@ class TestIdentifyCommand:
 
         out = tmp_path / 'stamp' / 'identify'
         identifications = json.loads((out / 'identification.json').read_text())
-        assert {row['cluster_id'] for row in identifications} == {'c00', 'c01'}
+        assert {row['cluster_id'] for row in identifications} == {'normal-c00', 'normal-c01'}
         assert all(row['score_gap_to_runner_up'] >= 0.0 for row in identifications)
 
         report = (out / 'identification_report.txt').read_text()
@@ -72,8 +72,8 @@ class TestIdentifyCommand:
         from stamp.commands import identify
         classes = tmp_path / 'classes'
         classes.mkdir()
-        _write_average(classes / 'c00_halfA_n40.mrc', 21, 2.0)
-        _write_average(classes / 'c01_halfA_n30.mrc', 21, 5.0)
+        _write_average(classes / 'normal-c00_halfA_n40.mrc', 21, 2.0)
+        _write_average(classes / 'normal-c01_halfA_n30.mrc', 21, 5.0)
         _write_pdb(tmp_path / 'small.pdb', 6)
         _write_pdb(tmp_path / 'large.pdb', 60)
         (tmp_path / 'candidates.yaml').write_text(
@@ -112,5 +112,5 @@ class TestIdentifyCommand:
         assert result.exit_code == 0, result.output
         assert len(fitted) == 2 and not set(fitted) & set(finished)
         out = tmp_path / 'stamp' / 'identify'
-        assert {row['cluster_id'] for row in json.loads((out / 'identification.json').read_text())} == {'c00', 'c01'}
+        assert {row['cluster_id'] for row in json.loads((out / 'identification.json').read_text())} == {'normal-c00', 'normal-c01'}
         assert not (out / 'raw').exists()
