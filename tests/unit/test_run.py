@@ -207,4 +207,5 @@ class TestRunConfig:
         with pytest.raises(StampPipelineError, match='segmentation_dir is required'):
             build({}, drop_seg=True)
         with pytest.raises(StampPipelineError, match='membrane-based'):
-            build({'orientation_prior': 'axis'}, drop_seg=True)
+            build({'orientation_prior': 'axis'}, drop_seg=True, decoy={'enabled': True, 'method': 'shifted'})
+        assert build({'orientation_prior': 'axis'}, drop_seg=True).decoy.method == 'auto'     # the default resolves per prior

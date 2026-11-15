@@ -222,7 +222,7 @@ class TestConsensus:
         }
         reconciled = reconcile_picks(picks, 'intersection', 5.0, 't')
         assert [pick.prior for pick in reconciled] == [OrientationPrior.AXIS]
-        assert 'disagree on the orientation prior' in caplog.text
+        assert 'orientation priors disagree' in caplog.text
 
 # TestVesicle: class containing unit tests for picking/vesicle.py
 class TestVesicle:
