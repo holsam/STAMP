@@ -25,6 +25,14 @@ METHOD_SHIFTED = 'shifted'
 METHOD_SYNTHETIC_NOISE = 'synthetic-noise'
 METHOD_RANDOM_VOLUME = 'random-volume'
 DECOY_SOURCE_PREFIX = 'decoy-'
+# METHOD_AUTO: resolve the decoy method per orientation prior
+METHOD_AUTO = 'auto'
+# AUTO_METHOD_BY_PRIOR: the method auto uses for each orientation prior
+AUTO_METHOD_BY_PRIOR = {
+    OrientationPrior.NORMAL: METHOD_SHIFTED,
+    OrientationPrior.AXIS: METHOD_RANDOM_VOLUME,
+    OrientationPrior.NONE: METHOD_RANDOM_VOLUME,
+}
 # SUPPORTED_PRIORS: orientation priors each decoy method can build a control for
 SUPPORTED_PRIORS = {
     METHOD_SHIFTED: {OrientationPrior.NORMAL},
@@ -200,8 +208,6 @@ def generate_random_volume_decoys(
     supported = [particle for particle in real_particle_set.particles if particle.prior in SUPPORTED_PRIORS[METHOD_RANDOM_VOLUME]]
     if not supported:
         raise StampValidationError('random-volume decoys have no membrane normal to orient by, use the shifted method for normal-prior particles')
-    if len(supported) < len(real_particle_set.particles):
-        log.warning(f'random-volume decoys cover the axis and none priors only, {len(real_particle_set.particles) - len(supported)} normal-prior particle(s) get no decoy')
     log.progress('Generating random-volume decoys')
     rng = np.random.default_rng(seed)
     raw_path_by_tomogram = {manifest.tomogram_id: manifest.raw_tomogram_path for manifest in manifests}
@@ -368,3 +374,27 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet |
         consensus_rule='union',
         contributing_pickers=[f'{DECOY_SOURCE_PREFIX}{method}'],
     )
+
+# resolve_methods: methods to run for the priors present, in a fixed order
+def resolve_methods(method: str, present: set[OrientationPrior]) -> list[str]:
+    if method != METHOD_AUTO:
+        return [method]
+    return sorted({AUTO_METHOD_BY_PRIOR[prior] for prior in present})
+
+# merge_decoy_sets: combine decoy sets from several methods under fresh ids and one half-set assignment
+def merge_decoy_sets(decoy_sets: list[ParticleSet], seed: int) -> ParticleSet | None:
+    raw_picks = [
+        RawPick(
+            tomogram_id=particle.tomogram_id,
+            position=particle.position,
+            orientation=particle.orientation,
+            prior=particle.prior,
+            confidence=particle.confidence,
+            source_picker=particle.source_picker,    # keeps which method made each decoy
+        )
+        for decoy_set in decoy_sets for particle in decoy_set.particles
+    ]
+    merged = _finalise(raw_picks, seed, METHOD_AUTO)
+    if merged is None:
+        return None
+    return merged.model_copy(update={'contributing_pickers': sorted({picker for decoy_set in decoy_sets for picker in decoy_set.contributing_pickers})})

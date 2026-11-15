@@ -321,3 +321,30 @@ class TestDecoyComparablePerPrior:
         real = _mixed_set([((float(i), 1.0, 1.0), OrientationPrior.NORMAL) for i in range(10)] + [((1.0, 2.0, 2.0), OrientationPrior.NONE)])
         with pytest.raises(StampPipelineError, match='real normal set'):
             assert_comparable(real, _decoy_like(real, keep={OrientationPrior.NORMAL}, n=1))
+
+# TestAutoMethod: class containing tests for --method auto resolution and merging
+class TestAutoMethod:
+    def test_resolve_methods_follows_the_priors_present(self) -> None:
+        '''auto maps each prior to its method, and an explicit method passes through'''
+        from stamp.decoy.generate import METHOD_AUTO, METHOD_RANDOM_VOLUME, METHOD_SHIFTED, resolve_methods
+        assert resolve_methods(METHOD_AUTO, {OrientationPrior.NORMAL, OrientationPrior.NONE}) == [METHOD_RANDOM_VOLUME, METHOD_SHIFTED]
+        assert resolve_methods(METHOD_AUTO, {OrientationPrior.AXIS}) == [METHOD_RANDOM_VOLUME]
+        assert resolve_methods(METHOD_SHIFTED, {OrientationPrior.NONE}) == [METHOD_SHIFTED]
+
+    def test_merge_decoy_sets_keeps_ids_unique(self, tmp_path: Path) -> None:
+        '''Merged decoys get fresh unique ids and keep the method that made each one'''
+        from stamp.decoy.generate import generate_random_volume_decoys, merge_decoy_sets
+        manifest = _write_vesicle_pair(tmp_path)
+        config = DecoyGeometry(voxel_size_angstrom=10.0)
+        real = _mixed_set([((30.0, 30.0, 44.0), OrientationPrior.NORMAL), ((30.0, 30.0, 16.0), OrientationPrior.NONE)])
+        shifted = generate_shifted_decoys(
+            real_particle_set=real, manifests=[manifest], config=config,
+            min_shift_angstrom=100.0, max_shift_angstrom=180.0,
+            min_distance_from_surface_angstrom=50.0, min_pick_distance=60.0, seed=2,
+        )
+        volume = generate_random_volume_decoys(real, [manifest], config, 60.0, 50.0, seed=1)
+        merged = merge_decoy_sets([shifted, volume], seed=1)
+        ids = [p.particle_id for p in merged.particles]
+        assert len(set(ids)) == len(ids) == len(shifted.particles) + len(volume.particles)
+        assert {p.source_picker for p in merged.particles} == {'decoy-shifted', 'decoy-random-volume'}
+        assert {p.prior for p in merged.particles} == {OrientationPrior.NORMAL, OrientationPrior.NONE}

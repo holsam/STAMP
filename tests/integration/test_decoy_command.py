@@ -3,13 +3,13 @@ STAMP: integration tests of `stamp decoy` for all three methods
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np
+import json, mrcfile, numpy as np, tomllib
 from pathlib import Path
 from typer.testing import CliRunner
 
 # Import internal STAMP objects
 from stamp.cli.cli import stamp_app
-from stamp.schemas.particles import ParticleSet
+from stamp.schemas.particles import OrientationPrior, ParticleSet
 
 # Initialise runner
 runner = CliRunner()
@@ -206,3 +206,47 @@ class TestDecoyCommand:
         result = runner.invoke(stamp_app, _shifted_args(tmp_path, tmp_path, seg_dir, raw_dir, particle_set_path))
         assert result.exit_code == 0, result.output
         assert "makes no decoys for particles of the {'axis': 1}" in result.output
+
+    def test_decoy_auto_covers_normal_and_none(self, tmp_path: Path) -> None:
+        '''auto on a normal and none set gives decoys for both priors in one run, with no uncovered warning'''
+        _, raw_dir, particle_set_path = _run_pick(tmp_path)
+        data = json.loads(particle_set_path.read_text())
+        data['particles'].append(dict(data['particles'][0], particle_id='p-none', position=[16.0, 30.0, 30.0], prior='none', orientation=None))
+        particle_set_path.write_text(json.dumps(data))
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'decoy', '--method', 'auto', '--real-particle-set', str(particle_set_path), '--raw-dir', str(raw_dir), '--seg-dir', str(tmp_path / 'seg'), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0', '--seed', '2', '--n-processes', '1'])
+        assert result.exit_code == 0, result.output
+        assert 'makes no decoys' not in result.output
+        decoys = ParticleSet.model_validate(json.loads((tmp_path / 'stamp' / 'decoy' / 'decoy_particle_set.json').read_text()))
+        assert {p.prior for p in decoys.particles} == {OrientationPrior.NORMAL, OrientationPrior.NONE}
+        params = tomllib.loads((tmp_path / 'stamp' / 'decoy' / 'params.toml').read_text())
+        assert params['parameters']['method'] == 'auto'
+
+    def test_decoy_auto_axis_only_needs_no_seg_dir(self, tmp_path: Path) -> None:
+        '''An axis-only set under auto runs from raw tomograms alone'''
+        _, raw_dir, particle_set_path = _run_pick(tmp_path)
+        data = json.loads(particle_set_path.read_text())
+        for particle in data['particles']:
+            particle['prior'] = 'axis'
+        particle_set_path.write_text(json.dumps(data))
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'decoy', '--real-particle-set', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0', '--seed', '2', '--n-processes', '1'])
+        assert result.exit_code == 0, result.output
+
+    def test_decoy_auto_normal_set_needs_seg_dir(self, tmp_path: Path) -> None:
+        '''A set with normal particles under auto without --seg-dir fails and says so'''
+        _, raw_dir, particle_set_path = _run_pick(tmp_path)
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'decoy', '--real-particle-set', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0', '--seed', '2', '--n-processes', '1'])
+        assert result.exit_code != 0
+        assert '--seg-dir' in result.output
+
+    def test_decoy_default_on_normal_set_matches_shifted(self, tmp_path: Path) -> None:
+        '''Omitting --method on a normal-only set gives the same decoys as --method shifted'''
+        seg_dir, raw_dir, particle_set_path = _run_pick(tmp_path)
+        explicit = _shifted_args(tmp_path, tmp_path / 'explicit', seg_dir, raw_dir, particle_set_path)
+        default = _shifted_args(tmp_path, tmp_path / 'default', seg_dir, raw_dir, particle_set_path)
+        del default[default.index('--method'):default.index('--method') + 2]
+        assert runner.invoke(stamp_app, explicit).exit_code == 0
+        assert runner.invoke(stamp_app, default).exit_code == 0
+        first = ParticleSet.model_validate(json.loads((tmp_path / 'explicit' / 'stamp' / 'decoy' / 'decoy_particle_set.json').read_text()))
+        second = ParticleSet.model_validate(json.loads((tmp_path / 'default' / 'stamp' / 'decoy' / 'decoy_particle_set.json').read_text()))
+        assert [p.position for p in first.particles] == [p.position for p in second.particles]
+        assert {p.source_picker for p in second.particles} == {'decoy-shifted'}

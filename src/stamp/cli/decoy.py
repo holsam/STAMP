@@ -31,9 +31,9 @@ def decoy(
         typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
     ] = Path('.'),
     method: Annotated[
-        Literal['shifted', 'synthetic-noise', 'random-volume'],
-        typer.Option('--method', help='Decoy method to use.'),
-    ] = 'shifted',
+        Literal['auto', 'shifted', 'synthetic-noise', 'random-volume'],
+        typer.Option('--method', help='Decoy method to use (auto: resolve per-prior).'),
+    ] = 'auto',
     real_particle_set: Annotated[
         Path | None,
         typer.Option('--real-particle-set', help='particle_set.json from `stamp pick`. Required unless using --method synthetic-noise.', rich_help_panel = 'Inputs'),
@@ -121,7 +121,10 @@ def decoy(
         raise typer.BadParameter('--density-sign must be 1 or -1.')
 
     # Validate method requirements
-    if method == 'random-volume':
+    if method == 'auto':
+        if any([real_particle_set is None, raw_tomogram_dir is None]):
+            raise StampPipelineError('--method auto requires --real-particle-set and -r/--raw-dir')
+    elif method == 'random-volume':
         if any([real_particle_set is None, raw_tomogram_dir is None]):
             raise StampPipelineError('--method random-volume requires --real-particle-set and -r/--raw-dir')
     elif method == 'shifted':
