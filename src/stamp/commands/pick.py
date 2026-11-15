@@ -20,7 +20,7 @@ from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import cache_tomogram_picks, cleanup_raw, glob_mrc, load_cached_picks, load_tomogram_manifests, read_mrc, write_sidecar
+from stamp.utils.io import cache_tomogram_picks, cleanup_raw, load_cached_picks, load_tomogram_manifests, manifest_paths, paths_by_stem, read_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
@@ -70,7 +70,7 @@ def _resolve_vesicle_labels(vesicle_labels_mrc: Path | None, manifests: list[Tom
             log.warning('--vesicle-labels-mrc is a single file but multiple tomograms are being picked; ignoring --vesicle-labels-mrc')
         return {}
 
-    by_stem = {path.stem: path for path in glob_mrc(vesicle_labels_mrc)}
+    by_stem = paths_by_stem(vesicle_labels_mrc)
     resolved: dict[str, Path] = {}
     for manifest in manifests:
         match = by_stem.get(f'{manifest.tomogram_id}_labelled') or next(
@@ -185,9 +185,9 @@ def run_pick(
     # everything that changes imported picks; consensus, seed, beam filter, workers and plots are left out so they can change between runs
     fingerprint = {
         'picks': {name: file_signature(path, content=True) for name, path in zip(names, picks_files)},
-        'segmentation': signatures({m.tomogram_id: m.segmentation_path for m in manifests if m.segmentation_path}),
+        'segmentation': signatures(manifest_paths(manifests, 'segmentation_path')),
         'orientation_prior': orientation_prior.value,
-        'raw': signatures({m.tomogram_id: m.raw_tomogram_path for m in manifests}),
+        'raw': signatures(manifest_paths(manifests, 'raw_tomogram_path')),
         'vesicle_labels': signatures(vesicle_labels_mrc_by_tomogram),
         'voxel_size_angstrom': resolved_voxel_size_angstrom,
         'max_surface_distance_angstrom': max_surface_distance_angstrom,
@@ -263,8 +263,8 @@ def run_pick(
 
     log.progress(f'Rendering plots...')
     if make_plots:
-        segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests if m.segmentation_path}
-        raw_tomogram_paths = {m.tomogram_id: m.raw_tomogram_path for m in manifests}
+        segmentation_paths = manifest_paths(manifests, 'segmentation_path')
+        raw_tomogram_paths = manifest_paths(manifests, 'raw_tomogram_path')
         plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
     cleanup_raw(output_dir, keep_raw=keep_raw, label='imported pick cache')

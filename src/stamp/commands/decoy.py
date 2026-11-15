@@ -27,7 +27,7 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import cleanup_raw, load_particle_set, load_tomogram_manifests, require_voxel_size, write_sidecar
+from stamp.utils.io import cleanup_raw, load_particle_set, load_tomogram_manifests, manifest_paths, require_voxel_size, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
@@ -226,7 +226,7 @@ def run_decoy(
     )
     log.info(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
     if make_plots:
-        segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests if m.segmentation_path} if method != METHOD_SYNTHETIC_NOISE else {}
+        segmentation_paths = manifest_paths(manifests, 'segmentation_path') if method != METHOD_SYNTHETIC_NOISE else {}
         style = pick_plot_style if segmentation_paths else 'none'
         plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths), plot_3d_view=pick_plot_3d, max_workers=n_workers)
 

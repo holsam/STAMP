@@ -12,7 +12,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.text import Text
 from rich.tree import Tree
-from typing import Any
+from typing import Any, Literal
 
 # Import STAMP objects
 from stamp.schemas.manifest import TomogramManifest
@@ -83,6 +83,14 @@ def write_class_average_mrc(path: Path | str, average: np.ndarray, *, voxel_size
 def read_class_average_mrc(path: Path | str) -> tuple[np.ndarray, float]:
     with open_mrc(path) as mrc:
         return np.transpose(np.asarray(mrc.data), (2, 1, 0)), float(mrc.voxel_size.x)
+
+# paths_by_stem: {file stem: path} for MRC files in a directory
+def paths_by_stem(directory: Path) -> dict[str, Path]:
+    return {path.stem: path for path in glob_mrc(directory)}
+
+# manifest_paths: {tomogram_id: path} for manifests that have given path set
+def manifest_paths(manifests: list[TomogramManifest], attr: Literal['segmentation_path', 'raw_tomogram_path']) -> dict[str, Path]:
+    return {m.tomogram_id: getattr(m, attr) for m in manifests if getattr(m, attr) is not None}
 
 # glob_mrc: sorted *.mrc paths in a directory, raising StampConfigError if it is missing or unreadable
 def glob_mrc(directory: Path) -> list[Path]:

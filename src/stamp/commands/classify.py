@@ -26,7 +26,7 @@ from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import cleanup_raw, glob_mrc, load_particle_set, match_by_stem, require_voxel_size, write_sidecar
+from stamp.utils.io import cleanup_raw, glob_mrc, load_particle_set, match_by_stem, paths_by_stem, require_voxel_size, write_sidecar
 from stamp.utils.log import log, log_config
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.core import central_slice, finish, plot_path
@@ -79,7 +79,7 @@ def run_classify(
         log.warning(f'No raw tomogram matching {stem_path.stem}, its particles will be skipped')
     tomogram_paths = {stem_path.stem: raw_path for stem_path, raw_path in matched.items()}
     segmentation_paths = (
-        {path.stem: str(path) for path in glob_mrc(segmentation_dir)} if segmentation_dir is not None else {}
+        {stem: str(path) for stem, path in paths_by_stem(segmentation_dir).items()} if segmentation_dir is not None else {}
     )
     box_voxels = int(round(box_angstrom / voxel_size_angstrom))
     if box_voxels % 2 == 0:
