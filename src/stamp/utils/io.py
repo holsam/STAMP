@@ -16,6 +16,7 @@ from typing import Any
 
 # Import STAMP objects
 from stamp.schemas.manifest import TomogramManifest
+from stamp.schemas.particles import ClassAssignment, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.schemas.provenance import ProvenanceSidecar
 
@@ -258,6 +259,14 @@ def load_tomogram_manifests(
         )
         for segmentation_path, raw_path in matched.items()
     ]
+
+# load_particle_set: validate a ParticleSet JSON file
+def load_particle_set(path: Path) -> ParticleSet:
+    return ParticleSet.model_validate(json.loads(path.read_text()))
+
+# load_class_assignments: validate a list of ClassAssignment rows from a JSON file
+def load_class_assignments(path: Path) -> list[ClassAssignment]:
+    return [ClassAssignment.model_validate(row) for row in json.loads(path.read_text())]
 
 # read_voxel_size_angstrom: voxel size from an MRC header, Angstrom, or None if absent/zero/non-cubic
 def read_voxel_size_angstrom(path: Path) -> float | None:

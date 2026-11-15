@@ -23,10 +23,10 @@ from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
-from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle, ParticleSet
+from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import cleanup_raw, glob_mrc, match_by_stem, require_voxel_size, write_sidecar
+from stamp.utils.io import cleanup_raw, glob_mrc, load_particle_set, match_by_stem, require_voxel_size, write_sidecar
 from stamp.utils.log import log, log_config
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
@@ -68,7 +68,7 @@ def run_classify(
 ) -> None:
     voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir)
     log.progress('Classifying particle set')
-    particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
+    particle_set = load_particle_set(particles)
     is_decoy = is_decoy_particle_set(particle_set)
     groups = particle_set.by_prior()
     log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles ({", ".join(f"{len(group)} {prior.value}" for prior, group in groups.items())})')

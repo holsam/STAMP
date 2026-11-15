@@ -20,10 +20,10 @@ from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
 )
 from stamp.run.state import stage_dir
-from stamp.schemas.particles import ClassAssignment, ParticleSet
+from stamp.schemas.particles import ClassAssignment
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
-from stamp.utils.io import new_mrc, read_mrc, require_voxel_size, write_sidecar
+from stamp.utils.io import load_class_assignments, load_particle_set, new_mrc, read_mrc, require_voxel_size, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.options.argv import plot_argv
 from stamp.utils.plotting.core import finish, plot_path
@@ -102,8 +102,8 @@ def run_refine(
     plot_format: str = 'tiff',
 ) -> None:
     voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir)
-    particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
-    assignments = [ClassAssignment.model_validate(row) for row in json.loads(class_assignments.read_text())]
+    particle_set = load_particle_set(particles)
+    assignments = load_class_assignments(class_assignments)
     poses = _full_poses(assignments)
     angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None and row.particle_id not in poses}    # a full pose already contains the in-plane angle
     class_averages_dir = class_assignments.parent / 'class_averages'

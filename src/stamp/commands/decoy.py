@@ -27,7 +27,7 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import cleanup_raw, load_tomogram_manifests, require_voxel_size, write_sidecar
+from stamp.utils.io import cleanup_raw, load_particle_set, load_tomogram_manifests, require_voxel_size, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
@@ -136,8 +136,9 @@ def run_decoy(
 
     if method == METHOD_AUTO and real_particle_set is None:
         raise StampPipelineError('--method auto needs --real-particle-set')
-    if real_particle_set is not None:
-        present = ParticleSet.model_validate(json.loads(real_particle_set.read_text())).by_prior()
+    real_set = load_particle_set(real_particle_set) if real_particle_set is not None else None
+    if real_set is not None:
+        present = real_set.by_prior()
         if method == METHOD_AUTO:
             if METHOD_SHIFTED in resolve_methods(method, set(present)) and segmentation_dir is None:
                 raise StampPipelineError('--method auto needs --seg-dir for the normal-prior particles of this particle set')
@@ -168,7 +169,6 @@ def run_decoy(
         except StampValidationError as exc:
             raise StampPipelineError(str(exc)) from exc
     else:
-        real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
         decoy_sets: list[ParticleSet] = []
         manifests: list[TomogramManifest] = []
         for resolved in resolve_methods(method, set(real_set.by_prior())):

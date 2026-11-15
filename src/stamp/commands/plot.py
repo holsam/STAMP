@@ -3,13 +3,13 @@ STAMP: standalone plot generation logic
 '''
 
 # Import external dependencies
-import json, random
+import random
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.schemas.particles import Particle, ParticleSet
+from stamp.schemas.particles import Particle
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import glob_mrc
+from stamp.utils.io import glob_mrc, load_particle_set
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 
@@ -46,7 +46,7 @@ def run_plots_pick(
     seed: int,
     n_workers: int,
 ) -> None:
-    particle_set = ParticleSet.model_validate(json.loads(particle_set_path.read_text()))
+    particle_set = load_particle_set(particle_set_path)
     all_tomogram_ids = sorted({p.tomogram_id for p in particle_set.particles})
     selected = _select_tomogram_ids(all_tomogram_ids, tomogram_ids, n_tomograms, seed)
     particles: list[Particle] = [p for p in particle_set.particles if p.tomogram_id in selected]
