@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 # Import internal STAMP objects
 from stamp.cli.cli import stamp_app
-from stamp.schemas.particles import ParticleSet
+from stamp.schemas.particles import OrientationPrior, ParticleSet
 
 # Initialise runner
 runner = CliRunner()
@@ -267,7 +267,7 @@ class TestPickOrientationPrior:
         result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'pick', str(picks), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0', '--orientation-prior', 'none'])
         assert result.exit_code == 0, result.output
         particle_set = ParticleSet.model_validate(json.loads((tmp_path / 'stamp' / 'pick' / 'particle_set.json').read_text()))
-        assert particle_set.sole_prior().value == 'none'
+        assert list(particle_set.by_prior()) == [OrientationPrior.NONE]
         assert len(particle_set.particles) == len(PARTICLES_XYZ) and all(p.orientation is None for p in particle_set.particles)
 
     # check the axis prior keeps the supplied axis and refuses picks without one
@@ -280,7 +280,7 @@ class TestPickOrientationPrior:
         ok = runner.invoke(stamp_app, [*base[:2], base[2], str(with_axis), *base[3:]])
         assert ok.exit_code == 0, ok.output
         particle_set = ParticleSet.model_validate(json.loads((tmp_path / 'stamp' / 'pick' / 'particle_set.json').read_text()))
-        assert particle_set.sole_prior().value == 'axis' and all(p.orientation is not None for p in particle_set.particles)
+        assert list(particle_set.by_prior()) == [OrientationPrior.AXIS] and all(p.orientation is not None for p in particle_set.particles)
         without = _write_picks(tmp_path / 'without.csv', ['tomo000'])
         bad = runner.invoke(stamp_app, [*base[:2], base[2], str(without), *base[3:]])
         assert bad.exit_code != 0 and 'axis needs an orientation' in bad.output

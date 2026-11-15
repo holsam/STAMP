@@ -61,13 +61,6 @@ class ParticleSet(BaseModel):
         grouped = {prior: [particle for particle in self.particles if particle.prior is prior] for prior in OrientationPrior}
         return {prior: members for prior, members in grouped.items() if members}
 
-    # sole_prior: the one prior every particle shares; temporary shim for stages not yet converted to mixed priors
-    def sole_prior(self) -> OrientationPrior:
-        priors = self.by_prior()
-        if len(priors) > 1:
-            raise StampPipelineError(f'ParticleSet mixes orientation priors {[prior.value for prior in priors]}, this stage does not support that yet')
-        return next(iter(priors))
-
 # ClassAssignment: class for a single particles's cluster membership
 class ClassAssignment(BaseModel):
     particle_id: str

@@ -252,7 +252,7 @@ class TestRandomVolumeDecoys:
         assert len(positions) == len(real.particles)
         assert (cKDTree(np.array([p.position for p in real.particles])).query(positions)[0] >= 6.0).all()     # 60 A at 10 A/voxel
         assert (positions >= 10.0).all() and (positions <= 59 - 10.0).all()                                   # 100 A border
-        assert decoys.sole_prior() is OrientationPrior.NONE and all(p.orientation is None for p in decoys.particles)
+        assert list(decoys.by_prior()) == [OrientationPrior.NONE] and all(p.orientation is None for p in decoys.particles)
         assert all(p.source_picker == 'decoy-random-volume' for p in decoys.particles)
 
     def test_axis_prior_gets_random_axes_and_is_deterministic(self, tmp_path: Path) -> None:
