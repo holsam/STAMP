@@ -20,7 +20,7 @@ from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import archive_and_remove_directory, cache_tomogram_picks, glob_mrc, load_cached_picks, load_tomogram_manifests, read_mrc, write_sidecar
+from stamp.utils.io import cache_tomogram_picks, cleanup_raw, glob_mrc, load_cached_picks, load_tomogram_manifests, read_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.picks import plot_positions
@@ -266,11 +266,7 @@ def run_pick(
         raw_tomogram_paths = {m.tomogram_id: m.raw_tomogram_path for m in manifests}
         plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
-    if not keep_raw:
-        raw_dir = output_dir / 'raw'
-        if raw_dir.is_dir():
-            archive_path = archive_and_remove_directory(raw_dir)
-            log.info(f'Archived imported pick cache to {archive_path}')
+    cleanup_raw(output_dir, keep_raw=keep_raw, label='imported pick cache')
 
 # build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
 def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:

@@ -26,7 +26,7 @@ from stamp.utils.halfset import split_by_half_set
 from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle, ParticleSet
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import archive_and_remove_directory, glob_mrc, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import cleanup_raw, glob_mrc, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
 from stamp.utils.log import log, log_config
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
@@ -164,11 +164,7 @@ def run_classify(
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
 
-    if not keep_raw:
-        raw_dir = output_dir / 'raw'
-        if raw_dir.is_dir():
-            archive_path = archive_and_remove_directory(raw_dir)
-            log.info(f'Archived raw classify output to {archive_path}')
+    cleanup_raw(output_dir, keep_raw=keep_raw, label='raw classify output')
 
     write_sidecar(
         output_dir,

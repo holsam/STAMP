@@ -180,15 +180,17 @@ class TestIo:
     def test_expected_output_dir_resolved(self, tmp_path, command):
         assert io_utils.resolve_output_dir(tmp_path, command) == tmp_path / 'stamp' / command
 
-    def test_archive_and_remove_directory(self, tmp_path):
+    def test_cleanup_raw(self, tmp_path):
         directory = tmp_path / 'raw'
         directory.mkdir()
         (directory / 'a.txt').write_text('one')
         (directory / 'b.txt').write_text('two')
-        archive_path = io_utils.archive_and_remove_directory(directory)
+        archive_path = io_utils.cleanup_raw(tmp_path, keep_raw=False, label='test')
         assert archive_path == tmp_path / 'raw.tar.gz'
         assert archive_path.is_file()
         assert not directory.exists()
+        assert io_utils.cleanup_raw(tmp_path, keep_raw=False, label='test') is None
+        assert io_utils.cleanup_raw(tmp_path, keep_raw=True, label='test') is None
         import tarfile
         with tarfile.open(archive_path) as tar:
             names = set(tar.getnames())
