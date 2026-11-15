@@ -5,10 +5,10 @@ STAMP: generic matplotlib helpers
 # Import external dependencies
 import numpy as np, matplotlib, matplotlib.pyplot as plt, warnings
 from pathlib import Path
-from typing import Literal
 
 # Import internal STAMP objects
 from stamp.utils.log import log
+from stamp.utils.options.literals import PlotFormat
 
 matplotlib.use('Agg')
 
@@ -21,9 +21,6 @@ RED = '#ff5d5d'
 CLUSTER_COLOURS = ('#4da6ff', '#ff9d4d', '#7bd88f', '#c77dff', '#ffd166', '#ff8fab', '#4dd0e1')
 NOISE_COLOUR = '#b0b0b0'
 PROTEIN_CMAP = matplotlib.colors.ListedColormap([ORANGE])
-
-# PlotFormat: image formats a plot can be saved as
-PlotFormat = Literal['png', 'jpg', 'tiff', 'svg']
 
 # cluster_colour: colour for a cluster index, wrapping round CLUSTER_COLOURS
 def cluster_colour(index: int) -> str:

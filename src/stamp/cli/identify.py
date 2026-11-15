@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 import stamp.commands.identify as identifyfuncs
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
+from stamp.utils.options.literals import BackendName, PlotFormat
 
 # Initialise Typer app
 identifyCli = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -39,7 +40,7 @@ def identify(
         typer.Option('--decoy-classes', exists=True, file_okay=False, help='Decoy class averages.')
     ] = None,
     backend: Annotated[
-        Literal['local', 'mock'],
+        BackendName,
         typer.Option('--backend', help='Backend to use for processing.', rich_help_panel = 'Backend')
     ] = 'local',
     fitter: Annotated[
@@ -59,7 +60,7 @@ def identify(
         typer.Option('--plots/--no-plots', help='Write fit-score heatmap and decoy-control histogram plots.', rich_help_panel = 'Plotting'),
     ] = True,
     plot_format: Annotated[
-        Literal['png', 'jpg', 'tiff', 'svg'],
+        PlotFormat,
         typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
     ] = 'tiff',
 ) -> None:

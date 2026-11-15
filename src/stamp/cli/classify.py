@@ -12,6 +12,7 @@ import stamp.commands.classify as classifyfuncs
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.utils.io import load_particle_set, resolve_output_dir
 from stamp.utils.log import log_started
+from stamp.utils.options.literals import PlotFormat
 
 # Initialise Typer app
 classifyCli = typer.Typer(
@@ -138,7 +139,7 @@ def classify(
         typer.Option('--plots/--no-plots', help='Write embedding and class-average plots.', rich_help_panel = 'Plotting'),
     ] = True,
     plot_format: Annotated[
-        Literal['png', 'jpg', 'tiff', 'svg'],
+        PlotFormat,
         typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
     ] = 'tiff',
     keep_raw: Annotated[

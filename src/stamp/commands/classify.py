@@ -29,7 +29,8 @@ from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import cleanup_raw, glob_mrc, load_particle_set, match_by_stem, require_voxel_size, write_sidecar
 from stamp.utils.log import log, log_config
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
-from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
+from stamp.utils.plotting.core import central_slice, finish, plot_path
+from stamp.utils.options.literals import PlotFormat
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
 # run_classify: cluster picked particles by structural similarity per orientation prior

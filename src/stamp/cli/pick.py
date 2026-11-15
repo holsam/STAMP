@@ -12,6 +12,7 @@ import stamp.commands.pick as pickfuncs
 from stamp.schemas.particles import OrientationPrior
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
+from stamp.utils.options.literals import PlotFormat
 
 # Initialise Typer app
 pickCli = typer.Typer(
@@ -87,7 +88,7 @@ def pick(
         typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel = 'Plotting'),
     ] = 'segmented',
     plot_format: Annotated[
-        Literal['png', 'jpg', 'tiff', 'svg'],
+        PlotFormat,
         typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
     ] = 'tiff',
     pick_zstack_movie: Annotated[

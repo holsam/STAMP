@@ -11,6 +11,7 @@ from typing import Annotated, Literal
 import stamp.commands.refine as refinefuncs
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
+from stamp.utils.options.literals import BackendName, PlotFormat
 
 # Initialise Typer app
 refineCli = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -63,7 +64,7 @@ def refine(
         typer.Option('--iterations', help='Number of refinement iterations to run.', rich_help_panel = 'Refinement'),
     ] = 5,
     backend: Annotated[
-        Literal['local', 'mock'],
+        BackendName,
         typer.Option('--backend', help='Backend to use for processing.', rich_help_panel = 'Backend'),
     ] = 'local',
     combined_halfset: Annotated[
@@ -75,7 +76,7 @@ def refine(
         typer.Option('--plots/--no-plots', help='Write FSC curve plots.', rich_help_panel = 'Plotting'),
     ] = True,
     plot_format: Annotated[
-        Literal['png', 'jpg', 'tiff', 'svg'],
+        PlotFormat,
         typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
     ] = 'tiff',
 ) -> None:

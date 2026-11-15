@@ -5,10 +5,11 @@ STAMP: full pipeline CLI
 # Import external dependencies
 import typer
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 # Import run command functions
 import stamp.commands.run as runfuncs
+from stamp.utils.options.literals import BackendName
 
 # Initialise Typer app
 runCli = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -33,7 +34,7 @@ def run(
         typer.Option('--no-decoy', help='Skip the decoy control track.'),
     ] = False,
     backend: Annotated[
-        Literal['local', 'mock'] | None,
+        BackendName | None,
         typer.Option('--backend', help='Override [run].backend.'),
     ] = None,
 ) -> None:

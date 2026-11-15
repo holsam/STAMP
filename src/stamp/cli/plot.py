@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 # Import plots command functions/variables
 import stamp.commands.plot as plotFuncs
+from stamp.utils.options.literals import PlotFormat
 
 # Initialise Typer app
 plotCli = typer.Typer(no_args_is_help = True, add_completion = False)
@@ -37,7 +38,7 @@ def pick(
         typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel='Plotting Options'),
     ] = 'segmented',
     plot_format: Annotated[
-        Literal['png', 'jpg', 'tiff', 'svg'],
+        PlotFormat,
         typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel='Plotting Options'),
     ] = 'tiff',
     pick_zstack_movie: Annotated[

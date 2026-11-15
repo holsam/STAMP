@@ -9,12 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Import STAMP objects
-from stamp.adapters.base import AdapterInputs
 from stamp.classify.cluster import prior_of_class
-from stamp.adapters.mock import get_mock_adapter
 from stamp.backends.base import ToolCommand
-from stamp.backends.local import LocalRunner
-from stamp.backends.mock import MockRunner
 from stamp.identify.decoy_check import evaluate_decoy_control
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import OrientationPrior
@@ -28,7 +24,8 @@ from stamp.utils.io import glob_mrc, open_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.options.argv import plot_argv
-from stamp.utils.plotting.core import PlotFormat, finish, plot_path
+from stamp.utils.plotting.core import finish, plot_path
+from stamp.utils.options.literals import PlotFormat
 from stamp.utils.plotting.identify import decoy_hist, score_heatmap
 
 # _CLASS_ID: leading {prior}-cNN token of a class-average filename

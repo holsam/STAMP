@@ -12,7 +12,8 @@ from skimage import measure
 from typing import Literal
 
 # Import internal STAMP objects
-from stamp.utils.plotting.core import GREEN, GREY, PlotFormat, central_slice, finish, plot_path, show_segmentation
+from stamp.utils.plotting.core import GREEN, GREY, central_slice, finish, plot_path, show_segmentation
+from stamp.utils.options.literals import PlotFormat
 from stamp.utils.io import read_mrc
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
