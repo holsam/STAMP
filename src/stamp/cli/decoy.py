@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import decoy command functions/variables
+from stamp.utils.options.cli import KeepRawOption, NProcessesOption, OptionalRawDirOption, OutDirOption, PickPlot3dOption, PickPlotStyleOption, PickZstackMovieOption, PlotFormatOption, PlotsOption, SegDirOption, VoxelSizeOption
 import stamp.commands.decoy as decoyfuncs
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import resolve_output_dir
@@ -23,14 +24,8 @@ decoyCli = typer.Typer(
 # Define decoy command
 @decoyCli.command()
 def decoy(
-    voxel_size_angstrom: Annotated[
-        float | None,
-        typer.Option('--voxel-size-a', help='Voxel size in Å. Read from MRC headers if omitted.'),
-    ] = None,
-    output_dir: Annotated[
-        Path,
-        typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
-    ] = Path('.'),
+    voxel_size_angstrom: VoxelSizeOption = None,
+    output_dir: OutDirOption = Path('.'),
     method: Annotated[
         Literal['auto', 'shifted', 'synthetic-noise', 'random-volume'],
         typer.Option('--method', help='Decoy method to use (auto: resolve per-prior).'),
@@ -39,14 +34,8 @@ def decoy(
         Path | None,
         typer.Option('--real-particle-set', help='particle_set.json from `stamp pick`. Required unless using --method synthetic-noise.', rich_help_panel = 'Inputs'),
     ] = None,
-    segmentation_dir: Annotated[
-        Path | None,
-        typer.Option('-s', '--seg-dir', help='Segmentation directory. Required unless using --method synthetic-noise.', rich_help_panel = 'Inputs'),
-    ] = None,
-    raw_tomogram_dir: Annotated[
-        Path | None,
-        typer.Option('-r', '--raw-dir', help='Raw tomogram directory. Required unless using --method synthetic-noise.', rich_help_panel = 'Inputs'),
-    ] = None,
+    segmentation_dir: SegDirOption = None,
+    raw_tomogram_dir: OptionalRawDirOption = None,
     density_sign: Annotated[
         int,
         typer.Option('--density-sign', help='+1 if the synthetic membrane shell is brighter than background, -1 if darker.', rich_help_panel = 'Synthetic noise decoy'),
@@ -87,34 +76,13 @@ def decoy(
         int,
         typer.Option('--seed', help='Seed for sampling and half-set assignment.', rich_help_panel = 'Decoy placement'),
     ] = 0,
-    n_workers: Annotated[
-        int,
-        typer.Option('-n', '--n-processes', help='Number of processes to use for per-tomogram decoy generation (1 = sequential).', rich_help_panel = 'Decoy placement'),
-    ] = 1,
-    keep_raw: Annotated[
-        bool,
-        typer.Option('--keep-raw', help='Keep the raw per-picker output directory instead of archiving it to raw.tar.gz.'),
-    ] = False,
-    make_plots: Annotated[
-        bool,
-        typer.Option('--plots', help='Write decoy position plots.', rich_help_panel = 'Plotting'),
-    ] = False,
-    pick_plot_style: Annotated[
-        Literal['segmented', 'none'],
-        typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel = 'Plotting'),
-    ] = 'segmented',
-    plot_format: Annotated[
-        PlotFormat,
-        typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
-    ] = 'tiff',
-    pick_zstack_movie: Annotated[
-        bool,
-        typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.', rich_help_panel = 'Plotting'),
-    ] = True,
-    pick_plot_3d: Annotated[
-        bool,
-        typer.Option('--pick-plot-3d/--no-pick-plot-3d', help='Create a static 3D pick visualisation per tomogram.', rich_help_panel = 'Plotting'),
-    ] = False,
+    n_workers: NProcessesOption = 1,
+    keep_raw: KeepRawOption = False,
+    make_plots: PlotsOption = False,
+    pick_plot_style: PickPlotStyleOption = 'segmented',
+    plot_format: PlotFormatOption = 'tiff',
+    pick_zstack_movie: PickZstackMovieOption = True,
+    pick_plot_3d: PickPlot3dOption = False,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data.'''
     log_started('decoy generation')

@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 # Import internal STAMP objects
+from stamp.utils.options.cli import OptionalRawDirOption, SegDirOption
 from stamp.filter.state import load_filter_state
 
 # Initialise Typer app
@@ -20,14 +21,8 @@ def filter_picks(
         Path,
         typer.Argument(exists=True, dir_okay=False, help='particle_set.json from stamp pick.'),
     ],
-    segmentation_dir: Annotated[
-        Path | None,
-        typer.Option('-s', '--seg-dir', help='Directory of segmentation MRCs, matched to particles by tomogram_id.', exists=True, file_okay=False),
-    ] = None,
-    raw_tomogram_dir: Annotated[
-        Path | None,
-        typer.Option('-r', '--raw-dir', help='Directory of raw tomogram MRCs, matched to particles by tomogram_id.', exists=True, file_okay=False),
-    ] = None,
+    segmentation_dir: SegDirOption = None,
+    raw_tomogram_dir: OptionalRawDirOption = None,
 ) -> None:
     '''Open an interactive GUI to review consensus picks against their segmentation/raw tomogram.'''
     if segmentation_dir is None and raw_tomogram_dir is None:

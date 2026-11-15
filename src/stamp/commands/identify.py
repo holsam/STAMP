@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Import STAMP objects
+from stamp.adapters.base import AdapterInputs
+from stamp.adapters.mock import get_mock_adapter
+from stamp.backends.local import LocalRunner
+from stamp.backends.mock import MockRunner
 from stamp.classify.cluster import prior_of_class
 from stamp.backends.base import ToolCommand
 from stamp.identify.decoy_check import evaluate_decoy_control
@@ -213,7 +217,7 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
         'stamp', 'identify',
         '--classes', str(real_classes),
         '--candidates', str(config.stage.identify.candidates),
-        '--output-dir', str(target),
+        '--out-dir', str(target),
         '--fitter', config.stage.identify.fitter,
         '--backend', 'local',
         '-n', str(config.stage.identify.n_workers),

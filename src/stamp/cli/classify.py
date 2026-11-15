@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import classify command functions/variables
+from stamp.utils.options.cli import KeepRawOption, NProcessesOption, OutDirOption, PlotFormatOption, PlotsOption, RawDirOption, SegDirOption, VoxelSizeOption
 import stamp.commands.classify as classifyfuncs
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.utils.io import load_particle_set, resolve_output_dir
@@ -27,22 +28,10 @@ def classify(
         Path,
         typer.Option('-p', '--particles', help='particle_set.json or decoy_particle_set.json', exists=True)
     ],
-    raw_tomogram_dir: Annotated[
-        Path,
-        typer.Option('-r', '--raw-dir', help='Raw tomogram directory.', exists=True, file_okay=False),
-    ],
-    voxel_size_angstrom: Annotated[
-        float | None,
-        typer.Option('--voxel-size-a', help='Voxel size in Å. Read from MRC headers if omitted.'),
-    ] = None,
-    segmentation_dir: Annotated[
-        Path | None,
-        typer.Option('-s', '--seg-dir', help='Segmentation directory for membrane voxel replacement.', exists=True, file_okay=False),
-    ] = None,
-    output_dir: Annotated[
-        Path,
-        typer.Option('-o', '--out-dir', file_okay=False, help='Output directory.'),
-    ] = Path('.'),
+    raw_tomogram_dir: RawDirOption,
+    voxel_size_angstrom: VoxelSizeOption = None,
+    segmentation_dir: SegDirOption = None,
+    output_dir: OutDirOption = Path('.'),
     box_angstrom: Annotated[
         float,
         typer.Option('--box-length-a', help='Extraction box edge length, in Å.', rich_help_panel = 'Subvolume extraction')
@@ -130,22 +119,10 @@ def classify(
         float,
         typer.Option('--merge-fraction', help='Fraction of the higher half-split agreement two references must reach to be merged (and two halves to be matched).', min=0.0, rich_help_panel = 'Polish'),
     ] = 1.0,
-    n_workers: Annotated[
-        int,
-        typer.Option('-n', '--n-processes', help='Number of processes to use (1 = sequential).'),
-    ] = 1,
-    make_plots: Annotated[
-        bool,
-        typer.Option('--plots/--no-plots', help='Write embedding and class-average plots.', rich_help_panel = 'Plotting'),
-    ] = True,
-    plot_format: Annotated[
-        PlotFormat,
-        typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
-    ] = 'tiff',
-    keep_raw: Annotated[
-        bool,
-        typer.Option('--keep-raw', help='Keep the raw per-tomogram subvolume cache instead of archiving it to raw.tar.gz.'),
-    ] = False,
+    n_workers: NProcessesOption = 1,
+    make_plots: PlotsOption = True,
+    plot_format: PlotFormatOption = 'tiff',
+    keep_raw: KeepRawOption = False,
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
     log_started('classification')

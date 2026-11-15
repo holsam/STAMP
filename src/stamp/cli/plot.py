@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import plots command functions/variables
+from stamp.utils.options.cli import NProcessesOption, OptionalRawDirOption, OutDirOption, PickPlot3dOption, PickPlotStyleOption, PickZstackMovieOption, PlotFormatOption, SegDirOption
 import stamp.commands.plot as plotFuncs
 from stamp.utils.options.literals import PlotFormat
 
@@ -21,34 +22,13 @@ def pick(
         Path,
         typer.Argument(help='particle_set.json (from stamp pick) or decoy_particle_set.json (from stamp decoy).', exists=True, dir_okay=False),
     ],
-    segmentation_dir: Annotated[
-        Path | None,
-        typer.Option('-s', '--seg-dir', help='Directory of segmented MRC files; filename stems are tomogram IDs.', exists=True, file_okay=False),
-    ] = None,
-    raw_tomogram_dir: Annotated[
-        Path | None,
-        typer.Option('-r', '--raw-dir', help='Directory of raw tomogram MRCs, matched to segmentations by filename stem.', exists=True, file_okay=False),
-    ] = None,
-    output_dir: Annotated[
-        Path,
-        typer.Option('-o', '--out-dir', file_okay=False, help='Directory to write plots to.'),
-    ] = Path('.'),
-    pick_plot_style: Annotated[
-        Literal['segmented', 'none'],
-        typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel='Plotting Options'),
-    ] = 'segmented',
-    plot_format: Annotated[
-        PlotFormat,
-        typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel='Plotting Options'),
-    ] = 'tiff',
-    pick_zstack_movie: Annotated[
-        bool,
-        typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.', rich_help_panel='Plotting Options'),
-    ] = True,
-    pick_plot_3d: Annotated[
-        bool,
-        typer.Option('--pick-plot-3d/--no-pick-plot-3d', help='Create a static 3D pick visualisation per tomogram.', rich_help_panel='Plotting Options'),
-    ] = False,
+    segmentation_dir: SegDirOption = None,
+    raw_tomogram_dir: OptionalRawDirOption = None,
+    output_dir: OutDirOption = Path('.'),
+    pick_plot_style: PickPlotStyleOption = 'segmented',
+    plot_format: PlotFormatOption = 'tiff',
+    pick_zstack_movie: PickZstackMovieOption = True,
+    pick_plot_3d: PickPlot3dOption = False,
     tomogram_ids: Annotated[
         str | None,
         typer.Option('--tomogram-ids', help='Comma-separated tomogram IDs to plot. Mutually exclusive with --n-tomograms.', rich_help_panel = 'Selection'),
@@ -61,10 +41,7 @@ def pick(
         int,
         typer.Option('--seed', help='Seed for random tomogram selection.', rich_help_panel = 'Selection'),
     ] = 0,
-    n_workers: Annotated[
-        int,
-        typer.Option('-n', '--n-processes', help='Processes to use for plot rendering (1 = sequential).'),
-    ] = 1,
+    n_workers: NProcessesOption = 1,
 ) -> None:
     '''Render pick/decoy position plots for an existing particle set using a subset of tomograms.'''
     if tomogram_ids is not None and n_tomograms is not None:

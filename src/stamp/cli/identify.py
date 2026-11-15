@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import identify command functions
+from stamp.utils.options.cli import NProcessesOption, OutDirOption, PlotFormatOption, PlotsOption
 import stamp.commands.identify as identifyfuncs
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
@@ -31,10 +32,7 @@ def identify(
         float,
         typer.Option('-r', '--resolution', help='Class-average resolution in Å (used for low-pass filtering).')
     ],
-    output_dir: Annotated[
-        Path,
-        typer.Option('-o', '--output-dir', file_okay=False, help='Output directory.')
-    ] = Path('.'),
+    output_dir: OutDirOption = Path('.'),
     decoy_classes: Annotated[
         Path | None,
         typer.Option('--decoy-classes', exists=True, file_okay=False, help='Decoy class averages.')
@@ -51,18 +49,9 @@ def identify(
         bool,
         typer.Option('--fetch-missing', help='Fetch an AlphaFold model when a candidate has no local structure_path.', rich_help_panel = 'Backend'),
     ] = False,
-    n_workers: Annotated[
-        int,
-        typer.Option('-n', '--n-processes', help='Number of processes to use for candidate fitting (1 = sequential).', rich_help_panel = 'Backend'),
-    ] = 1,
-    make_plots: Annotated[
-        bool,
-        typer.Option('--plots/--no-plots', help='Write fit-score heatmap and decoy-control histogram plots.', rich_help_panel = 'Plotting'),
-    ] = True,
-    plot_format: Annotated[
-        PlotFormat,
-        typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
-    ] = 'tiff',
+    n_workers: NProcessesOption = 1,
+    make_plots: PlotsOption = True,
+    plot_format: PlotFormatOption = 'tiff',
 ) -> None:
     '''Fit predicted structures to class averages and score candidates.'''
     log_started('identification')

@@ -12,7 +12,7 @@ from typing import Literal
 from stamp.schemas.particles import OrientationPrior
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.log import log, log_config
-from stamp.utils.options.literals import BackendName, PlotFormat
+from stamp.utils.options.literals import BackendName, PickPlotStyle, PlotFormat
 
 # _Strict: reject unknown keys, treat "" as unset
 class _Strict(BaseModel):
@@ -41,7 +41,7 @@ class RunSettings(_Strict):
 class PlotSettings(_Strict):
     enabled: bool = True
     format: PlotFormat = 'tiff'
-    pick_style: Literal['segmented', 'none'] = 'segmented'
+    pick_style: PickPlotStyle = 'segmented'
     pick_zstack_movie: bool = False
     pick_plot_3d: bool = False
 

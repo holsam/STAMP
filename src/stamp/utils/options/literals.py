@@ -10,3 +10,6 @@ BackendName = Literal['local', 'mock', 'cluster']
 
 # PlotFormat: image formats a plot can be saved as
 PlotFormat = Literal['png', 'jpg', 'tiff', 'svg']
+
+# PickPlotStyle: plot styles for pick and decoy position plots
+PickPlotStyle = Literal['segmented', 'none']
