@@ -182,6 +182,15 @@ class TestIo:
     def test_expected_output_dir_resolved(self, tmp_path, command):
         assert io_utils.resolve_output_dir(tmp_path, command) == tmp_path / 'stamp' / command
 
+    def test_class_average_mrc_round_trip(self, tmp_path):
+        average = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+        path = tmp_path / 'c00.mrc'
+        io_utils.write_class_average_mrc(path, average, voxel_size=2.5)
+        loaded, voxel_size = io_utils.read_class_average_mrc(path)
+        assert np.array_equal(loaded, average) and voxel_size == 2.5
+        with mrcfile.open(path) as mrc:
+            assert mrc.data.shape == (4, 3, 2)
+
     def test_require_voxel_size(self, tmp_path):
         assert io_utils.require_voxel_size(2.5, None) == 2.5
         with pytest.raises(StampPipelineError):

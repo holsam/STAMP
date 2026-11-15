@@ -75,6 +75,15 @@ def new_mrc(path: Path | str, data: np.ndarray, *, voxel_size: Any = None) -> No
     except (OSError, ValueError) as exc:
         raise _mrc_error('write', path, exc) from exc
 
+# write_class_average_mrc: write an (x, y, z) class average to MRC with axes reversed
+def write_class_average_mrc(path: Path | str, average: np.ndarray, *, voxel_size: float) -> None:
+    new_mrc(path, np.transpose(average, (2, 1, 0)).astype(np.float32), voxel_size=voxel_size)
+
+# read_class_average_mrc: read a class average MRC back to (x, y, z) order
+def read_class_average_mrc(path: Path | str) -> tuple[np.ndarray, float]:
+    with open_mrc(path) as mrc:
+        return np.transpose(np.asarray(mrc.data), (2, 1, 0)), float(mrc.voxel_size.x)
+
 # glob_mrc: sorted *.mrc paths in a directory, raising StampConfigError if it is missing or unreadable
 def glob_mrc(directory: Path) -> list[Path]:
     from os import access, R_OK, X_OK

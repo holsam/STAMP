@@ -24,7 +24,7 @@ from stamp.identify.panel import Candidate, load_candidate_panel
 from stamp.identify.simulate import simulate_density, to_comparable
 from stamp.utils.checkpoint import atomic_write_json, directory_signatures, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import glob_mrc, open_mrc, write_sidecar
+from stamp.utils.io import glob_mrc, read_class_average_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 from stamp.utils.options.argv import plot_argv
@@ -43,9 +43,9 @@ def load_class_averages(directory: Path, *, allow_empty: bool = False) -> dict[s
         match = _CLASS_ID.match(path.stem)
         if not match:
             continue
-        with open_mrc(path) as mrc:
-            grouped[match.group(1)].append(np.transpose(np.asarray(mrc.data), (2, 1, 0)))
-            voxel_sizes[match.group(1)] = float(mrc.voxel_size.x)
+        volume, voxel_size = read_class_average_mrc(path)
+        grouped[match.group(1)].append(volume)
+        voxel_sizes[match.group(1)] = voxel_size
     if not grouped:
         if allow_empty:
             return {}
