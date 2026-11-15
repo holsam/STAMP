@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
 # Import internal STAMP objects
-from stamp.schemas.utils import assert_unit_quaternion
+from stamp.schemas.utils import Quaternion
 from stamp.utils.errors import StampPipelineError
 
 # HalfSet: class for half-set label that gets assigned at the end of consensus picking
@@ -27,7 +27,7 @@ class Particle(BaseModel):
     particle_id: str
     tomogram_id: str
     position: tuple[float, float, float] = Field(description='Voxel coordinates (x, y, z) within the source tomogram')
-    orientation: tuple[float, float, float, float] | None = Field(default=None, description=('Orientation as a unit quaternion (w, x, y, z), if the picker provides one'))
+    orientation: Quaternion | None = Field(default=None, description=('Orientation as a unit quaternion (w, x, y, z), if the picker provides one'))
     prior: OrientationPrior = Field(description='Particle orientation prior, to fix the alignment search space.')
     source_picker: str
     confidence: float | None = None
@@ -35,13 +35,6 @@ class Particle(BaseModel):
     vesicle_id: str | None = Field(default=None, description='Vesicle ID from an EValuator labelled MRC')
     beam_angle_deviation_degrees: float | None = Field(default=None, description='Angle in degrees between the pick normal and the beam-orthogonal (xy) plane (0 = beam-orthogonal; 90 = beam-aligned)')
 
-    @field_validator('orientation')
-    @classmethod
-    def _quaternion_is_unit_length(cls, value: tuple[float, float, float, float] | None) -> tuple[float, float, float, float] | None:
-        if value is None:
-            return value
-        assert_unit_quaternion(value)
-        return value
 
 # ParticleSet: output of consensus picking for a single run
 class ParticleSet(BaseModel):
@@ -68,18 +61,12 @@ class ClassAssignment(BaseModel):
     classifier: str
     inplane_angle_degrees: float | None = None
     vesicle_id: str | None = None  # denormalised from Particle so class_assignments.json doesn't need to rejoin particle_set.json
-    rotation: tuple[float, float, float, float] | None = Field(default=None, description='Unit quaternion (w, x, y, z) of the full pose against the class average: the average moved by it, then shifted, gives the particle')
+    rotation: Quaternion | None = Field(default=None, description='Unit quaternion (w, x, y, z) of the full pose against the class average: the average moved by it, then shifted, gives the particle')
     shift_voxels: tuple[float, float, float] | None = Field(default=None, description='Shift (x, y, z) in subvolume voxels applied after the rotation')
     cc: float | None = Field(default=None, description='Normalised correlation with the assigned class average over the particle\'s observed Fourier components')
     margin: float | None = Field(default=None, description='Best minus second-best class correlation, a confidence in the assignment')
     polarity: Literal[1, -1] | None = Field(default=None, description='-1 when the filament was flipped end to end to match the class average, axis prior only')
 
-    @field_validator('rotation')
-    @classmethod
-    def _rotation_is_unit_length(cls, value: tuple[float, float, float, float] | None) -> tuple[float, float, float, float] | None:
-        if value is not None:
-            assert_unit_quaternion(value)
-        return value
 
 # IdentificationResult: candidate protein assignment for a cluster
 class IdentificationResult(BaseModel):

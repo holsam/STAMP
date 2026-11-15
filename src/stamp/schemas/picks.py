@@ -3,17 +3,17 @@ STAMP: raw pick schema
 '''
 
 # Import external dependencies
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 # Import internal STAMP objects
 from stamp.schemas.particles import OrientationPrior
-from stamp.schemas.utils import assert_unit_quaternion
+from stamp.schemas.utils import Quaternion
 
 # RawPick: class for a candidate position reported by a picker for a tomogram
 class RawPick(BaseModel):
     tomogram_id: str
     position: tuple[float, float, float]
-    orientation: tuple[float, float, float, float] | None = None
+    orientation: Quaternion | None = None
     prior: OrientationPrior | None = Field(default=None, description='Pick orientation prior')
     confidence: float | None = None
     source_picker: str
@@ -25,11 +25,3 @@ class RawPick(BaseModel):
     # score under profile-shape scoring
     profile_score: float | None = None
     vesicle_id: str | None = None
-
-    @field_validator('orientation')
-    @classmethod
-    def _quaternion_is_unit_length(cls, value: tuple[float, float, float, float] | None) -> tuple[float, float, float, float] | None:
-        if value is None:
-            return value
-        assert_unit_quaternion(value)
-        return value
