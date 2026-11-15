@@ -180,6 +180,13 @@ class TestIo:
     def test_expected_output_dir_resolved(self, tmp_path, command):
         assert io_utils.resolve_output_dir(tmp_path, command) == tmp_path / 'stamp' / command
 
+    def test_require_voxel_size(self, tmp_path):
+        assert io_utils.require_voxel_size(2.5, None) == 2.5
+        with pytest.raises(StampPipelineError):
+            io_utils.require_voxel_size(None, None)
+        with pytest.raises(StampPipelineError):
+            io_utils.require_voxel_size(None, [])
+
     def test_cleanup_raw(self, tmp_path):
         directory = tmp_path / 'raw'
         directory.mkdir()

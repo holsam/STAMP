@@ -23,7 +23,7 @@ from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, ParticleSet
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
-from stamp.utils.io import glob_mrc, new_mrc, read_mrc, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import new_mrc, read_mrc, require_voxel_size, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.core import finish, plot_path
 from stamp.utils.plotting.refine import fsc_curve
@@ -100,11 +100,7 @@ def run_refine(
     make_plots: bool = True,
     plot_format: str = 'tiff',
 ) -> None:
-    if voxel_size_angstrom is None:
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(raw_tomogram_dir))
-        if voxel_size_angstrom is None:
-            raise StampValidationError('Voxel size not given and not found in any MRC header in --raw-dir.')
-        log.debug(f'Resolved voxel size from MRC headers: {voxel_size_angstrom} Å')
+    voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir)
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     assignments = [ClassAssignment.model_validate(row) for row in json.loads(class_assignments.read_text())]
     poses = _full_poses(assignments)

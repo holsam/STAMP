@@ -239,23 +239,16 @@ def load_tomogram_manifests(
     raw_tomogram_dir: Path,
     voxel_size_angstrom: float | None,
 ) -> list[TomogramManifest]:
-    from stamp.utils.errors import StampPipelineError
     from stamp.utils.log import log
     raw_paths = glob_mrc(raw_tomogram_dir)
     if segmentation_dir is None:
-        if voxel_size_angstrom is None:
-            voxel_size_angstrom = resolve_directory_voxel_size_angstrom(raw_paths)
-            if voxel_size_angstrom is None:
-                raise StampPipelineError(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
+        voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_paths)
         return [TomogramManifest(tomogram_id=path.stem, raw_tomogram_path=path, voxel_size_angstrom=voxel_size_angstrom) for path in raw_paths]
     segmentation_paths = glob_mrc(segmentation_dir)
     matched, unmatched = match_by_stem(segmentation_paths, raw_paths)
     for segmentation_path in unmatched:
         log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
-    if voxel_size_angstrom is None:
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(matched.values()))
-        if voxel_size_angstrom is None:
-            raise StampPipelineError(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
+    voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, list(matched.values()))
     return [
         TomogramManifest(
             tomogram_id=segmentation_path.stem,
@@ -294,6 +287,24 @@ def resolve_directory_voxel_size_angstrom(paths: list[Path]) -> float | None:
         breakdown = ', '.join(f'{value}Å x{count}' for value, count in counts.most_common())
         log.warning(f'Multiple voxel sizes were found in MRC headers ({breakdown}) - using the most common {most_common_value}')
     return most_common_value
+
+# require_voxel_size: if no voxel size given, resolve it from MRC headers or raise StampPipelineError if still unknown
+def require_voxel_size(voxel_size_angstrom: float | None, directory_or_paths: Path | list[Path] | None) -> float:
+    if voxel_size_angstrom is not None:
+        return voxel_size_angstrom
+    from stamp.utils.errors import StampPipelineError
+    from stamp.utils.log import log
+    if directory_or_paths is None:
+        raise StampPipelineError('No voxel size given and no tomogram directory to read it from; pass --voxel-size-a')
+    if isinstance(directory_or_paths, Path):
+        paths, where = glob_mrc(directory_or_paths), str(directory_or_paths)
+    else:
+        paths, where = directory_or_paths, f'{len(directory_or_paths)} tomogram(s)'
+    resolved = resolve_directory_voxel_size_angstrom(paths)
+    if resolved is None:
+        raise StampPipelineError(f'No voxel size in any MRC header in {where} and --voxel-size-a not given')
+    log.debug(f'Resolved voxel size from MRC headers: {resolved} Å')
+    return resolved
 
 # cleanup_raw: unless keep_raw, tar+gzip '<output_dir>/raw' to 'raw.tar.gz' next to it, then delete it and log under label
 def cleanup_raw(output_dir: Path, *, keep_raw: bool, label: str) -> Path | None:

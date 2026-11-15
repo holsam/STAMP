@@ -27,7 +27,7 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import cleanup_raw, glob_mrc, load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import cleanup_raw, load_tomogram_manifests, require_voxel_size, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 
@@ -108,9 +108,7 @@ def run_decoy(
     min_border_angstrom: float = 200.0,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data'''
-    if voxel_size_angstrom is None:
-        _HEADER_DIR = raw_tomogram_dir or segmentation_dir
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(_HEADER_DIR))
+    voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir or segmentation_dir)
     log.progress(f'Generating decoy dataset ({method})')
     config = DecoyGeometry(voxel_size_angstrom=voxel_size_angstrom, density_sign=density_sign)
     output_dir.mkdir(parents=True, exist_ok=True)
