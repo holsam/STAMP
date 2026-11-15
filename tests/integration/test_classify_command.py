@@ -233,6 +233,50 @@ class TestClassifyCommand:
             posed = [a for a in assignments if a['cluster_id'] != 'noise']
             assert posed and all((a['polarity'] in (1, -1)) == (prior == 'axis') for a in posed)
 
+    def test_classify_mixed_priors(self, tmp_path: Path) -> None:
+        '''A mixed set is classified per prior: prefixed classes, one assignments file, and no class holds particles of another prior.'''
+        def make_soluble(payload: dict) -> None:
+            for index, particle in enumerate(payload['particles']):
+                if index % 3 == 0:     # a third become soluble (none prior, no orientation)
+                    particle['prior'], particle['orientation'] = 'none', None
+        result = self._invoke(tmp_path, '--no-strict-halfset-independence', edit=make_soluble)
+        assert result.exit_code == 0, result.output
+        output_dir = tmp_path / 'stamp' / 'classify'
+        assignments = json.loads((output_dir / 'class_assignments.json').read_text())
+        posed = [a for a in assignments if a['cluster_id'] != 'noise']
+        assert posed and {a['cluster_id'].split('-')[0] for a in posed} <= {'normal', 'none'}
+        assert all(path.name.startswith(('normal-c', 'none-c')) for path in (output_dir / 'class_averages').glob('*.mrc'))
+        prior_of = {p['particle_id']: p['prior'] for p in json.loads((tmp_path / 'particle_set.json').read_text())['particles']}
+        assert all(a['cluster_id'].startswith(prior_of[a['particle_id']]) for a in posed)
+        assert 'orientation_priors' in (output_dir / 'params.toml').read_text()
+
+    def test_failed_prior_is_skipped_in_mixed_run(self, tmp_path: Path, monkeypatch) -> None:
+        '''A prior group that fails is skipped and recorded when others remain; a single-prior run re-raises the error.'''
+        import stamp.commands.classify as classify_module
+        from stamp.utils.errors import StampPipelineError
+        real_classify_prior = classify_module._classify_prior
+        def fail_prior(failing: OrientationPrior):
+            def _run(prior, *args, **kwargs):
+                if prior is failing:
+                    raise StampPipelineError('boom')
+                return real_classify_prior(prior, *args, **kwargs)
+            return _run
+        def make_soluble(payload: dict) -> None:
+            for index, particle in enumerate(payload['particles']):
+                if index % 3 == 0:
+                    particle['prior'], particle['orientation'] = 'none', None
+        monkeypatch.setattr(classify_module, '_classify_prior', fail_prior(OrientationPrior.NONE))
+        result = self._invoke(tmp_path, '--no-strict-halfset-independence', edit=make_soluble)
+        assert result.exit_code == 0, result.output
+        params = (tmp_path / 'stamp' / 'classify' / 'params.toml').read_text()
+        assert 'skipped_priors' in params and 'boom' in params
+
+        single_root = tmp_path / 'single'
+        single_root.mkdir()
+        monkeypatch.setattr(classify_module, '_classify_prior', fail_prior(OrientationPrior.NORMAL))
+        single = self._invoke(single_root, '--no-strict-halfset-independence')
+        assert single.exit_code != 0 and isinstance(single.exception, StampPipelineError) and str(single.exception) == 'boom'
+
 # TestBuildClassifyCommands: class containing tests for the classify argv built from the run config
 class TestBuildClassifyCommands:
     # test_build_classify_commands_passes_polish_settings: the wedge and alignment settings reach the classify argv

@@ -4,6 +4,7 @@ STAMP: unsupervised classification logic
 
 # Import external dependencies
 import json, os, matplotlib.pyplot as plt, numpy as np
+from dataclasses import dataclass
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -22,7 +23,7 @@ from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.run.state import stage_dir
 from stamp.utils.halfset import split_by_half_set
-from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, ParticleSet
+from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle, ParticleSet
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import archive_and_remove_directory, glob_mrc, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
@@ -30,7 +31,7 @@ from stamp.utils.log import log, log_config
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
-# run_classify: cluster picked particles by structural similarity
+# run_classify: cluster picked particles by structural similarity per orientation prior
 def run_classify(
     particles,
     raw_tomogram_dir,
@@ -72,8 +73,8 @@ def run_classify(
     log.progress('Classifying particle set')
     particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
     is_decoy = is_decoy_particle_set(particle_set)
-    prior = particle_set.sole_prior()
-    log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles')
+    groups = particle_set.by_prior()
+    log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles ({", ".join(f"{len(group)} {prior.value}" for prior, group in groups.items())})')
     tomogram_ids = sorted({particle.tomogram_id for particle in particle_set.particles})
     matched, unmatched = match_by_stem([Path(f'{tomogram_id}.mrc') for tomogram_id in tomogram_ids], glob_mrc(raw_tomogram_dir))
     for stem_path in unmatched:
@@ -85,7 +86,7 @@ def run_classify(
     box_voxels = int(round(box_angstrom / voxel_size_angstrom))
     if box_voxels % 2 == 0:
         box_voxels += 1  # odd box keeps the particle exactly centred
-        log.debug(f'Using odd box voxel for centred particles: {box_voxels - 1} -> {box_voxels}')    
+        log.debug(f'Using odd box voxel for centred particles: {box_voxels - 1} -> {box_voxels}')
     log.progress(f'Using box voxels: {box_voxels}')
 
     # everything that changes results; n_workers, plots and keep_raw are left out so a run can resume with different resources
@@ -107,7 +108,6 @@ def run_classify(
         'strict_halfset_independence': strict_halfset_independence,
         'inplane_angular_step_degrees': inplane_angular_step_degrees,
         'random_state': random_state,
-        'orientation_prior': prior.value,
         'tilt_max_degrees': tilt_max_degrees,
         'tilt_axis_degrees': tilt_axis_degrees,
         'bin_factor': bin_factor,
@@ -117,46 +117,9 @@ def run_classify(
         'null_sigmas': null_sigmas,
         'reject_quantile': reject_quantile,
         'merge_fraction': merge_fraction,
-    }
+    }    # the particle set signature already covers every prior
     if sync_checkpoint(output_dir / 'raw', fingerprint):
         log.info('Found matching partial output, resuming')
-
-    log.progress('Starting subvolume extraction')
-    subvols, kept, skipped = extract_particle_set(
-        particle_set.particles, {k: str(v) for k, v in tomogram_paths.items()}, box_voxels,
-        segmentation_paths=segmentation_paths, n_workers=n_workers, cache_dir=output_dir / 'raw' / 'subvolumes', prior=prior,
-    )
-    if skipped:
-        log.warning(f'Skipped {len(skipped)} particles whose {box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
-    if not kept:
-        raise StampPipelineError('No particles could be extracted. Check --raw-dir and --box-length-a')
-
-    log.progress('Starting feature matrix construction')
-    if prior is OrientationPrior.NONE:
-        features = build_sh_feature_matrix(subvols, tilt_max_degrees, tilt_axis_degrees, n_workers=n_workers)
-    else:
-        features = build_feature_matrix(
-            subvols,
-            n_radial_bins=n_radial_bins,
-            max_azimuthal_mode=azimuthal_modes,
-            n_azimuthal_samples=n_azimuthal_samples,
-            min_radius_fraction=min_radius_fraction,
-            n_workers=n_workers,
-            cache_dir=output_dir / 'raw' / 'features',
-            normalisation=feature_normalisation,
-            axial_invariant=prior is OrientationPrior.AXIS,
-        )
-    log.progress(f'Feature matrix complete: {features.shape[0]} particles x {features.shape[1]} features ({prior.value} prior)')
-
-    degenerate = ~features.any(axis=1)
-    if degenerate.any():
-        log.warning(f'Dropped {int(degenerate.sum())} particles with a constant/empty subvolume (edge fill)')
-        keep_indices = [i for i, bad in enumerate(degenerate) if not bad]
-        features = features[~degenerate]
-        subvols = subvols.take(keep_indices)
-        kept = [particle for particle, bad in zip(kept, degenerate) if not bad]
-    if not kept:
-        raise StampPipelineError('No particles left after dropping degenerate subvolumes')
 
     config = ClusteringConfig(
         method=method,
@@ -166,21 +129,37 @@ def run_classify(
         random_state=random_state,
     )
     log_config('classify.clustering', config)
-    
+
     # set environment variable NUMBA_NUM_THREADS so fast_hdbscan doesn't try to use all CPUs on compute clusters
     os.environ['NUMBA_NUM_THREADS'] = str(n_workers)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    polish_config = PolishConfig(
-        prior=prior, angular_step_degrees=inplane_angular_step_degrees, n_rotations=n_rotations, shift_range_voxels=shift_range_voxels,
-        n_polish_rounds=polish_rounds, min_seed_size=min_cluster_size, merge_fraction=merge_fraction, null_sigmas=null_sigmas,
-        reject_quantile=reject_quantile, seed=random_state, threads=n_workers,
-    )
-    classify = _classify_strict if strict_halfset_independence else _classify_combined
     if not strict_halfset_independence:
         log.warning('--no-strict-halfset-independence used, half-A and half-B particles are classified together; FSC built on these classes will be inflated')
-    assignments, result_by_half, averages_by_half = classify(kept, subvols, features, config, polish_config, working_box(box_voxels, bin_factor), (tilt_max_degrees, tilt_axis_degrees), output_dir, voxel_size_angstrom)
+
+    settings = _GroupSettings(
+        box_voxels=box_voxels, voxel_size_angstrom=voxel_size_angstrom, n_radial_bins=n_radial_bins,
+        azimuthal_modes=azimuthal_modes, n_azimuthal_samples=n_azimuthal_samples, min_radius_fraction=min_radius_fraction,
+        feature_normalisation=feature_normalisation, clustering=config, strict_halfset_independence=strict_halfset_independence,
+        inplane_angular_step_degrees=inplane_angular_step_degrees, n_rotations=n_rotations, shift_range_voxels=shift_range_voxels,
+        polish_rounds=polish_rounds, min_cluster_size=min_cluster_size, merge_fraction=merge_fraction, null_sigmas=null_sigmas,
+        reject_quantile=reject_quantile, random_state=random_state, bin_factor=bin_factor,
+        tilt_max_degrees=tilt_max_degrees, tilt_axis_degrees=tilt_axis_degrees, n_workers=n_workers,
+    )
+    results: dict[OrientationPrior, _GroupResult] = {}
+    failures: dict[OrientationPrior, str] = {}
+    for prior, group in groups.items():
+        log.progress(f'Classifying {len(group)} {prior.value}-prior particles')
+        try:
+            results[prior] = _classify_prior(prior, group, {k: str(v) for k, v in tomogram_paths.items()}, segmentation_paths, settings, output_dir)
+        except StampPipelineError as exc:
+            if len(groups) == 1:
+                raise                       # a single prior fails
+            log.warning(f'Skipping the {prior.value} prior: {exc}')
+            failures[prior] = str(exc)
+    if not results:
+        raise StampPipelineError('No particles could be classified: ' + '; '.join(f'{prior.value}: {reason}' for prior, reason in failures.items()))
+    assignments = [assignment for result in results.values() for assignment in result.assignments]
 
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
@@ -207,7 +186,8 @@ def run_classify(
             'strict_halfset_independence': strict_halfset_independence,
             'inplane_angular_step_degrees': inplane_angular_step_degrees,
             'random_state': random_state,
-            'orientation_prior': prior.value,
+            'orientation_priors': {prior.value: len(group) for prior, group in groups.items()},
+            'skipped_priors': {prior.value: reason for prior, reason in failures.items()},
             'tilt_max_degrees': tilt_max_degrees,
             'tilt_axis_degrees': tilt_axis_degrees,
             'bin_factor': bin_factor,
@@ -224,24 +204,113 @@ def run_classify(
             'n_workers': n_workers,
             'is_decoy': is_decoy,
             'membrane_subtracted': bool(segmentation_paths),
-            'n_extracted': len(kept),
-            'n_skipped': len(skipped),
+            'n_extracted': sum(len(result.kept) for result in results.values()),
+            'n_skipped': sum(len(result.skipped) for result in results.values()),
         },
         inputs=[('particle_set', particles)]
         + [(f'raw_tomogram:{stem}', path) for stem, path in sorted(tomogram_paths.items())],
     )
     log.info(f'Wrote {len(assignments)} class assignments to {assignments_path}')
     if make_plots:
-        _plot_classify(result_by_half, averages_by_half, output_dir, plot_format)
+        for prior, result in results.items():
+            _plot_classify(result.result_by_half, result.averages_by_half, output_dir, plot_format, prior.value)
 
-# _plot_classify: create plots (PCA embedding scatter + class-average thumbnail grid)
-def _plot_classify(result_by_half: dict[str, ClusteringResult], averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]], output_dir: Path, fmt: PlotFormat) -> None:
+# _GroupSettings: classify settings shared by every orientation prior group
+@dataclass(frozen=True)
+class _GroupSettings:
+    box_voxels: int
+    voxel_size_angstrom: float
+    n_radial_bins: int
+    azimuthal_modes: int
+    n_azimuthal_samples: int
+    min_radius_fraction: float
+    feature_normalisation: str
+    clustering: ClusteringConfig
+    strict_halfset_independence: bool
+    inplane_angular_step_degrees: float
+    n_rotations: int
+    shift_range_voxels: int
+    polish_rounds: int
+    min_cluster_size: int
+    merge_fraction: float
+    null_sigmas: float
+    reject_quantile: float
+    random_state: int
+    bin_factor: int
+    tilt_max_degrees: float | None
+    tilt_axis_degrees: float
+    n_workers: int
+
+# _GroupResult: results of classifying one orientation prior
+@dataclass
+class _GroupResult:
+    assignments: list[ClassAssignment]
+    kept: list[Particle]
+    skipped: list[Particle]
+    result_by_half: dict[str, ClusteringResult]
+    averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]]
+
+# _classify_prior: extract, featurise, seed and polish one orientation prior group (cached to raw/<prior>)
+def _classify_prior(
+    prior: OrientationPrior,
+    particles: list[Particle],
+    tomogram_paths: dict[str, str],
+    segmentation_paths: dict[str, str],
+    settings: _GroupSettings,
+    output_dir: Path,
+) -> _GroupResult:
+    work_dir = output_dir / 'raw' / prior.value
+    log.progress(f'Starting {prior.value} subvolume extraction')
+    subvols, kept, skipped = extract_particle_set(particles, tomogram_paths, settings.box_voxels, segmentation_paths=segmentation_paths, n_workers=settings.n_workers, cache_dir=work_dir / 'subvolumes', prior=prior)
+    if skipped:
+        log.warning(f'Skipped {len(skipped)} {prior.value} particles whose {settings.box_voxels}-voxel box fell outside the volume or had no matching tomogram or had no orientation')
+    if not kept:
+        raise StampPipelineError('No particles could be extracted. Check --raw-dir and --box-length-a')
+
+    log.progress(f'Starting {prior.value} feature matrix construction')
+    if prior is OrientationPrior.NONE:
+        features = build_sh_feature_matrix(subvols, settings.tilt_max_degrees, settings.tilt_axis_degrees, n_workers=settings.n_workers)
+    else:
+        features = build_feature_matrix(
+            subvols,
+            n_radial_bins=settings.n_radial_bins,
+            max_azimuthal_mode=settings.azimuthal_modes,
+            n_azimuthal_samples=settings.n_azimuthal_samples,
+            min_radius_fraction=settings.min_radius_fraction,
+            n_workers=settings.n_workers,
+            cache_dir=work_dir / 'features',
+            normalisation=settings.feature_normalisation,
+            axial_invariant=prior is OrientationPrior.AXIS,
+        )
+    log.progress(f'Feature matrix complete: {features.shape[0]} particles x {features.shape[1]} features ({prior.value} prior)')
+
+    degenerate = ~features.any(axis=1)
+    if degenerate.any():
+        log.warning(f'Dropped {int(degenerate.sum())} {prior.value} particles with a constant/empty subvolume (edge fill)')
+        keep_indices = [i for i, bad in enumerate(degenerate) if not bad]
+        features = features[~degenerate]
+        subvols = subvols.take(keep_indices)
+        kept = [particle for particle, bad in zip(kept, degenerate) if not bad]
+    if not kept:
+        raise StampPipelineError('No particles left after dropping degenerate subvolumes')
+
+    polish_config = PolishConfig(
+        prior=prior, angular_step_degrees=settings.inplane_angular_step_degrees, n_rotations=settings.n_rotations, shift_range_voxels=settings.shift_range_voxels,
+        n_polish_rounds=settings.polish_rounds, min_seed_size=settings.min_cluster_size, merge_fraction=settings.merge_fraction, null_sigmas=settings.null_sigmas,
+        reject_quantile=settings.reject_quantile, seed=settings.random_state, threads=settings.n_workers,
+    )
+    classify = _classify_strict if settings.strict_halfset_independence else _classify_combined
+    assignments, result_by_half, averages_by_half = classify(kept, subvols, features, settings.clustering, polish_config, working_box(settings.box_voxels, settings.bin_factor), (settings.tilt_max_degrees, settings.tilt_axis_degrees), output_dir, work_dir, settings.voxel_size_angstrom)
+    return _GroupResult(assignments, kept, skipped, result_by_half, averages_by_half)
+
+# _plot_classify: create plots (PCA embedding scatter + class-average thumbnail grid) for one orientation prior
+def _plot_classify(result_by_half: dict[str, ClusteringResult], averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]], output_dir: Path, fmt: PlotFormat, tag: str) -> None:
     halves = sorted(result_by_half)
     fig, axes = plt.subplots(1, len(halves), figsize=(5.5 * len(halves), 4), squeeze=False)
     for ax, half in zip(axes[0], halves):
         result = result_by_half[half]
-        scatter_labels(ax, result.embedding[:, :2], result.labels, f'half {half}: PCA -> {result.labels.max() + 1} cluster(s)')
-    finish(fig, plot_path(output_dir, 'embedding', fmt))
+        scatter_labels(ax, result.embedding[:, :2], result.labels, f'{tag} half {half}: PCA -> {result.labels.max() + 1} cluster(s)')
+    finish(fig, plot_path(output_dir, f'embedding_{tag}', fmt))
 
     for half, averages in averages_by_half.items():
         ids = sorted(averages)
@@ -249,7 +318,7 @@ def _plot_classify(result_by_half: dict[str, ClusteringResult], averages_by_half
             continue
         fig, axes = plt.subplots(1, max(2, len(ids)), figsize=(2.6 * max(2, len(ids)), 3), squeeze=False)
         class_average_grid(axes[0], ids, {cid: central_slice(volume) for cid, (volume, _count) in averages.items()}, lambda c: c)
-        finish(fig, plot_path(output_dir, f'class_averages_half{half}', fmt))
+        finish(fig, plot_path(output_dir, f'class_averages_{tag}_half{half}', fmt))
 
 # build_classify_commands: create ToolCommand for `stamp classify`
 def build_classify_commands(config, output_dir: Path, track: str = 'real') -> list[ToolCommand]:
@@ -309,7 +378,7 @@ def _pose_assignment(particle, cluster_id: str, classifier: str, prior: Orientat
         polarity=polarity if prior is OrientationPrior.AXIS else None,
     )
 
-# _classify: seed clusters from the features, run polish over all particles together, then average each half at polish's poses
+# _classify_combined: seed clusters from the features, run polish over all particles together, then average each half at polish's poses
 def _classify_combined(
     particles,
     subvols: Subvolumes,
@@ -319,13 +388,14 @@ def _classify_combined(
     working_voxels: int,
     tilt: tuple[float | None, float],
     output_dir: Path,
+    work_dir: Path,
     voxel_size_angstrom: float,
 ) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
     seeds = reduce_and_cluster(features, config)
     (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, output_dir / 'raw' / 'working')
-    outcome = run_polish(store, seeds.embedding, seeds.labels, polish_config, checkpoint_dir=output_dir / 'raw' / 'polish')
+    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
+    outcome = run_polish(store, seeds.embedding, seeds.labels, polish_config, checkpoint_dir=work_dir / 'polish')
     cluster_ids = [label_to_cluster_id(int(label), polish_config.prior) for label in outcome.labels]
     _report_clusters(cluster_ids, seeds.explained_variance_ratio)
     full = ParticleStore(subvols, orientations, *tilt)
@@ -354,6 +424,7 @@ def _classify_strict(
     working_voxels: int,
     tilt: tuple[float | None, float],
     output_dir: Path,
+    work_dir: Path,
     voxel_size_angstrom: float,
 ) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
     half_a, half_b = split_by_half_set(list(particles))
@@ -364,8 +435,8 @@ def _classify_strict(
     seeds = {half: reduce_and_cluster(features[indices], config) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
     (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, output_dir / 'raw' / 'working')
-    results, matches = run_polish_by_half(store, members, {h: seeds[h].embedding for h in members}, {h: seeds[h].labels for h in members}, polish_config, checkpoint_dir=output_dir / 'raw' / 'polish')
+    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
+    results, matches = run_polish_by_half(store, members, {h: seeds[h].embedding for h in members}, {h: seeds[h].labels for h in members}, polish_config, checkpoint_dir=work_dir / 'polish')
     for label_b, match in sorted(matches.items()):
         log.debug(f'Cross-half cluster matching (B -> A, by reference): c{label_b:02d} -> c{match.label_a:02d}  similarity={match.similarity:.3f}')
     n_a = len(results['A'].references)
