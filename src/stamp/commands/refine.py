@@ -25,6 +25,7 @@ from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
 from stamp.utils.io import new_mrc, read_mrc, require_voxel_size, write_sidecar
 from stamp.utils.log import log
+from stamp.utils.options.argv import plot_argv
 from stamp.utils.plotting.core import finish, plot_path
 from stamp.utils.plotting.refine import fsc_curve
 
@@ -221,6 +222,5 @@ def build_refine_commands(config, output_dir: Path) -> list[ToolCommand]:
     ]
     if config.stage.refine.mask is not None:
         argv += ['--mask', str(config.stage.refine.mask)]
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--plot-format', config.plots.format]
+    argv += plot_argv(config.plots)
     return [ToolCommand(tool='refine', argv=argv, working_directory=target, output_paths=[target])]

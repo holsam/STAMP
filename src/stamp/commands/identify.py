@@ -27,6 +27,7 @@ from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import glob_mrc, open_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
+from stamp.utils.options.argv import plot_argv
 from stamp.utils.plotting.core import PlotFormat, finish, plot_path
 from stamp.utils.plotting.identify import decoy_hist, score_heatmap
 
@@ -226,8 +227,7 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
         argv += ['--resolution', str(config.stage.identify.resolution)]
     if config.stage.identify.fetch_missing:
         argv.append('--fetch-missing')
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--plot-format', config.plots.format]
+    argv += plot_argv(config.plots)
     return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present

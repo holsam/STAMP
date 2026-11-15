@@ -23,6 +23,7 @@ from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import cache_tomogram_picks, cleanup_raw, glob_mrc, load_cached_picks, load_tomogram_manifests, read_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
+from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
 from stamp.utils.reporting import report_beam_angle_distribution
 
@@ -283,17 +284,9 @@ def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--max-surface-distance-a', str(config.stage.pick.max_surface_distance_angstrom),
         '--n-processes', str(config.stage.pick.n_workers),
     ]
-    if config.run.segmentation_dir is not None:
-        argv += ['--seg-dir', str(config.run.segmentation_dir)]
+    argv += seg_dir_argv(config.run.segmentation_dir)
     for name in config.stage.pick.picker_names or []:
         argv += ['--name', name]
-    if config.plots.enabled:
-        argv.append('--plots')
-        argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
-    if config.plots.pick_zstack_movie:
-        argv.append('--pick-zstack-movie')
-    if config.plots.pick_plot_3d:
-        argv.append('--pick-plot-3d')
-    if config.stage.pick.keep_raw:
-        argv.append('--keep-raw')
+    argv += plot_argv(config.plots, pick_options=True)
+    argv += keep_raw_argv(config.stage.pick.keep_raw)
     return [ToolCommand(tool='pick', argv=argv, working_directory=target, output_paths=[target / 'particle_set.json'])]

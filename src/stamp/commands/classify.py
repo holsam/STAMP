@@ -28,6 +28,7 @@ from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import cleanup_raw, glob_mrc, match_by_stem, require_voxel_size, write_sidecar
 from stamp.utils.log import log, log_config
+from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
@@ -344,13 +345,11 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
     ]
     if config.run.tilt_max_degrees is not None:
         argv += ['--tilt-max', str(config.run.tilt_max_degrees)]
-    if config.run.segmentation_dir is not None:
-        argv += ['--seg-dir', str(config.run.segmentation_dir)]
+    argv += seg_dir_argv(config.run.segmentation_dir)
     if not settings.strict_halfset_independence:
         argv.append('--no-strict-halfset-independence')
-    argv.append('--keep-raw' if settings.keep_raw else '--no-keep-raw')
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--plot-format', config.plots.format]
+    argv += keep_raw_argv(settings.keep_raw)
+    argv += plot_argv(config.plots)
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
 # _pose_assignment: a class assignment carrying polish's pose, the in-plane angle only where it means something (membrane normal prior)

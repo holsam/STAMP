@@ -29,6 +29,7 @@ from stamp.utils.checkpoint import directory_signatures, file_signature, sync_ch
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import cleanup_raw, load_tomogram_manifests, require_voxel_size, write_sidecar
 from stamp.utils.log import log
+from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
 
 # METHODS: decoy generation methods
@@ -245,15 +246,7 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--seed', str(config.stage.pick.half_set_seed),
         '--n-processes', str(config.decoy.n_workers),
     ]
-    if config.run.segmentation_dir is not None:
-        argv += ['--seg-dir', str(config.run.segmentation_dir)]
-    if config.decoy.keep_raw:
-        argv.append('--keep-raw')
-    if config.plots.enabled:
-        argv.append('--plots')
-        argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
-    if config.plots.pick_zstack_movie:
-        argv.append('--pick-zstack-movie')
-    if config.plots.pick_plot_3d:
-        argv.append('--pick-plot-3d')
+    argv += seg_dir_argv(config.run.segmentation_dir)
+    argv += keep_raw_argv(config.decoy.keep_raw)
+    argv += plot_argv(config.plots, pick_options=True)
     return [ToolCommand(tool='decoy', argv=argv, working_directory=target, output_paths=[target / 'decoy_particle_set.json'])]

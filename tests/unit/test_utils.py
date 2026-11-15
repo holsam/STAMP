@@ -7,12 +7,14 @@ import mrcfile, numpy as np, os, pytest, subprocess, tomllib
 from pathlib import Path
 
 # Import internal functions and schema
-from stamp.utils.halfset import assign_half_sets, split_by_half_set, validate_single_half_set
+from stamp.schemas.config import PlotSettings
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
-from stamp.utils import io as io_utils
 from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.utils import io as io_utils
 from stamp.utils.errors import StampConfigError, StampPipelineError, StampValidationError
+from stamp.utils.halfset import assign_half_sets, split_by_half_set, validate_single_half_set
 from stamp.utils.log import configure_logging
+from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
 # _particle: returns a valid Particle instance
@@ -481,3 +483,24 @@ class TestPickCache:
         (tmp_path / 'cache' / 't1.json').write_text('[{"tomogram_id": ')  # truncated
         loaded = load_cached_picks(tmp_path / 'cache', ['t0', 't1'])
         assert [p.tomogram_id for p in loaded] == ['t0']
+
+# TestOptionsArgv: class containing unit tests for src/stamp/utils/options/argv.py
+class TestOptionsArgv:
+    # test_seg_and_keep_raw_argv: --seg-dir only when configured, --keep-raw only when kept, never --no-keep-raw
+    def test_seg_and_keep_raw_argv(self):
+        assert seg_dir_argv(None) == []
+        assert seg_dir_argv(Path('/seg')) == ['--seg-dir', '/seg']
+        assert keep_raw_argv(True) == ['--keep-raw']
+        assert keep_raw_argv(False) == []
+
+    # test_plot_argv_standard: classify, identify and refine always send plots on or off plus the format
+    def test_plot_argv_standard(self):
+        assert plot_argv(PlotSettings(enabled=True, format='png')) == ['--plots', '--plot-format', 'png']
+        assert plot_argv(PlotSettings(enabled=False, format='png')) == ['--no-plots', '--plot-format', 'png']
+
+    # test_plot_argv_pick_options: pick and decoy send explicit zstack and 3D on/off even when plotting is disabled
+    def test_plot_argv_pick_options(self):
+        off = plot_argv(PlotSettings(enabled=False, pick_zstack_movie=False, pick_plot_3d=False), pick_options=True)
+        assert off == ['--no-pick-zstack-movie', '--no-pick-plot-3d']
+        on = plot_argv(PlotSettings(enabled=True, pick_style='none', format='svg', pick_zstack_movie=True, pick_plot_3d=True), pick_options=True)
+        assert on == ['--plots', '--pick-plot-style', 'none', '--plot-format', 'svg', '--pick-zstack-movie', '--pick-plot-3d']
