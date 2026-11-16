@@ -13,7 +13,7 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampValidationError
-from stamp.utils.io import new_mrc
+from stamp.utils.mrc import new_mrc
 
 # _manifest: a manifest with placeholder paths
 def _manifest(tomogram_id: str) -> TomogramManifest:

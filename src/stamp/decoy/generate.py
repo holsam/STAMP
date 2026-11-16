@@ -11,15 +11,16 @@ from scipy.spatial import cKDTree
 # Import internal STAMP objects
 from stamp.utils.halfset import assign_half_sets
 from stamp.picking.geometry import extract_surface
-from stamp.utils.rotation import quaternion_from_reference_to
+from stamp.picking.manifests import cache_tomogram_picks, load_cached_picks
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.errors import StampValidationError
-from stamp.utils.io import cache_tomogram_picks, load_cached_picks, new_mrc, open_mrc, read_mrc
 from stamp.utils.log import log
+from stamp.utils.mrc import new_mrc, open_mrc, read_mrc
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
+from stamp.utils.rotation import quaternion_from_reference_to
 
 # Define constants
 METHOD_SHIFTED = 'shifted'

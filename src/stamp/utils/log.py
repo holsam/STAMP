@@ -4,13 +4,11 @@ STAMP: logging set up and handling
 
 # Import external dependencies
 import shlex, sys
+from os import access, W_OK
 from dataclasses import asdict, is_dataclass
 from loguru import logger as logger
 from pathlib import Path
 from pydantic import BaseModel
-
-# Import internal STAMP objects
-import stamp.utils.io as io
 
 # DEFAULT_LOG_NAME: default filename for log file
 DEFAULT_LOG_NAME = 'stamp.log'
@@ -82,7 +80,7 @@ def resolve_log_directory(specified_dir: Path | None):
         dirs.insert(0, specified_dir)
     for d in dirs:
         # Get absolute path to directory
-        d = io._resolve_abspath(d)
+        d = d.expanduser().resolve()
         # If directory doesn't exist, try to create (logging warning if not possible)
         if not d.exists():
             try:
@@ -91,7 +89,7 @@ def resolve_log_directory(specified_dir: Path | None):
                 logger.warning(f'Could not create log file parent directory {d}')
                 continue
         # If directory is writable, return otherwise raise warning
-        if io._is_writable(d):
+        if access(d, W_OK):
             return d
         logger.warning(f'No write permissions for {d} to create log file')
     # If all options exhausted, raise an error

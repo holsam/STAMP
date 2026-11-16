@@ -13,6 +13,7 @@ from stamp.backends.base import ToolCommand
 from stamp.picking.consensus import build_particle_set, reconcile_picks_for_tomograms
 from stamp.picking.geometry import extract_surface
 from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks, resolve_priors
+from stamp.picking.manifests import cache_tomogram_picks, load_cached_picks, load_tomogram_manifests, manifest_paths
 from stamp.picking.vesicles import load_vesicle_labels, summarise_vesicles, vesicle_surface_area_angstrom2
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
@@ -20,11 +21,13 @@ from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import cache_tomogram_picks, cleanup_raw, load_cached_picks, load_tomogram_manifests, manifest_paths, paths_by_stem, read_mrc, write_sidecar
+from stamp.utils.io import cleanup_raw
 from stamp.utils.log import log
-from stamp.utils.parallel import run_parallel
+from stamp.utils.mrc import paths_by_stem, read_mrc
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
+from stamp.utils.parallel import run_parallel
 from stamp.utils.plotting.picks import plot_positions
+from stamp.utils.provenance import write_sidecar
 from stamp.utils.reporting import report_beam_angle_distribution
 
 # _import_picker: read one picks file, infer orientations per tomogram, cache under cache_dir and return the cached picks

@@ -11,7 +11,8 @@ from typing import Annotated, Literal
 from stamp.utils.options.cli import KeepRawOption, NProcessesOption, OutDirOption, PlotFormatOption, PlotsOption, RawDirOption, SegDirOption, VoxelSizeOption
 import stamp.commands.classify as classifyfuncs
 from stamp.decoy.validate import is_decoy_particle_set
-from stamp.utils.io import load_particle_set, resolve_output_dir
+from stamp.schemas.particles import load_particle_set
+from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
 from stamp.utils.options.literals import PlotFormat
 

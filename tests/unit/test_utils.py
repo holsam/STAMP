@@ -10,7 +10,10 @@ from pathlib import Path
 from stamp.schemas.config import PlotSettings
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.picking import manifests as manifests_utils
 from stamp.utils import io as io_utils
+from stamp.utils import mrc as mrc_utils
+from stamp.utils import provenance as prov_utils
 from stamp.utils.errors import StampConfigError, StampPipelineError, StampValidationError
 from stamp.utils.halfset import assign_half_sets, half_set_indices, validate_single_half_set
 from stamp.utils.log import configure_logging
@@ -124,48 +127,48 @@ class TestSplitHalfSet:
 
 class TestIo:
     def test_resolve_commit_reads_git_head(self):
-        assert io_utils.resolve_stamp_commit() != 'unknown'
+        assert prov_utils.resolve_stamp_commit() != 'unknown'
 
     def test_resolve_commit_falls_back_when_git_missing(self, monkeypatch):
         def _no_git(*args, **kwargs):
             raise FileNotFoundError
 
         monkeypatch.setattr(subprocess, 'run', _no_git)
-        monkeypatch.setattr(io_utils, 'version', lambda _name: '9.9.9')
-        assert io_utils.resolve_stamp_commit() == 'stamp-9.9.9'
+        monkeypatch.setattr(prov_utils, 'version', lambda _name: '9.9.9')
+        assert prov_utils.resolve_stamp_commit() == 'stamp-9.9.9'
 
     def test_checksum_is_stable_and_cache_hits(self, tmp_path):
         target = tmp_path / 'a.bin'
         target.write_bytes(b'stamp')
-        first = io_utils.checksum_file(target, cache_dir=tmp_path)
+        first = prov_utils.checksum_file(target, cache_dir=tmp_path)
         assert (tmp_path / '.stamp_checksums.json').is_file()
-        assert io_utils.checksum_file(target, cache_dir=tmp_path) == first
+        assert prov_utils.checksum_file(target, cache_dir=tmp_path) == first
 
     def test_directory_digest_changes_when_a_file_changes(self, tmp_path):
         directory = tmp_path / 'averages'
         directory.mkdir()
         (directory / 'c00.mrc').write_bytes(b'one')
-        before = io_utils.checksum_inputs([('class_averages', directory)])['class_averages']
+        before = prov_utils.checksum_inputs([('class_averages', directory)])['class_averages']
         (directory / 'c00.mrc').write_bytes(b'two')
-        after = io_utils.checksum_inputs([('class_averages', directory)])['class_averages']
+        after = prov_utils.checksum_inputs([('class_averages', directory)])['class_averages']
         assert before != after
 
     def test_directory_digest_sees_nested_files(self, tmp_path):
         nested = tmp_path / 'root' / 'a' / 'b'
         nested.mkdir(parents=True)
         (nested / 'x.txt').write_text('one')
-        before = io_utils.checksum_inputs([('root', tmp_path / 'root')])['root']
+        before = prov_utils.checksum_inputs([('root', tmp_path / 'root')])['root']
         (nested / 'x.txt').write_text('two')
-        after = io_utils.checksum_inputs([('root', tmp_path / 'root')])['root']
+        after = prov_utils.checksum_inputs([('root', tmp_path / 'root')])['root']
         assert before != after
 
     def test_missing_input_recorded_as_absent(self, tmp_path):        
-        assert io_utils.checksum_inputs([('gone', tmp_path / 'nope.mrc')]) == {'gone': 'absent'}
+        assert prov_utils.checksum_inputs([('gone', tmp_path / 'nope.mrc')]) == {'gone': 'absent'}
 
     def test_write_sidecar_round_trips(self, tmp_path):
         an_input = tmp_path / 'particle_set.json'
         an_input.write_text('{}')
-        path = io_utils.write_sidecar(
+        path = prov_utils.write_sidecar(
             tmp_path / 'out',
             stage='classify',
             tool='stamp-native-classifier',
@@ -184,18 +187,18 @@ class TestIo:
     def test_class_average_mrc_round_trip(self, tmp_path):
         average = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
         path = tmp_path / 'c00.mrc'
-        io_utils.write_class_average_mrc(path, average, voxel_size=2.5)
-        loaded, voxel_size = io_utils.read_class_average_mrc(path)
+        mrc_utils.write_class_average_mrc(path, average, voxel_size=2.5)
+        loaded, voxel_size = mrc_utils.read_class_average_mrc(path)
         assert np.array_equal(loaded, average) and voxel_size == 2.5
         with mrcfile.open(path) as mrc:
             assert mrc.data.shape == (4, 3, 2)
 
     def test_require_voxel_size(self, tmp_path):
-        assert io_utils.require_voxel_size(2.5, None) == 2.5
+        assert mrc_utils.require_voxel_size(2.5, None) == 2.5
         with pytest.raises(StampPipelineError):
-            io_utils.require_voxel_size(None, None)
+            mrc_utils.require_voxel_size(None, None)
         with pytest.raises(StampPipelineError):
-            io_utils.require_voxel_size(None, [])
+            mrc_utils.require_voxel_size(None, [])
 
     def test_cleanup_raw(self, tmp_path):
         directory = tmp_path / 'raw'
@@ -219,7 +222,7 @@ class TestIo:
             with mrcfile.new(tmp_path / f'{name}.mrc') as mrc:
                 mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
                 mrc.voxel_size = 7.0
-        manifests = io_utils.load_tomogram_manifests(None, tmp_path, None)
+        manifests = manifests_utils.load_tomogram_manifests(None, tmp_path, None)
         assert sorted(m.tomogram_id for m in manifests) == ['t0', 't1']
         assert all(m.segmentation_path is None and m.voxel_size_angstrom == 7.0 for m in manifests)
 
@@ -227,27 +230,27 @@ class TestIoMatchByStem:
     def test_exact_match(self) -> None:
         raw = [Path('/raw/tomo000.mrc'), Path('/raw/tomo001.mrc')]
         seg = [Path('/seg/tomo000.mrc')]
-        matched, unmatched = io_utils.match_by_stem(seg, raw)
+        matched, unmatched = manifests_utils.match_by_stem(seg, raw)
         assert matched == {seg[0]: raw[0]}
         assert unmatched == []
 
     def test_prefix_match_with_suffix(self) -> None:
         raw = [Path('/raw/Position_1_stack_Vol.mrc')]
         seg = [Path('/seg/Position_1_stack_Vol.denoised_segmented.mrc')]
-        matched, unmatched = io_utils.match_by_stem(seg, raw)
+        matched, unmatched = manifests_utils.match_by_stem(seg, raw)
         assert matched == {seg[0]: raw[0]}
         assert unmatched == []
 
     def test_prefix_match_is_not_ambiguous_across_similar_stems(self) -> None:
         raw = [Path('/raw/Position_1.mrc'), Path('/raw/Position_10.mrc')]
         seg = [Path('/seg/Position_10.denoised_segmented.mrc')]
-        matched, unmatched = io_utils.match_by_stem(seg, raw)
+        matched, unmatched = manifests_utils.match_by_stem(seg, raw)
         assert matched == {seg[0]: raw[1]}
 
     def test_unmatched_when_no_prefix_found(self) -> None:
         raw = [Path('/raw/tomo000.mrc')]
         seg = [Path('/seg/orphan.mrc')]
-        matched, unmatched = io_utils.match_by_stem(seg, raw)
+        matched, unmatched = manifests_utils.match_by_stem(seg, raw)
         assert matched == {}
         assert unmatched == seg
 
@@ -257,20 +260,20 @@ class TestIoReadVoxelSizeAngstrom:
         with mrcfile.new(path, overwrite=True) as mrc:
             mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
             mrc.voxel_size = 13.48
-        assert io_utils.read_voxel_size_angstrom(path) == pytest.approx(13.48, abs=1e-2)
+        assert mrc_utils.read_voxel_size_angstrom(path) == pytest.approx(13.48, abs=1e-2)
 
     def test_zero_voxel_size_is_none(self, tmp_path: Path) -> None:
         path = tmp_path / 'tomo.mrc'
         with mrcfile.new(path, overwrite=True) as mrc:
             mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
-        assert io_utils.read_voxel_size_angstrom(path) is None
+        assert mrc_utils.read_voxel_size_angstrom(path) is None
 
     def test_noncubic_voxel_size_warns_and_returns_x(self, tmp_path: Path, caplog) -> None:
         path = tmp_path / 'tomo.mrc'
         with mrcfile.new(path, overwrite=True) as mrc:
             mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
             mrc.voxel_size = (10.0, 10.0, 12.0)
-        assert io_utils.read_voxel_size_angstrom(path) == pytest.approx(10.0, abs=1e-2)
+        assert mrc_utils.read_voxel_size_angstrom(path) == pytest.approx(10.0, abs=1e-2)
 
 class TestIoResolveDirectoryVoxelSizeAngstrom:
     def test_uniform_voxel_size(self, tmp_path: Path, caplog) -> None:
@@ -281,7 +284,7 @@ class TestIoResolveDirectoryVoxelSizeAngstrom:
                 mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
                 mrc.voxel_size = 10.0
             paths.append(path)
-        assert io_utils.resolve_directory_voxel_size_angstrom(paths) == pytest.approx(10.0, abs=1e-2)
+        assert mrc_utils.resolve_directory_voxel_size_angstrom(paths) == pytest.approx(10.0, abs=1e-2)
         assert 'Multiple voxel sizes' not in caplog.text
 
     def test_disagreeing_voxel_sizes_uses_most_common(self, tmp_path: Path, caplog) -> None:
@@ -293,50 +296,50 @@ class TestIoResolveDirectoryVoxelSizeAngstrom:
                 mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
                 mrc.voxel_size = size
             paths.append(path)
-        assert io_utils.resolve_directory_voxel_size_angstrom(paths) == pytest.approx(10.0, abs=1e-2)
+        assert mrc_utils.resolve_directory_voxel_size_angstrom(paths) == pytest.approx(10.0, abs=1e-2)
         assert 'Multiple voxel sizes were found' in caplog.text
 
     def test_no_headers_returns_none(self, tmp_path: Path) -> None:
         path = tmp_path / 'a.mrc'
         with mrcfile.new(path, overwrite=True) as mrc:
             mrc.set_data(np.zeros((4, 4, 4), dtype=np.float32))
-        assert io_utils.resolve_directory_voxel_size_angstrom([path]) is None
+        assert mrc_utils.resolve_directory_voxel_size_angstrom([path]) is None
 
 class TestIoMrc:
     def test_round_trip(self, tmp_path: Path) -> None:
         path = tmp_path / 'a.mrc'
         data = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
-        io_utils.new_mrc(path, data, voxel_size=3.0)
-        assert np.array_equal(io_utils.read_mrc(path), data)
-        with io_utils.open_mrc(path, header_only=True) as mrc:
+        mrc_utils.new_mrc(path, data, voxel_size=3.0)
+        assert np.array_equal(mrc_utils.read_mrc(path), data)
+        with mrc_utils.open_mrc(path, header_only=True) as mrc:
             assert float(mrc.voxel_size.x) == 3.0
-        with io_utils.open_mrc(path, mmap=True) as mrc:
+        with mrc_utils.open_mrc(path, mmap=True) as mrc:
             assert mrc.data.shape == (2, 3, 4)
 
     def test_read_dtype(self, tmp_path: Path) -> None:
         path = tmp_path / 'a.mrc'
-        io_utils.new_mrc(path, np.ones((2, 2, 2), dtype=np.float32))
-        assert io_utils.read_mrc(path, dtype=np.float32).dtype == np.float32
-        assert io_utils.read_mrc(path, dtype=np.float64).dtype == np.float64
+        mrc_utils.new_mrc(path, np.ones((2, 2, 2), dtype=np.float32))
+        assert mrc_utils.read_mrc(path, dtype=np.float32).dtype == np.float32
+        assert mrc_utils.read_mrc(path, dtype=np.float64).dtype == np.float64
 
     def test_missing_file(self, tmp_path: Path) -> None:
         with pytest.raises(StampValidationError, match='not found'):
-            io_utils.read_mrc(tmp_path / 'nope.mrc')
+            mrc_utils.read_mrc(tmp_path / 'nope.mrc')
 
     def test_corrupt_file(self, tmp_path: Path) -> None:
         path = tmp_path / 'bad.mrc'
         path.write_bytes(b'not an mrc')
         with pytest.raises(StampValidationError):
-            io_utils.read_mrc(path)
+            mrc_utils.read_mrc(path)
 
     @pytest.mark.skipif(os.geteuid() == 0, reason='root ignores file modes')
     def test_unreadable_file(self, tmp_path: Path) -> None:
         path = tmp_path / 'a.mrc'
-        io_utils.new_mrc(path, np.ones((2, 2, 2), dtype=np.float32))
+        mrc_utils.new_mrc(path, np.ones((2, 2, 2), dtype=np.float32))
         path.chmod(0o000)
         try:
             with pytest.raises(StampValidationError, match='No permission'):
-                io_utils.read_mrc(path)
+                mrc_utils.read_mrc(path)
         finally:
             path.chmod(0o600)
 
@@ -345,30 +348,30 @@ class TestIoMrc:
         tmp_path.chmod(0o500)
         try:
             with pytest.raises(StampValidationError, match='No permission'):
-                io_utils.new_mrc(tmp_path / 'a.mrc', np.ones((2, 2, 2), dtype=np.float32))
+                mrc_utils.new_mrc(tmp_path / 'a.mrc', np.ones((2, 2, 2), dtype=np.float32))
         finally:
             tmp_path.chmod(0o700)
 
     def test_body_error_not_remapped(self, tmp_path: Path) -> None:
         path = tmp_path / 'a.mrc'
-        io_utils.new_mrc(path, np.ones((2, 2, 2), dtype=np.float32))
+        mrc_utils.new_mrc(path, np.ones((2, 2, 2), dtype=np.float32))
         with pytest.raises(OSError, match='boom'):
-            with io_utils.open_mrc(path):
+            with mrc_utils.open_mrc(path):
                 raise OSError('boom')
 
     def test_glob_mrc(self, tmp_path: Path) -> None:
         (tmp_path / 'b.mrc').touch()
         (tmp_path / 'a.mrc').touch()
-        assert [p.name for p in io_utils.glob_mrc(tmp_path)] == ['a.mrc', 'b.mrc']
+        assert [p.name for p in mrc_utils.glob_mrc(tmp_path)] == ['a.mrc', 'b.mrc']
         with pytest.raises(StampConfigError, match='Not a directory'):
-            io_utils.glob_mrc(tmp_path / 'missing')
+            mrc_utils.glob_mrc(tmp_path / 'missing')
 
     @pytest.mark.skipif(os.geteuid() == 0, reason='root ignores file modes')
     def test_glob_mrc_unreadable_directory(self, tmp_path: Path) -> None:
         tmp_path.chmod(0o000)
         try:
             with pytest.raises(StampConfigError, match='No permission'):
-                io_utils.glob_mrc(tmp_path)
+                mrc_utils.glob_mrc(tmp_path)
         finally:
             tmp_path.chmod(0o700)
 
@@ -481,11 +484,11 @@ class TestPhase:
         kept = np.fft.fftn(phase_randomise(volume, np.random.default_rng(1), keep=keep))
         assert np.allclose(kept[keep], np.fft.fftn(volume)[keep], atol=1e-3)
 
-# TestPickCache: class containing unit tests for cache_tomogram_picks and load_cached_picks in src/stamp/utils/io.py
+# TestPickCache: class containing unit tests for cache_tomogram_picks and load_cached_picks in src/stamp/picking/manifests.py
 class TestPickCache:
     def test_round_trip_and_truncated_file_is_skipped(self, tmp_path: Path) -> None:
         from stamp.schemas.picks import RawPick
-        from stamp.utils.io import cache_tomogram_picks, load_cached_picks
+        from stamp.picking.manifests import cache_tomogram_picks, load_cached_picks
         pick = RawPick(tomogram_id='t0', position=(1.0, 2.0, 3.0), source_picker='x')
         cache_tomogram_picks(tmp_path / 'cache', 't0', [pick])
         (tmp_path / 'cache' / 't1.json').write_text('[{"tomogram_id": ')  # truncated

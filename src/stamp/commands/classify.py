@@ -21,16 +21,19 @@ from stamp.classify.store import ParticleStore, build_store
 from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
+from stamp.picking.manifests import match_by_stem
 from stamp.run.state import stage_dir
 from stamp.utils.halfset import half_set_indices
-from stamp.schemas.particles import ClassAssignment, OrientationPrior, Particle
+from stamp.schemas.particles import ClassAssignment, OrientationPrior, Particle, load_particle_set
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import cleanup_raw, glob_mrc, load_particle_set, match_by_stem, paths_by_stem, require_voxel_size, write_sidecar
+from stamp.utils.io import cleanup_raw
 from stamp.utils.log import log, log_config
+from stamp.utils.mrc import glob_mrc, paths_by_stem, require_voxel_size
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
-from stamp.utils.plotting.core import central_slice, finish, plot_path
 from stamp.utils.options.literals import PlotFormat
+from stamp.utils.plotting.core import central_slice, finish, plot_path
+from stamp.utils.provenance import write_sidecar
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
 # run_classify: cluster picked particles by structural similarity per orientation prior

@@ -15,8 +15,8 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.picks import RawPick
 from stamp.utils.errors import StampError, StampValidationError
-from stamp.utils.io import read_mrc
 from stamp.utils.log import log
+from stamp.utils.mrc import read_mrc
 
 # CSV_REQUIRED: columns every CSV picks file must carry
 CSV_REQUIRED = ('tomogram_id', 'x', 'y', 'z')

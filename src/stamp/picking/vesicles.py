@@ -9,8 +9,8 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.utils.errors import StampValidationError
-from stamp.utils.io import read_mrc
 from stamp.utils.log import log
+from stamp.utils.mrc import read_mrc
 
 # VESICLE_ID_TEMPLATE: '{tomogram_id}:v{label:04d}', built from EValuator's own integer label
 VESICLE_ID_TEMPLATE = '{tomogram_id}:v{label:04d}'

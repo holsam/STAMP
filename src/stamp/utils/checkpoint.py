@@ -7,8 +7,8 @@ import json, numpy as np, os, shutil
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.utils.io import checksum_file
 from stamp.utils.log import log
+from stamp.utils.provenance import checksum_file
 
 # _CHECKPOINT_NAME: fingerprint file stored inside the working directory
 _CHECKPOINT_NAME = 'checkpoint.json'

@@ -15,8 +15,8 @@ from stamp.identify.fit import rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.identify.register import register_score
 from stamp.identify.simulate import simulate_density
-from stamp.utils.io import new_mrc
 from stamp.schemas.particles import OrientationPrior
+from stamp.utils.mrc import new_mrc
 from synthetic import asymmetric_object
 
 # _REGISTER_BOX: box edge of the registration tests

@@ -3,7 +3,9 @@ STAMP: particle-level schema
 '''
 
 # Import external dependencies
+import json
 from enum import Enum
+from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
@@ -75,3 +77,11 @@ class IdentificationResult(BaseModel):
     fit_score: float
     method: str
     score_gap_to_runner_up: float | None = None
+
+# load_particle_set: validate a ParticleSet JSON file
+def load_particle_set(path: Path) -> ParticleSet:
+    return ParticleSet.model_validate(json.loads(path.read_text()))
+
+# load_class_assignments: validate a list of ClassAssignment rows from a JSON file
+def load_class_assignments(path: Path) -> list[ClassAssignment]:
+    return [ClassAssignment.model_validate(row) for row in json.loads(path.read_text())]

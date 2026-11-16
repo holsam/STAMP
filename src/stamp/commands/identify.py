@@ -24,13 +24,14 @@ from stamp.identify.panel import Candidate, load_candidate_panel
 from stamp.identify.simulate import simulate_density, to_comparable
 from stamp.utils.checkpoint import atomic_write_json, directory_signatures, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import glob_mrc, read_class_average_mrc, write_sidecar
 from stamp.utils.log import log
-from stamp.utils.parallel import run_parallel
-from stamp.utils.options.argv import plot_argv
-from stamp.utils.plotting.core import finish, plot_path
+from stamp.utils.mrc import glob_mrc, read_class_average_mrc
 from stamp.utils.options.literals import PlotFormat
+from stamp.utils.options.argv import plot_argv
+from stamp.utils.parallel import run_parallel
+from stamp.utils.plotting.core import finish, plot_path
 from stamp.utils.plotting.identify import decoy_hist, score_heatmap
+from stamp.utils.provenance import write_sidecar
 
 # _CLASS_ID: leading {prior}-cNN token of a class-average filename
 _CLASS_ID = re.compile(rf'^((?:{"|".join(prior.value for prior in OrientationPrior)})-c\d+)')

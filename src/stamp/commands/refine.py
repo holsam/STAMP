@@ -20,14 +20,15 @@ from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
 )
 from stamp.run.state import stage_dir
-from stamp.schemas.particles import ClassAssignment
+from stamp.schemas.particles import ClassAssignment, load_class_assignments, load_particle_set
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
-from stamp.utils.io import load_class_assignments, load_particle_set, new_mrc, read_mrc, require_voxel_size, write_sidecar
 from stamp.utils.log import log
+from stamp.utils.mrc import new_mrc, read_mrc, require_voxel_size
 from stamp.utils.options.argv import plot_argv
 from stamp.utils.plotting.core import finish, plot_path
 from stamp.utils.plotting.refine import fsc_curve
+from stamp.utils.provenance import write_sidecar
 
 # _ADAPTERS: real refine adapters by --tool name
 _ADAPTERS = {'relion': RelionRefineAdapter, 'm': MRefineAdapter}
