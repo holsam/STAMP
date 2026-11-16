@@ -7,81 +7,27 @@ import json, numpy as np
 from pathlib import Path
 
 # Import STAMP objects
-from stamp.adapters.base import AdapterInputs
 from stamp.adapters.m_refine import MRefineAdapter
 from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.relion import RelionRefineAdapter
 from stamp.backends.base import ToolCommand
 from stamp.backends.factory import check_backend_supports, select_runner
-from stamp.utils.rotation import quaternion_to_matrix
-from stamp.picking.geometry import compose_roll_about_normal
 from stamp.refine.fsc import compute_fsc, soft_sphere_mask, write_fsc_files
 from stamp.refine.halfset_guard import (
-    assert_distinct_references, refine_output_tree, split_class_by_half,
+    assert_distinct_references, full_poses, half_map, refine_output_tree, run_half, seed_reference, split_class_by_half, with_inplane,
 )
 from stamp.run.state import stage_dir
-from stamp.schemas.particles import ClassAssignment, load_class_assignments, load_particle_set
+from stamp.schemas.particles import load_class_assignments, load_particle_set
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
 from stamp.utils.log import log
-from stamp.utils.mrc import new_mrc, read_mrc, require_voxel_size
+from stamp.utils.mrc import read_mrc, require_voxel_size
 from stamp.utils.options.argv import plot_argv
 from stamp.utils.plotting.refine import plot_fsc
 from stamp.utils.provenance import write_sidecar
 
 # _ADAPTERS: real refine adapters by --tool name
 _ADAPTERS = {'relion': RelionRefineAdapter, 'm': MRefineAdapter}
-
-# _seed_reference: this class + half's class average, from the class_averages dir
-def _seed_reference(class_averages_dir: Path, class_id: str, half: str) -> Path:
-    matches = sorted(class_averages_dir.glob(f'{class_id}_half{half}_*.mrc'))
-    if not matches:
-        raise StampPipelineError(f'No class average for {class_id} half {half} in {class_averages_dir}')
-    return matches[0]
-
-# _half_map: a half-map finished by an earlier run, still in its half directory or already moved to the class directory, else None
-def _half_map(tree: dict[str, Path], half: str) -> Path | None:
-    for directory in (tree[half], tree['combined']):
-        candidate = directory / f'final_{half}.mrc'
-        if candidate.is_file():
-            return candidate
-    return None
-
-# _with_inplane: return a copy of the particle with the estimated in-plane roll folded into its orientation
-def _with_inplane(particle, angle_by_particle: dict[str, float]):
-    angle = angle_by_particle.get(particle.particle_id)
-    if angle is None or particle.orientation is None:
-        return particle
-    return particle.model_copy(update={'orientation': compose_roll_about_normal(particle.orientation, angle)})
-
-# _full_poses: {particle_id: (rotation matrix, shift)} for assignments the polish step posed, which replace the in-plane angle
-def _full_poses(assignments: list[ClassAssignment]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
-    return {row.particle_id: (quaternion_to_matrix(row.rotation), np.array(row.shift_voxels if row.shift_voxels is not None else (0.0, 0.0, 0.0))) for row in assignments if row.rotation is not None}
-
-# _run_half: one independent half-set refinement, returns the final map path
-def _run_half(adapter, runner, particles, reference, workdir, parameters, backend) -> Path:
-    inputs = AdapterInputs(
-        input_paths=[reference],
-        output_directory=workdir,
-        parameters=parameters,
-    )
-    if backend != 'mock':
-        adapter.write_particle_star(particles, workdir / 'particles.star', {}, poses=parameters.get('poses'), voxel_size_angstrom=parameters['voxel_size_angstrom'])
-    command = adapter.build_command(inputs)
-    log.debug(f'{workdir.name}: dispatching {adapter.name} refinement')
-    result = runner.run(command)
-    if not result.succeeded:
-        raise StampPipelineError(f'Refine failed for {workdir.name}: {result.stderr}')
-    final_map = workdir / f'final_{workdir.name[-1]}.mrc'
-    if backend == 'mock':
-        log.debug(f'{workdir.name}: mock backend, synthesising final map from the seed reference')
-        # mock backend runs nothing; synthesise a deterministic map from the seed
-        seed = read_mrc(reference, dtype=np.float32)
-        new_mrc(final_map, seed)
-    else:
-        produced = adapter.parse_output(result).parsed['final_map']
-        Path(produced).replace(final_map)
-    return final_map
 
 # run_refine: refine one class (or all) with structurally independent half-sets
 def run_refine(
@@ -104,7 +50,7 @@ def run_refine(
     voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir)
     particle_set = load_particle_set(particles)
     assignments = load_class_assignments(class_assignments)
-    poses = _full_poses(assignments)
+    poses = full_poses(assignments)
     angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None and row.particle_id not in poses}    # a full pose already contains the in-plane angle
     class_averages_dir = class_assignments.parent / 'class_averages'
     identified = {row['cluster_id'] for row in json.loads(identification.read_text())}
@@ -123,10 +69,10 @@ def run_refine(
             raise StampPipelineError('--combined-halfset escape hatch is A2 future work')
         try:
             half_a, half_b = split_class_by_half(target, assignments, particle_set.particles)
-            half_a = [_with_inplane(p, angle_by_particle) for p in half_a]
-            half_b = [_with_inplane(p, angle_by_particle) for p in half_b]
-            reference_a = _seed_reference(class_averages_dir, target, 'A')
-            reference_b = _seed_reference(class_averages_dir, target, 'B')
+            half_a = [with_inplane(p, angle_by_particle) for p in half_a]
+            half_b = [with_inplane(p, angle_by_particle) for p in half_b]
+            reference_a = seed_reference(class_averages_dir, target, 'A')
+            reference_b = seed_reference(class_averages_dir, target, 'B')
             assert_distinct_references(reference_a, reference_b)
 
             # everything that changes a half-map; mask, threshold and plots only affect the FSC that always reruns, so they can change between runs
@@ -143,14 +89,14 @@ def run_refine(
                 log.info(f'{target}: found matching partial output, resuming')
             tree = refine_output_tree(output_dir, target)
 
-            final_a = _half_map(tree, 'A')
+            final_a = half_map(tree, 'A')
             if final_a is None:
-                final_a = _run_half(adapter, runner, half_a, reference_a, tree['A'], parameters, backend)
+                final_a = run_half(adapter, runner, half_a, reference_a, tree['A'], parameters)
             else:
                 log.info(f'{target}: half A loaded from checkpoint')
-            final_b = _half_map(tree, 'B')
+            final_b = half_map(tree, 'B')
             if final_b is None:
-                final_b = _run_half(adapter, runner, half_b, reference_b, tree['B'], parameters, backend)
+                final_b = run_half(adapter, runner, half_b, reference_b, tree['B'], parameters)
             else:
                 log.info(f'{target}: half B loaded from checkpoint')
 

@@ -3,12 +3,15 @@ STAMP: mock adapter for testing
 '''
 
 # Import external dependencies
+import numpy as np
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # Import internal STAMP classes
 from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
 from stamp.utils.log import log
+from stamp.utils.mrc import new_mrc, read_mrc
 
 # MockAdapter: a class for stand-in adapters for named tools
 @dataclass
@@ -32,6 +35,15 @@ class MockAdapter:
 
     def parse_output(self, result: RunResult) -> AdapterOutput:
         return AdapterOutput(output_paths=[], parsed=dict(self.canned_parsed))
+
+    # write_particle_star: a mock run writes no particle file
+    def write_particle_star(self, *args, **kwargs) -> None:
+        return None
+
+    # collect_final_map: a mock run produces no map, so synthesise a deterministic one from the seed reference
+    def collect_final_map(self, result: RunResult, reference: Path, final_map: Path) -> None:
+        log.debug(f'{final_map.parent.name}: mock backend, synthesising final map from the seed reference')
+        new_mrc(final_map, read_mrc(reference, dtype=np.float32))
 
 
 # _canned_picks_for: stub parsed-output for a mock picker
