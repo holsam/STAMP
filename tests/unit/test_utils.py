@@ -12,7 +12,7 @@ from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.schemas.provenance import ProvenanceSidecar
 from stamp.utils import io as io_utils
 from stamp.utils.errors import StampConfigError, StampPipelineError, StampValidationError
-from stamp.utils.halfset import assign_half_sets, split_by_half_set, validate_single_half_set
+from stamp.utils.halfset import assign_half_sets, half_set_indices, validate_single_half_set
 from stamp.utils.log import configure_logging
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
@@ -113,15 +113,14 @@ class TestValidateHalfSet:
 
 class TestSplitHalfSet:
     '''A list of particles from different half sets should be split into separate lists'''
-    def test_split_by_half_set(self) -> None:
+    def test_half_set_indices(self) -> None:
         particles = [
             _particle('p001', HalfSet.A),
             _particle('p002', HalfSet.B),
             _particle('p003', HalfSet.A),
         ]
-        half_a, half_b = split_by_half_set(particles)
-        assert {p.particle_id for p in half_a} == {'p001', 'p003'}
-        assert {p.particle_id for p in half_b} == {'p002'}
+        assert half_set_indices(particles) == {HalfSet.A: [0, 2], HalfSet.B: [1]}
+        assert half_set_indices([]) == {HalfSet.A: [], HalfSet.B: []}
 
 class TestIo:
     def test_resolve_commit_reads_git_head(self):

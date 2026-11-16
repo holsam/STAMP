@@ -22,8 +22,8 @@ from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.run.state import stage_dir
-from stamp.utils.halfset import split_by_half_set
-from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle
+from stamp.utils.halfset import half_set_indices
+from stamp.schemas.particles import ClassAssignment, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import cleanup_raw, glob_mrc, load_particle_set, match_by_stem, paths_by_stem, require_voxel_size, write_sidecar
@@ -393,8 +393,7 @@ def _classify_combined(
     full = ParticleStore(subvols, orientations, *tilt)
     scale = subvols.box_voxels / working_voxels     # polish shifts are in working voxels
     averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
-    for half_set in (HalfSet.A, HalfSet.B):
-        half_indices = [i for i, particle in enumerate(particles) if particle.half_set == half_set]
+    for half_set, half_indices in half_set_indices(particles).items():
         if not half_indices:
             continue
         averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale, polish_config.prior)
@@ -419,9 +418,7 @@ def _classify_strict(
     work_dir: Path,
     voxel_size_angstrom: float,
 ) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
-    half_a, half_b = split_by_half_set(list(particles))
-    index_of = {particle.particle_id: i for i, particle in enumerate(particles)}
-    members = {'A': [index_of[p.particle_id] for p in half_a], 'B': [index_of[p.particle_id] for p in half_b]}
+    members = {half.value: indices for half, indices in half_set_indices(list(particles)).items()}
     if not members['A'] or not members['B']:
         raise StampPipelineError('Strict mode needs particles in both half-sets')
     seeds = {half: reduce_and_cluster(features[indices], config) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
