@@ -98,7 +98,7 @@ def decoy(
             raise StampPipelineError('--method random-volume requires --real-particle-set and -r/--raw-dir')
     elif method == 'shifted':
         if any([real_particle_set is None, segmentation_dir is None, raw_tomogram_dir is None]):
-            raise StampPipelineError(f'--method {method} requires --real-particle-set, -s/--seg-dir and -r/--raw--dir')
+            raise StampPipelineError(f'--method {method} requires --real-particle-set, -s/--seg-dir and -r/--raw-dir')
     else:
         if all([voxel_size_angstrom is None, segmentation_dir is None, raw_tomogram_dir is None]):
             raise StampPipelineError(f'--method {method} requires one of --voxel-size-a, -s/--seg-dir or -r/--raw-dir to be set.')
