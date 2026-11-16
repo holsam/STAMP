@@ -26,7 +26,7 @@ stamp_app.add_typer(pick.pickCli)
 stamp_app.add_typer(decoy.decoyCli)
 stamp_app.add_typer(classify.classifyCli)
 stamp_app.add_typer(identify.identifyCli)
-stamp_app.add_typer(refine.refineCli)
+stamp_app.add_typer(refine.refineCli, name='refine', help='Prepare RELION half-set refinements and assess the results.')
 stamp_app.add_typer(filter.filterCli)
 stamp_app.add_typer(
     plot.plotCli,

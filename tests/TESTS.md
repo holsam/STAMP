@@ -48,7 +48,7 @@ File | Covers
 `test_identify_command.py` | `stamp identify` command (including decoy-control comparison)
 `test_pick_command.py` | `stamp pick` command
 `test_plot_command.py` | `stamp plot` command group
-`test_refine_command.py` | `stamp refine` command (including half-set tree layout)
+`test_refine_command.py` | `stamp refine prepare` (disjoint half-set inputs, mixed-class rejection) and `stamp refine assess` (end-to-end FSC, same-directory and unrefined-seed rejection)
 
 ### `tests/unit/`
 Each module (directory) within `src/stamp` has a unit test file, containing a test class for each file within the module.
@@ -64,7 +64,7 @@ File | Covers
 `test_identify.py` | Candidate panel loading, fitting, ranking, decoy-control evaluation
 `test_importers.py` | Pick file readers (CSV, STAR, JSON), tomogram id mapping, orientation inference
 `test_picking.py` | Surface extraction, quaternion orientation, beam angle, consensus reconciliation, vesicle labelling
-`test_refine.py` | Half-set splitting/guards, FSC computation, refine output tree
+`test_refine.py` | Half-set splitting/guards, independent-output checks, FSC computation, refine output tree, RELION pose export
 `test_schemas.py` | Pydantic model validation (`Particle`, `RawPick`, etc.), including rejection of bad input
 `test_utils.py` | Half-set assignment determinism, I/O helpers, logging setup
 
