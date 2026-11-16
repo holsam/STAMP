@@ -10,8 +10,8 @@ from skimage import measure
 from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
 
-# extract_surface: extract a membrane surface from a binary segmentation, returning (vertices, normals)
-def extract_surface(segmentation: np.ndarray, level: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+# mesh_surface: marching cubes on a binary segmentation at level, returning (vertices, faces, normals); StampValidationError when there is no surface
+def mesh_surface(segmentation: np.ndarray, level: float = 0.5) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if not np.any(segmentation > level):
         raise StampValidationError('Segmentation contains no voxels above the surface level; nothing to extract')
     try:
@@ -20,9 +20,14 @@ def extract_surface(segmentation: np.ndarray, level: float = 0.5) -> tuple[np.nd
         raise StampValidationError(f'Surface extraction failed: {exc}') from exc
     if vertices.shape[0] == 0:
         raise StampValidationError('Surface extraction produced no vertices')
+    log.debug(f'Extracted surface: {len(vertices)} vertices, {len(faces)} faces')
+    return vertices, faces, normals
+
+# extract_surface: extract a membrane surface from a binary segmentation, returning (vertices, normals)
+def extract_surface(segmentation: np.ndarray, level: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+    vertices, _faces, normals = mesh_surface(segmentation, level)
     lengths = np.linalg.norm(normals, axis=1, keepdims=True)
     lengths[lengths == 0.0] = 1.0
-    log.debug(f'Extracted surface: {len(vertices)} vertices, {len(faces)} faces')
     return vertices, normals / lengths
 
 # compose_roll_about_normal: quaternion for "roll by angle_degrees about +z, then map +z onto the normal"
