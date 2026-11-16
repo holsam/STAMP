@@ -16,6 +16,7 @@ def install_completion(shell):
         installed_shell, path = typer_install_completion(shell=shell, prog_name=PROG_NAME, complete_var=COMPLETE_VAR)
     except Exception as exc:
         print(f'[bold red]\\[ERROR][/bold red] Could not install completion: {exc}.')
+        raise SystemExit(1)
     print(f'[bold green]\\[SUCCESS][/bold green] {installed_shell} completion installed at: [cyan]{path}[/cyan]')
     print('Start a new shell session for it to take effect or use command:')
     print(f'\tsource {path}')
