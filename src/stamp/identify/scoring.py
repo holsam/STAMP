@@ -52,7 +52,7 @@ def _load_score(checkpoint_dir: Path | None, class_id: str, candidate_name: str)
         return None
 
 # score_panel: fit every candidate to every class average, each finished fit checkpointed in checkpoint_dir when given, returns {class_id: {candidate: score}}
-def score_panel(class_averages, panel, resolution, fitter, backend, n_workers: int = 1, checkpoint_dir: Path | None = None):
+def score_panel(class_averages, panel, resolution, fitter, n_workers: int = 1, checkpoint_dir: Path | None = None):
     all_scores: dict[str, dict[str, float]] = {class_id: {} for class_id in class_averages}
     jobs = []
     for class_id, (average, voxel_size) in class_averages.items():

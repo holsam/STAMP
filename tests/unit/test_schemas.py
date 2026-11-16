@@ -9,7 +9,6 @@ from pathlib import Path
 from pydantic import ValidationError
 
 # Import schemas
-from stamp.schemas.config import RunSettings
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import (
     ClassAssignment,
@@ -225,13 +224,3 @@ def test_particle_set_round_trips_prior() -> None:
     loaded = ParticleSet.model_validate(legacy)
     assert loaded.particles[0].prior is OrientationPrior.NORMAL
     assert ParticleSet.model_validate(loaded.model_dump(mode='json')) == loaded
-
-
-# test_run_settings_orientation_prior: the run table accepts a prior and a tilt range and rejects an impossible tilt
-def test_run_settings_orientation_prior() -> None:
-    base = dict(segmentation_dir='s', raw_tomogram_dir='r', output_dir='o')
-    settings = RunSettings(**base, orientation_prior='axis', tilt_max_degrees=60.0, tilt_axis_degrees=85.0)
-    assert settings.orientation_prior is OrientationPrior.AXIS
-    assert RunSettings(**base).tilt_max_degrees is None
-    with pytest.raises(ValidationError):
-        RunSettings(**base, tilt_max_degrees=95.0)

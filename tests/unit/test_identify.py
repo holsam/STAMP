@@ -46,7 +46,7 @@ class TestAlignedIdentify:
         (tmp_path / 'candidates.yaml').write_text('candidates:\n  - name: a\n    structure_path: a.pdb\n  - name: b\n    structure_path: b.pdb\n')
         panel = load_candidate_panel(tmp_path / 'candidates.yaml')
         average = rotate_density(simulate_density(tmp_path / 'a.pdb', 25, 4.0, 16.0), Rotation.random(random_state=3).as_matrix())
-        scores = score_panel({'none-c00': (average, 4.0)}, panel, 16.0, 'native', 'local')['none-c00']
+        scores = score_panel({'none-c00': (average, 4.0)}, panel, 16.0, 'native')['none-c00']
         assert scores['a'] > 0.9 and scores['a'] > scores['b'] + 0.08
 
 # TestClassPriors: class containing tests for reading the orientation prior from class ids

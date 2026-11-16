@@ -14,16 +14,13 @@ from stamp.classify.polish import PolishConfig
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.shfeatures import build_sh_feature_matrix
 from stamp.classify.features import build_feature_matrix
-from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.picking.manifests import match_by_stem
-from stamp.run.state import stage_dir
 from stamp.schemas.particles import ClassAssignment, OrientationPrior, Particle, load_particle_set
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import cleanup_raw
 from stamp.utils.log import log, log_config
 from stamp.utils.mrc import glob_mrc, paths_by_stem, require_voxel_size
-from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.provenance import write_sidecar
 from stamp.utils.plotting.classify import plot_classify
 from stamp.classify.settings import GroupSettings
@@ -221,43 +218,3 @@ def _classify_prior(
     classify = classify_strict if settings.strict_halfset_independence else classify_combined
     assignments, result_by_half, averages_by_half = classify(kept, subvols, features, settings, polish_config, output_dir, work_dir)
     return _GroupResult(assignments, kept, skipped, result_by_half, averages_by_half)
-
-# build_classify_commands: create ToolCommand for `stamp classify`
-def build_classify_commands(config, output_dir: Path, track: str = 'real') -> list[ToolCommand]:
-    pick_name = 'particle_set.json' if track == 'real' else 'decoy_particle_set.json'
-    particles = stage_dir(output_dir, track, 'pick') / pick_name
-    target = stage_dir(output_dir, track, 'classify')
-    settings = config.stage.classify
-    argv = [
-        'stamp', 'classify',
-        '--particles', str(particles),
-        '--raw-dir', str(config.run.raw_tomogram_dir),
-        '--out-dir', str(target),
-        '--voxel-size-a', str(config.run.voxel_size_angstrom),
-        '--box-length-a', str(settings.box_angstrom),
-        '--n-bins', str(settings.n_radial_bins),
-        '--method', settings.method,
-        '--min-cluster-size', str(settings.min_cluster_size),
-        '--n-clusters', str(settings.n_clusters),
-        '--n-components', str(settings.n_components),
-        '--seed', str(settings.random_state),
-        '--inplane-step-deg', str(settings.inplane_angular_step_degrees),
-        '-n', str(settings.n_workers),
-        '--tilt-axis', str(config.run.tilt_axis_degrees),
-        '--bin-factor', str(settings.bin_factor),
-        '--n-rots', str(settings.n_rotations),
-        '--shift-range', str(settings.shift_range_voxels),
-        '--polish-rounds', str(settings.polish_rounds),
-        '--null-sigmas', str(settings.null_sigmas),
-        '--reject-quantile', str(settings.reject_quantile),
-        '--merge-fraction', str(settings.merge_fraction),
-    ]
-    if config.run.tilt_max_degrees is not None:
-        argv += ['--tilt-max', str(config.run.tilt_max_degrees)]
-    argv += seg_dir_argv(config.run.segmentation_dir)
-    if not settings.strict_halfset_independence:
-        argv.append('--no-strict-halfset-independence')
-    argv += keep_raw_argv(settings.keep_raw)
-    argv += plot_argv(config.plots)
-    return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
-

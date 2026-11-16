@@ -10,19 +10,16 @@ from pathlib import Path
 from stamp.adapters.m_refine import MRefineAdapter
 from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.relion import RelionRefineAdapter
-from stamp.backends.base import ToolCommand
 from stamp.backends.factory import check_backend_supports, select_runner
 from stamp.refine.fsc import compute_fsc, soft_sphere_mask, write_fsc_files
 from stamp.refine.halfset_guard import (
     assert_distinct_references, full_poses, half_map, refine_output_tree, run_half, seed_reference, split_class_by_half, with_inplane,
 )
-from stamp.run.state import stage_dir
 from stamp.schemas.particles import load_class_assignments, load_particle_set
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
 from stamp.utils.log import log
 from stamp.utils.mrc import read_mrc, require_voxel_size
-from stamp.utils.options.argv import plot_argv
 from stamp.utils.plotting.refine import plot_fsc
 from stamp.utils.provenance import write_sidecar
 
@@ -145,26 +142,3 @@ def run_refine(
     if failed_targets:
         raise StampPipelineError(f'{len(failed_targets)} of {len(targets)} class(es) failed: {", ".join(failed_targets)}')
     log.info(f'Refinement complete for {len(targets)} class(es)')
-
-# build_refine_commands: create ToolCommand for `stamp refine`
-def build_refine_commands(config, output_dir: Path) -> list[ToolCommand]:
-    target = stage_dir(output_dir, 'real', 'refine')
-    identify_dir = stage_dir(output_dir, 'real', 'identify')
-    argv = [
-        'stamp', 'refine',
-        '--class-id', config.stage.refine.class_id,
-        '--identification', str(identify_dir / 'identification.json'),
-        '--particles', str(stage_dir(output_dir, 'real', 'pick') / 'particle_set.json'),
-        '--class-assignments', str(stage_dir(output_dir, 'real', 'classify') / 'class_assignments.json'),
-        '--raw-dir', str(config.run.raw_tomogram_dir),
-        '--out-dir', str(target),
-        '--threshold', str(config.stage.refine.threshold),
-        '--voxel-size-a', str(config.run.voxel_size_angstrom),
-        '--tool', config.stage.refine.tool,
-        '--iterations', str(config.stage.refine.iterations),
-        '--backend', 'local',
-    ]
-    if config.stage.refine.mask is not None:
-        argv += ['--mask', str(config.stage.refine.mask)]
-    argv += plot_argv(config.plots)
-    return [ToolCommand(tool='refine', argv=argv, working_directory=target, output_paths=[target])]

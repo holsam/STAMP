@@ -11,26 +11,7 @@ from typer.testing import CliRunner
 from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
 from stamp.cli.cli import stamp_app
-from stamp.commands.classify import build_classify_commands
-from stamp.schemas.config import RunConfig
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
-
-# _CONFIG_DICT: minimal valid [run]/[decoy]/[stage] config for building classify commands
-_CONFIG_DICT = {
-    'run': {
-        'segmentation_dir': 'seg',
-        'raw_tomogram_dir': 'tomo',
-        'output_dir': 'out',
-        'voxel_size_angstrom': 13.48,
-        'backend': 'local',
-    },
-    'decoy': {'enabled': True},
-    'stage': {
-        'pick': {'picks_files': ['picks.csv']},
-        'identify': {'candidates': 'candidates.yaml', 'resolution': 25.0},
-        'refine': {'tool': 'relion', 'backend': 'local'},
-    },
-}
 
 # Initialise runner
 runner = CliRunner()
@@ -276,14 +257,3 @@ class TestClassifyCommand:
         monkeypatch.setattr(classify_module, '_classify_prior', fail_prior(OrientationPrior.NORMAL))
         single = self._invoke(single_root, '--no-strict-halfset-independence')
         assert single.exit_code != 0 and isinstance(single.exception, StampPipelineError) and str(single.exception) == 'boom'
-
-# TestBuildClassifyCommands: class containing tests for the classify argv built from the run config
-class TestBuildClassifyCommands:
-    # test_build_classify_commands_passes_polish_settings: the wedge and alignment settings reach the classify argv
-    def test_build_classify_commands_passes_polish_settings(self, tmp_path) -> None:
-        config = RunConfig.model_validate({**_CONFIG_DICT, 'run': {**_CONFIG_DICT['run'], 'tilt_max_degrees': 60.0, 'tilt_axis_degrees': 85.0}, 'stage': {**_CONFIG_DICT['stage'], 'classify': {'method': 'kmeans', 'n_rotations': 500}}})
-        argv = build_classify_commands(config, tmp_path)[0].argv
-        for flag, value in (('--method', 'kmeans'), ('--n-rots', '500'), ('--tilt-max', '60.0'), ('--tilt-axis', '85.0')):
-            assert argv[argv.index(flag) + 1] == value
-        default = build_classify_commands(RunConfig.model_validate(_CONFIG_DICT), tmp_path)[0].argv
-        assert '--tilt-max' not in default and default[default.index('--method') + 1] == 'leiden'

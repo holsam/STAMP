@@ -6,12 +6,10 @@ STAMP: consensus picking logic
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.backends.base import ToolCommand
 from stamp.picking.consensus import build_particle_set, reconcile_picks_for_tomograms
 from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks, resolve_priors
 from stamp.picking.manifests import cache_tomogram_picks, load_cached_picks, load_tomogram_manifests, manifest_paths
 from stamp.picking.vesicles import resolve_vesicle_labels, write_vesicle_summary
-from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.picks import RawPick
@@ -19,7 +17,6 @@ from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import cleanup_raw
 from stamp.utils.log import log
-from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
 from stamp.utils.provenance import write_sidecar
 from stamp.picking.reporting import report_beam_angle_distribution
@@ -184,25 +181,3 @@ def run_pick(
         plot_positions(particle_set.particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
     cleanup_raw(output_dir, keep_raw=keep_raw, label='imported pick cache')
-
-# build_pick_commands: the ToolCommand `stamp pick` would run for the real track, without running it
-def build_pick_commands(config, output_dir: Path) -> list[ToolCommand]:
-    target = stage_dir(output_dir, 'real', 'pick')
-    argv = [
-        'stamp', 'pick', *[str(path) for path in config.stage.pick.picks_files],
-        '--orientation-prior', config.run.orientation_prior.value,
-        '--raw-dir', str(config.run.raw_tomogram_dir),
-        '--out-dir', str(output_dir),
-        '--voxel-size-a', str(config.run.voxel_size_angstrom),
-        '--consensus-rule', config.stage.pick.consensus_rule,
-        '--distance-threshold', str(config.stage.pick.distance_threshold),
-        '--half-set-seed', str(config.stage.pick.half_set_seed),
-        '--max-surface-distance-a', str(config.stage.pick.max_surface_distance_angstrom),
-        '--n-processes', str(config.stage.pick.n_workers),
-    ]
-    argv += seg_dir_argv(config.run.segmentation_dir)
-    for name in config.stage.pick.picker_names or []:
-        argv += ['--name', name]
-    argv += plot_argv(config.plots, pick_options=True)
-    argv += keep_raw_argv(config.stage.pick.keep_raw)
-    return [ToolCommand(tool='pick', argv=argv, working_directory=target, output_paths=[target / 'particle_set.json'])]

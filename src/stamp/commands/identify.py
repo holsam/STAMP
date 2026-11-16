@@ -8,17 +8,14 @@ from pathlib import Path
 
 # Import STAMP objects
 from stamp.classify.cluster import prior_of_class
-from stamp.backends.base import ToolCommand
 from stamp.identify.averages import load_class_averages
 from stamp.identify.decoy_check import evaluate_decoy_control
 from stamp.identify.scoring import score_panel
-from stamp.run.state import stage_dir
 from stamp.identify.fit import rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.utils.checkpoint import directory_signatures, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.log import log
-from stamp.utils.options.argv import plot_argv
 from stamp.utils.plotting.identify import plot_identify
 from stamp.utils.provenance import write_sidecar
 
@@ -29,7 +26,6 @@ def run_identify(
     output_dir: Path,
     decoy_classes: Path | None,
     resolution: float | None,
-    backend: str,
     fitter: str,
     fetch_missing: bool,
     n_workers: int = 1,
@@ -44,7 +40,7 @@ def run_identify(
     class_averages = load_class_averages(classes)
     log.info(f'Loaded {len(class_averages)} class averages')
 
-    # everything that changes scores; n_workers, backend and plots are left out so a run can resume with different resources
+    # everything that changes scores; n_workers and plots are left out so a run can resume with different resources
     fingerprint = {
         'classes': directory_signatures(classes),
         'decoy_classes': directory_signatures(decoy_classes),
@@ -57,7 +53,7 @@ def run_identify(
         log.info('Found matching partial output, resuming')
 
     log.progress(f'Fitting {len(panel)} candidates against {len(class_averages)} classes')
-    real_scores = score_panel(class_averages, panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'real')
+    real_scores = score_panel(class_averages, panel, resolution, fitter, n_workers, checkpoint_dir / 'real')
     results = [rank_candidates(class_id, scores, method=f'stamp-{fitter}') for class_id, scores in sorted(real_scores.items())]
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -67,7 +63,7 @@ def run_identify(
     real_best, decoy_best = None, None
     if decoy_classes is not None:
         log.progress('Fitting candidates against decoy classes for control')
-        decoy_scores = score_panel(load_class_averages(decoy_classes, allow_empty=True), panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'decoy')
+        decoy_scores = score_panel(load_class_averages(decoy_classes, allow_empty=True), panel, resolution, fitter, n_workers, checkpoint_dir / 'decoy')
         real_best = [max(s.values()) for s in real_scores.values()]
         decoy_best = [max(s.values()) for s in decoy_scores.values()]
         decoy_control = evaluate_decoy_control(real_best, decoy_best)
@@ -89,7 +85,6 @@ def run_identify(
         tool_version=None,
         parameters={
             'fitter': fitter,
-            'backend': backend,
             'resolution_angstrom': resolution,
             'symmetry': 'C1',
             'orientation_priors': sorted({prior_of_class(class_id).value for class_id in class_averages}),
@@ -105,29 +100,6 @@ def run_identify(
 
     if make_plots:
         plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir, plot_format)
-
-# build_identify_commands: create ToolCommand for `stamp identify`
-def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
-    target = stage_dir(output_dir, 'real', 'identify')
-    real_classes = stage_dir(output_dir, 'real', 'classify') / 'class_averages'
-    decoy_classes = stage_dir(output_dir, 'decoy', 'classify') / 'class_averages'
-    argv = [
-        'stamp', 'identify',
-        '--classes', str(real_classes),
-        '--candidates', str(config.stage.identify.candidates),
-        '--out-dir', str(target),
-        '--fitter', config.stage.identify.fitter,
-        '--backend', 'local',
-        '-n', str(config.stage.identify.n_workers),
-    ]
-    if config.decoy.enabled:
-        argv += ['--decoy-classes', str(decoy_classes)]
-    if config.stage.identify.resolution is not None:
-        argv += ['--resolution', str(config.stage.identify.resolution)]
-    if config.stage.identify.fetch_missing:
-        argv.append('--fetch-missing')
-    argv += plot_argv(config.plots)
-    return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present
 def _write_report(path: Path, results, all_scores, decoy_control, resolution) -> None:
