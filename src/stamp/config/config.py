@@ -3,9 +3,8 @@ STAMP: manage a stamp_run.toml file
 '''
 
 # -- Import external dependencies
-import os, subprocess, typer, tomllib
+import os, subprocess
 from pathlib import Path
-from typing import Annotated, Literal
 
 # Import internal stamp objects
 from stamp.config.template import TEMPLATE

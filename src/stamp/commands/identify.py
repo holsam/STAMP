@@ -7,10 +7,6 @@ import json, shutil
 from pathlib import Path
 
 # Import STAMP objects
-from stamp.adapters.base import AdapterInputs
-from stamp.adapters.mock import get_mock_adapter
-from stamp.backends.local import LocalRunner
-from stamp.backends.mock import MockRunner
 from stamp.classify.cluster import prior_of_class
 from stamp.backends.base import ToolCommand
 from stamp.identify.averages import load_class_averages

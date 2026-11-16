@@ -3,8 +3,6 @@ STAMP: CLI for `stamp tools` command
 '''
 
 # Import external dependencies
-from pathlib import Path
-from typing import Annotated
 import typer
 
 # Import modules for tools commands
