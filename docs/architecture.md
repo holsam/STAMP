@@ -24,7 +24,7 @@ This document contains information about STAMP's architecture and implementation
 src/stamp/
   cli/            CLI Typer definitions (parse args then call commands)
   commands/       per-stage run orchestration via a run_<stage>() function, called by cli/ and run/
-  schemas/        pydantic models: config, particles, picks, manifest, provenance, cluster_profile
+  schemas/        pydantic models: particles, picks, manifest, provenance
   adapters/       ToolAdapter implementations: relion, m_refine, mock, (base protocol)
   backends/       Runner implementations: local, cluster, mock, (base protocol) + factory
   picking/        pick command scripts: picks importer, geometry primitives, vesicle labelling, consensus reconciliation

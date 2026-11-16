@@ -55,8 +55,6 @@ Each module (directory) within `src/stamp` has a unit test file, containing a te
 
 File | Covers
 -- | --
-`test_adapters.py` | `ToolAdapter` command building, output parsing, `runs_in_process` behaviour
-`test_backends.py` | `select_runner`, `check_backend_supports`, `LocalRunner`/`ClusterRunner`/`MockRunner`
 `test_classify.py` |  Extraction, coordinate-convention correctness, rotational/azimuthal features, clustering, class averages
 `test_cli.py` | Typer app wiring
 `test_decoy.py` | Decoy generation methods (`shifted`, `synthetic-noise`), `assert_comparable`
