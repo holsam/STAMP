@@ -3,7 +3,7 @@ STAMP: refinement with enforced half-set independence
 '''
 
 # Import external dependencies
-import json, matplotlib.pyplot as plt, numpy as np
+import json, numpy as np
 from pathlib import Path
 
 # Import STAMP objects
@@ -26,8 +26,7 @@ from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValid
 from stamp.utils.log import log
 from stamp.utils.mrc import new_mrc, read_mrc, require_voxel_size
 from stamp.utils.options.argv import plot_argv
-from stamp.utils.plotting.core import finish, plot_path
-from stamp.utils.plotting.refine import fsc_curve
+from stamp.utils.plotting.refine import plot_fsc
 from stamp.utils.provenance import write_sidecar
 
 # _ADAPTERS: real refine adapters by --tool name
@@ -173,9 +172,7 @@ def run_refine(
         log.info(f'{target}: resolution {fsc.resolution_angstrom:.1f} A @ FSC=0.143')
 
         if make_plots:
-            fig, ax = plt.subplots(figsize=(5, 4))
-            fsc_curve(ax, fsc.frequencies_per_angstrom, fsc.fsc_masked, fsc.resolution_angstrom)
-            finish(fig, plot_path(tree['combined'], f'fsc_{target}', plot_format))
+            plot_fsc(fsc, tree['combined'], target, plot_format)
 
         write_sidecar(
             tree['combined'],

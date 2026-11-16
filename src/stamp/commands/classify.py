@@ -3,38 +3,31 @@ STAMP: unsupervised classification logic
 '''
 
 # Import external dependencies
-import json, os, matplotlib.pyplot as plt, numpy as np
+import json, os, numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.classify.average import write_class_averages
-from stamp.classify.cluster import ClusteringConfig, ClusteringResult, label_to_cluster_id, reduce_and_cluster
+from stamp.classify.cluster import ClusteringConfig, ClusteringResult
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
-from stamp.classify.polish import PolishConfig, posed_class_averages, run_polish
+from stamp.classify.polish import PolishConfig
 from stamp.classify.extract import extract_particle_set
-from stamp.classify.halves import express_in_frame_of_a, run_polish_by_half
-from stamp.classify.frames import azimuth_degrees, rotation_to_quaternion
 from stamp.classify.prepare import working_box
 from stamp.classify.shfeatures import build_sh_feature_matrix
-from stamp.classify.store import ParticleStore, build_store
 from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.picking.manifests import match_by_stem
 from stamp.run.state import stage_dir
-from stamp.utils.halfset import half_set_indices
 from stamp.schemas.particles import ClassAssignment, OrientationPrior, Particle, load_particle_set
-from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.io import cleanup_raw
 from stamp.utils.log import log, log_config
 from stamp.utils.mrc import glob_mrc, paths_by_stem, require_voxel_size
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
-from stamp.utils.options.literals import PlotFormat
-from stamp.utils.plotting.core import central_slice, finish, plot_path
 from stamp.utils.provenance import write_sidecar
-from stamp.utils.plotting.classify import class_average_grid, scatter_labels
+from stamp.utils.plotting.classify import plot_classify
+from stamp.classify.strategies import classify_combined, classify_strict
 
 # run_classify: cluster picked particles by structural similarity per orientation prior
 def run_classify(
@@ -210,7 +203,7 @@ def run_classify(
     log.info(f'Wrote {len(assignments)} class assignments to {assignments_path}')
     if make_plots:
         for prior, result in results.items():
-            _plot_classify(result.result_by_half, result.averages_by_half, output_dir, plot_format, prior.value)
+            plot_classify(result.result_by_half, result.averages_by_half, output_dir, plot_format, prior.value)
 
 # _GroupSettings: classify settings shared by every orientation prior group
 @dataclass(frozen=True)
@@ -296,26 +289,9 @@ def _classify_prior(
         n_polish_rounds=settings.polish_rounds, min_seed_size=settings.min_cluster_size, merge_fraction=settings.merge_fraction, null_sigmas=settings.null_sigmas,
         reject_quantile=settings.reject_quantile, seed=settings.random_state, threads=settings.n_workers,
     )
-    classify = _classify_strict if settings.strict_halfset_independence else _classify_combined
+    classify = classify_strict if settings.strict_halfset_independence else classify_combined
     assignments, result_by_half, averages_by_half = classify(kept, subvols, features, settings.clustering, polish_config, working_box(settings.box_voxels, settings.bin_factor), (settings.tilt_max_degrees, settings.tilt_axis_degrees), output_dir, work_dir, settings.voxel_size_angstrom)
     return _GroupResult(assignments, kept, skipped, result_by_half, averages_by_half)
-
-# _plot_classify: create plots (PCA embedding scatter + class-average thumbnail grid) for one orientation prior
-def _plot_classify(result_by_half: dict[str, ClusteringResult], averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]], output_dir: Path, fmt: PlotFormat, tag: str) -> None:
-    halves = sorted(result_by_half)
-    fig, axes = plt.subplots(1, len(halves), figsize=(5.5 * len(halves), 4), squeeze=False)
-    for ax, half in zip(axes[0], halves):
-        result = result_by_half[half]
-        scatter_labels(ax, result.embedding[:, :2], result.labels, f'{tag} half {half}: PCA -> {result.labels.max() + 1} cluster(s)')
-    finish(fig, plot_path(output_dir, f'embedding_{tag}', fmt))
-
-    for half, averages in averages_by_half.items():
-        ids = sorted(averages)
-        if not ids:
-            continue
-        fig, axes = plt.subplots(1, max(2, len(ids)), figsize=(2.6 * max(2, len(ids)), 3), squeeze=False)
-        class_average_grid(axes[0], ids, {cid: central_slice(volume) for cid, (volume, _count) in averages.items()}, lambda c: c)
-        finish(fig, plot_path(output_dir, f'class_averages_{tag}_half{half}', fmt))
 
 # build_classify_commands: create ToolCommand for `stamp classify`
 def build_classify_commands(config, output_dir: Path, track: str = 'real') -> list[ToolCommand]:
@@ -356,107 +332,3 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
     argv += plot_argv(config.plots)
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
-# _pose_assignment: a class assignment carrying polish's pose, the in-plane angle only where it means something (membrane normal prior)
-def _pose_assignment(particle, cluster_id: str, classifier: str, prior: OrientationPrior, rotation: np.ndarray, shift_voxels: np.ndarray, cc: float, margin: float, polarity: int) -> ClassAssignment:
-    if cluster_id == 'noise':
-        return ClassAssignment(particle_id=particle.particle_id, cluster_id=cluster_id, classifier=classifier, vesicle_id=particle.vesicle_id, cc=cc, margin=margin)
-    return ClassAssignment(
-        particle_id=particle.particle_id,
-        cluster_id=cluster_id,
-        classifier=classifier,
-        inplane_angle_degrees=azimuth_degrees(rotation.T) if prior is OrientationPrior.NORMAL else None,
-        vesicle_id=particle.vesicle_id,
-        rotation=rotation_to_quaternion(rotation),
-        shift_voxels=tuple(float(v) for v in shift_voxels),
-        cc=cc,
-        margin=margin,
-        polarity=polarity if prior is OrientationPrior.AXIS else None,
-    )
-
-# _classify_combined: seed clusters from the features, run polish over all particles together, then average each half at polish's poses
-def _classify_combined(
-    particles,
-    subvols: Subvolumes,
-    features,
-    config,
-    polish_config: PolishConfig,
-    working_voxels: int,
-    tilt: tuple[float | None, float],
-    output_dir: Path,
-    work_dir: Path,
-    voxel_size_angstrom: float,
-) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
-    seeds = reduce_and_cluster(features, config)
-    (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
-    orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
-    outcome = run_polish(store, seeds.embedding, seeds.labels, polish_config, checkpoint_dir=work_dir / 'polish')
-    cluster_ids = [label_to_cluster_id(int(label), polish_config.prior) for label in outcome.labels]
-    _report_clusters(cluster_ids, seeds.explained_variance_ratio)
-    full = ParticleStore(subvols, orientations, *tilt)
-    scale = subvols.box_voxels / working_voxels     # polish shifts are in working voxels
-    averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
-    for half_set, half_indices in half_set_indices(particles).items():
-        if not half_indices:
-            continue
-        averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale, polish_config.prior)
-        write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_set.value)
-        averages_by_half[half_set.value] = averages
-    assignments = [
-        _pose_assignment(particle, cluster_id, 'stamp-polish-classifier', polish_config.prior, outcome.rotations[index], outcome.shifts[index] * scale, float(outcome.cc[index]), float(outcome.margin[index]), int(outcome.polarity[index]))
-        for index, (particle, cluster_id) in enumerate(zip(particles, cluster_ids))
-    ]
-    return assignments, {'combined': seeds}, averages_by_half
-
-# _classify_strict: seed and polish each half on its own, match half-B clusters to half A by reference similarity and express half-B poses in the half-A frame so the two half averages can be compared
-def _classify_strict(
-    particles,
-    subvols: Subvolumes,
-    features,
-    config,
-    polish_config: PolishConfig,
-    working_voxels: int,
-    tilt: tuple[float | None, float],
-    output_dir: Path,
-    work_dir: Path,
-    voxel_size_angstrom: float,
-) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
-    members = {half.value: indices for half, indices in half_set_indices(list(particles)).items()}
-    if not members['A'] or not members['B']:
-        raise StampPipelineError('Strict mode needs particles in both half-sets')
-    seeds = {half: reduce_and_cluster(features[indices], config) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
-    (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
-    orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
-    results, matches = run_polish_by_half(store, members, {h: seeds[h].embedding for h in members}, {h: seeds[h].labels for h in members}, polish_config, checkpoint_dir=work_dir / 'polish')
-    for label_b, match in sorted(matches.items()):
-        log.debug(f'Cross-half cluster matching (B -> A, by reference): c{label_b:02d} -> c{match.label_a:02d}  similarity={match.similarity:.3f}')
-    n_a = len(results['A'].references)
-    renumber = {label_b: match.label_a for label_b, match in matches.items()}
-    unmatched = [label_b for label_b in range(len(results['B'].references)) if label_b not in matches]
-    renumber.update({label_b: n_a + position for position, label_b in enumerate(unmatched)})   # unmatched half-B clusters get ids that cannot collide with half A
-    rotations_b, shifts_b = express_in_frame_of_a(results['B'], matches)
-    poses = {'A': (results['A'].rotations, results['A'].shifts), 'B': (rotations_b, shifts_b)}
-    labels = {'A': results['A'].labels, 'B': np.array([renumber[int(l)] if l >= 0 else -1 for l in results['B'].labels])}
-    full = ParticleStore(subvols, orientations, *tilt)
-    scale = subvols.box_voxels / working_voxels
-    assignments: list[ClassAssignment] = []
-    averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
-    for half, indices in members.items():
-        averages = posed_class_averages(full.take(indices), labels[half], poses[half][0], poses[half][1] * scale, polish_config.prior)
-        write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half)
-        averages_by_half[half] = averages
-        result = results[half]
-        for local, index in enumerate(indices):
-            cluster_id = label_to_cluster_id(int(labels[half][local]), polish_config.prior)
-            assignments.append(_pose_assignment(particles[index], cluster_id, 'stamp-polish-classifier-strict', polish_config.prior, poses[half][0][local], poses[half][1][local] * scale, float(result.cc[local]), float(result.margin[local]), int(result.polarity[local])))
-    return assignments, {half: seeds[half] for half in seeds}, averages_by_half
-
-# _report_clusters: echo PCA variance and per-cluster sizes
-def _report_clusters(cluster_ids: list[str], explained_variance: np.ndarray) -> None:
-    counts: dict[str, int] = {}
-    for cluster_id in cluster_ids:
-        counts[cluster_id] = counts.get(cluster_id, 0) + 1
-    log.debug(f'PCA: top 5 components explain {explained_variance[:5].sum():.1%} of variance')
-    for cluster_id, count in sorted(counts.items()):
-        log.debug(f'cluster {cluster_id}: {count}')

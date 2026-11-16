@@ -3,10 +3,12 @@ STAMP: identify-stage plots
 '''
 
 # Import external dependencies
-import numpy as np
+import matplotlib.pyplot as plt, numpy as np
+from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.utils.plotting.core import BLUE, style_axis
+from stamp.utils.options.literals import PlotFormat
+from stamp.utils.plotting.core import BLUE, finish, plot_path, style_axis
 
 # decoy_hist: real-vs-decoy fit-CC histogram
 def decoy_hist(ax, real_scores, decoy_scores, passed):
@@ -31,3 +33,16 @@ def score_heatmap(ax, cluster_ids, names, score_matrix, *, row_labels=None, titl
     if colorbar:
         image.figure.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
     return image, matrix
+
+# plot_identify: CC heatmap (+ decoy histogram, if a decoy control ran)
+def plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir: Path, fmt: PlotFormat) -> None:
+    cluster_ids = [r.cluster_id for r in results]
+    names = sorted({name for scores in real_scores.values() for name in scores})
+    row_labels = [f'{r.cluster_id} = {r.candidate_protein} (score={r.fit_score:.2f})' for r in results]
+    fig, ax = plt.subplots(figsize=(6.5, 0.6 * len(cluster_ids) + 2))
+    score_heatmap(ax, cluster_ids, names, real_scores, row_labels=row_labels, title='identify: fit score per candidate')
+    finish(fig, plot_path(output_dir, 'identify_scores', fmt))
+    if decoy_control is not None and decoy_best:
+        fig, ax = plt.subplots(figsize=(5, 4))
+        decoy_hist(ax, real_best, decoy_best, decoy_control.passed)
+        finish(fig, plot_path(output_dir, 'decoy_control', fmt))

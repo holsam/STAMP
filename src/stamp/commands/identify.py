@@ -3,7 +3,7 @@ STAMP: identification against predicted structures
 '''
 
 # Import external dependencies
-import json, matplotlib.pyplot as plt, shutil
+import json, shutil
 from pathlib import Path
 
 # Import STAMP objects
@@ -22,10 +22,8 @@ from stamp.identify.panel import load_candidate_panel
 from stamp.utils.checkpoint import directory_signatures, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.log import log
-from stamp.utils.options.literals import PlotFormat
 from stamp.utils.options.argv import plot_argv
-from stamp.utils.plotting.core import finish, plot_path
-from stamp.utils.plotting.identify import decoy_hist, score_heatmap
+from stamp.utils.plotting.identify import plot_identify
 from stamp.utils.provenance import write_sidecar
 
 # run_identify: fit the candidate panel to each class average and rank per class
@@ -110,20 +108,7 @@ def run_identify(
     shutil.rmtree(checkpoint_dir, ignore_errors=True)  # identify has no keep_raw, the checkpoint is only needed until it completes
 
     if make_plots:
-        _plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir, plot_format)
-
-# _plot_identify: CC heatmap (+ decoy histogram, if a decoy control ran)
-def _plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir: Path, fmt: PlotFormat) -> None:
-    cluster_ids = [r.cluster_id for r in results]
-    names = sorted({name for scores in real_scores.values() for name in scores})
-    row_labels = [f'{r.cluster_id} = {r.candidate_protein} (score={r.fit_score:.2f})' for r in results]
-    fig, ax = plt.subplots(figsize=(6.5, 0.6 * len(cluster_ids) + 2))
-    score_heatmap(ax, cluster_ids, names, real_scores, row_labels=row_labels, title='identify: fit score per candidate')
-    finish(fig, plot_path(output_dir, 'identify_scores', fmt))
-    if decoy_control is not None and decoy_best:
-        fig, ax = plt.subplots(figsize=(5, 4))
-        decoy_hist(ax, real_best, decoy_best, decoy_control.passed)
-        finish(fig, plot_path(output_dir, 'decoy_control', fmt))
+        plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir, plot_format)
 
 # build_identify_commands: create ToolCommand for `stamp identify`
 def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
