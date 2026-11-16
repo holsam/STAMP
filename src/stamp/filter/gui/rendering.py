@@ -24,7 +24,7 @@ def visible_particles(ctx: GuiContext, tomogram_id: str) -> list:
 # draw_panel: render one background+picks panel on the given axis, returns the confidence scatter artist (or None)
 def draw_panel(ctx: GuiContext, ax, path: Path | None, label: str, tomogram_id: str):
     ax.clear()
-    ax.set_aspect('equal', adjustable='box')  # cla() resets this — must reapply every redraw
+    ax.set_aspect('equal', adjustable='box')  # cla() resets this; must reapply every redraw
     ax.set_facecolor('black')
     for spine in ax.spines.values():
         spine.set_visible(True)

@@ -1,5 +1,5 @@
 '''
-STAMP: pick/decoy position plots — segmentation/raw overlay, Z-stack QC movie, 3D view
+STAMP: pick/decoy position plots: segmentation/raw overlay, Z-stack QC movie, 3D view
 '''
 
 # Import external dependencies
@@ -307,7 +307,7 @@ def plot_3d(
 def plot_positions(
     particles,
     output_dir: Path,
-    style: str,  # 'segmented' | 'none' — kept as a style knob for future plot kinds
+    style: str,  # 'segmented' | 'none'; kept as a style knob for future plot kinds
     fmt: PlotFormat,
     segmentation_path_by_tomogram: dict[str, Path] | None = None,
     raw_tomogram_path_by_tomogram: dict[str, Path] | None = None,

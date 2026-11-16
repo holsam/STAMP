@@ -1,5 +1,5 @@
 '''
-STAMP: filter-picks session state — load a particle set + manifests, track accept/reject
+STAMP: filter-picks session state: load a particle set + manifests, track accept/reject
 '''
 
 # Import external dependencies

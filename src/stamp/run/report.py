@@ -17,7 +17,7 @@ def _decoy_banner(outcome: RunOutcome) -> str:
     if outcome.decoy_control is None:
         return 'DECOY CONTROL: NOT RUN (stopped before identify)'
     verdict = 'PASS' if outcome.decoy_control['passed'] else 'FAIL'
-    return f'DECOY CONTROL: {verdict} — {outcome.decoy_control["reason"]}'
+    return f'DECOY CONTROL: {verdict} - {outcome.decoy_control["reason"]}'
 
 # write_report: write report.md and report.json
 def write_report(outcome: RunOutcome, output_dir: Path) -> tuple[Path, Path]:
@@ -65,7 +65,7 @@ def write_report(outcome: RunOutcome, output_dir: Path) -> tuple[Path, Path]:
 
     lines += ['## Provenance', '']
     for name, sidecar in outcome.sidecars.items():
-        lines.append(f'- `{name}` — commit `{sidecar.get("stamp_commit", "?")}`, '
+        lines.append(f'- `{name}` - commit `{sidecar.get("stamp_commit", "?")}`, '
                      f'{len(sidecar.get("input_checksums", {}))} input hashes')
 
     md_path = output_dir / 'report.md'
