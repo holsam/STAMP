@@ -13,7 +13,7 @@ from stamp.adapters.mock import get_mock_adapter
 from stamp.adapters.relion import RelionRefineAdapter
 from stamp.backends.base import ToolCommand
 from stamp.backends.factory import check_backend_supports, select_runner
-from stamp.classify.extract import quaternion_to_matrix
+from stamp.utils.rotation import quaternion_to_matrix
 from stamp.picking.geometry import compose_roll_about_normal
 from stamp.refine.fsc import compute_fsc, soft_sphere_mask, write_fsc_files
 from stamp.refine.halfset_guard import (

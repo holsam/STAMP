@@ -7,7 +7,7 @@ import json, numpy as np, pandas as pd, pytest, starfile
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.picking.geometry import quaternion_from_reference_to
+from stamp.utils.rotation import quaternion_from_reference_to
 from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks, resolve_priors
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import OrientationPrior

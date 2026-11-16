@@ -8,7 +8,8 @@ from pathlib import Path
 from scipy.spatial import cKDTree
 
 # Import internal STAMP objects
-from stamp.picking.geometry import beam_angle_deviation_degrees, extract_surface, quaternion_from_reference_to
+from stamp.picking.geometry import beam_angle_deviation_degrees, extract_surface
+from stamp.utils.rotation import normal_from_quaternion, quaternion_from_reference_to
 from stamp.picking.vesicles import load_vesicle_labels, vesicle_ids_at
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import OrientationPrior
@@ -103,7 +104,7 @@ def infer_orientations(
         for position, index in enumerate(todo):
             pick = picks[index]
             updates: dict = {}
-            normal = None if pick.orientation is None else _normal_from_quaternion(pick.orientation)  # a supplied quaternion always wins
+            normal = None if pick.orientation is None else normal_from_quaternion(pick.orientation)  # a supplied quaternion always wins
             if pick.orientation is None and within[position]:
                 normal = normals_xyz[position]
                 updates['orientation'] = quaternion_from_reference_to(normal)
@@ -120,11 +121,6 @@ def infer_orientations(
 # _needs_inference: True when a pick lacks something infer_orientations can fill
 def _needs_inference(pick: RawPick, want_vesicle_id: bool) -> bool:
     return pick.orientation is None or pick.beam_angle_deviation_degrees is None or (want_vesicle_id and pick.vesicle_id is None)
-
-# _normal_from_quaternion: the image of +z under a (w, x, y, z) unit quaternion
-def _normal_from_quaternion(quaternion: tuple[float, float, float, float]) -> np.ndarray:
-    w, x, y, z = quaternion
-    return np.array([2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)])
 
 # _id_key: comparison key for a tomogram id
 def _id_key(tomogram_id: str) -> str:

@@ -6,7 +6,7 @@ STAMP: per-particle missing wedge in the box frame
 import numpy as np
 
 # Import internal STAMP objects
-from stamp.classify.extract import quaternion_to_matrix
+from stamp.utils.rotation import quaternion_to_matrix
 
 # _tilt_normal: in-plane tomogram direction perpendicular to the tilt axis
 def _tilt_normal(tilt_axis_degrees: float) -> np.ndarray:

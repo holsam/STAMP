@@ -10,9 +10,6 @@ from skimage import measure
 from stamp.utils.errors import StampValidationError
 from stamp.utils.log import log
 
-# Reference axis that a particle's assigned orientation rotates onto the surface normal. +z in (x, y, z) output convention
-REFERENCE_AXIS_XYZ = np.array([0.0, 0.0, 1.0])
-
 # extract_surface: extract a membrane surface from a binary segmentation, returning (vertices, normals)
 def extract_surface(segmentation: np.ndarray, level: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
     if not np.any(segmentation > level):
@@ -27,21 +24,6 @@ def extract_surface(segmentation: np.ndarray, level: float = 0.5) -> tuple[np.nd
     lengths[lengths == 0.0] = 1.0
     log.debug(f'Extracted surface: {len(vertices)} vertices, {len(faces)} faces')
     return vertices, normals / lengths
-
-# quaternion_from_reference_to: unit quaternion rotating REFERENCE_AXIS_XYZ (+z) onto the given vector
-def quaternion_from_reference_to(vector_xyz: np.ndarray) -> tuple[float, float, float, float]:
-    norm = np.linalg.norm(vector_xyz)
-    if norm == 0.0:
-        return (1.0, 0.0, 0.0, 0.0)
-    target = vector_xyz / norm
-    dot = float(np.dot(REFERENCE_AXIS_XYZ, target))
-    if dot < -1.0 + 1e-8:
-        # antiparallel: 180 degrees about any perpendicular axis
-        return (0.0, 1.0, 0.0, 0.0)
-    cross = np.cross(REFERENCE_AXIS_XYZ, target)
-    quaternion = np.array([1.0 + dot, cross[0], cross[1], cross[2]])
-    quaternion /= np.linalg.norm(quaternion)
-    return tuple(float(component) for component in quaternion)
 
 # compose_roll_about_normal: quaternion for "roll by angle_degrees about +z, then map +z onto the normal"
 def compose_roll_about_normal(

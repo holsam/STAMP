@@ -10,7 +10,8 @@ from scipy.spatial import cKDTree
 
 # Import internal STAMP objects
 from stamp.utils.halfset import assign_half_sets
-from stamp.picking.geometry import extract_surface, quaternion_from_reference_to
+from stamp.picking.geometry import extract_surface
+from stamp.utils.rotation import quaternion_from_reference_to
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet
 from stamp.schemas.picks import RawPick

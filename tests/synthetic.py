@@ -13,7 +13,7 @@ from scipy.spatial.transform import Rotation
 from stamp.classify.frames import azimuth_matrix, flip_matrix, rotate_density
 from stamp.classify.store import ParticleStore
 from stamp.classify.wedge import apply_wedge, box_wedge
-from stamp.picking.geometry import quaternion_from_reference_to
+from stamp.utils.rotation import quaternion_from_reference_to
 from stamp.schemas.particles import OrientationPrior
 from stamp.schemas.subvolumes import Subvolumes
 

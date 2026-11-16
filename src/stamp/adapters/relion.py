@@ -10,7 +10,7 @@ from scipy.spatial.transform import Rotation
 # Import STAMP objects
 from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
-from stamp.classify.extract import quaternion_to_matrix
+from stamp.utils.rotation import quaternion_to_matrix
 from stamp.schemas.particles import Particle
 from stamp.utils.errors import StampAdapterError
 from stamp.utils.log import log

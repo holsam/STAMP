@@ -12,7 +12,8 @@ from scipy.spatial.transform import Rotation
 from stamp.classify.align import roll_about_normal
 from stamp.classify.average import weighted_average
 from stamp.classify.cluster import ClusteringConfig, label_to_cluster_id, reduce_and_cluster, reduce_features
-from stamp.classify.extract import box_fits_inside, canonical_grid, extract_particle_set, extract_subvolume, quaternion_to_matrix
+from stamp.classify.extract import box_fits_inside, canonical_grid, extract_particle_set, extract_subvolume
+from stamp.utils.rotation import quaternion_from_reference_to, quaternion_to_matrix
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
 from stamp.classify.halves import express_in_frame_of_a, run_polish_by_half
@@ -27,7 +28,6 @@ from stamp.classify.shfeatures import build_sh_feature_matrix, sh_power
 from stamp.classify.spherical import fit_matrix, lm_pairs, real_sh_basis, sphere_grid
 from stamp.classify.store import ParticleStore, build_store
 from stamp.classify.wedge import apply_wedge, box_wedge, observed_directions
-from stamp.picking.geometry import quaternion_from_reference_to
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
 from synthetic import asymmetric_object, make_particle, rod_object, synthetic_set
