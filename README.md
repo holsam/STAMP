@@ -11,7 +11,7 @@ Given a directory of segmented MRC volumes (i.e. as produced by [MemBrain-seg](h
 1 | **Picking** | Imports candidate particle positions from external pickers, infers membrane normal orientations and returns consensus results across multiple pickers
 2 | **Classification** | Group similar candidate particles by structural similarity (via unsupervised clustering) and produce class averages
 3 | **Identification** | Score each class average against a panel of predicted protein structures from proteomics experiments
-4 | **Refinement** | Iteratively refine particle orientations and measure resolution
+4 | **Refinement** | Writes independent half-set inputs for RELION (or M), then assesses the returned half-maps (FSC)
 
 Half-sets and a decoy control (a matched negative-control set of particles run through the pipeline) are used by default.
 
@@ -19,7 +19,7 @@ Half-sets and a decoy control (a matched negative-control set of particles run t
 
 ## Getting Started
 ### Requirements
-STAMP's only core requirement is Python >=3.14, and the below installation steps should download the necessary Python version (and any libraries) automatically. Additional functionality (e.g. refinement) requires additional tools to be available via a HPC cluster (RELION-5/M) with GPU nodes, however STAMP only submits these jobs to a SLURM scheduler and so can be run from a login node if refinement is required. automatically.
+STAMP's only core requirement is Python >=3.14, and the below installation steps should download the necessary Python version (and any libraries) automatically. Refinement is run separately using RELION-5 (or M), however STAMP does prepare half-set inputs for that run and assesses the half-maps it returns.
 
 ### Installation
 
@@ -62,13 +62,13 @@ stamp classify --particles stamp/pick/particle_set.json -r tomo/ --voxel-size-a 
 # 3. Compare class averages to a candidate protein panel
 stamp identify --classes stamp/classify/class_averages --candidates candidates.yaml -r 25.0
 
-# 4. Refine an identified class with independent half-sets
-stamp refine --class-id all --identification stamp/identify/identification.json --particles stamp/pick/particle_set.json --class-assignments stamp/classify/class_assignments.json -r tomo/
-```
+# 4. Prepare independent half-set inputs for refinement
+stamp refine prepare --class-id all --identification stamp/identify/identification.json --particles stamp/pick/particle_set.json --class-assignments stamp/classify/class_assignments.json -r tomo/ --voxel-size-a 13.48
 
-Each step, including decoy control generation, can be run from a single configuration file:
-```sh
-stamp run --config stamp_run.toml
+# 5. Refine halfA and halfB in RELION (or M), each in its own directory, using the files in stamp/refine/<class>/halfA and halfB
+
+# 6. Assess the returned half-maps
+stamp refine assess --class-id <class> --prepared-dir stamp/refine/<class> --half-a runA/final.mrc --half-b runB/final.mrc
 ```
 
 <br>
@@ -79,7 +79,6 @@ File | Purpose
 -- | --
 `docs/architecture.md` | STAMP's module layout and key abstractions
 `docs/cli.md` | Full CLI reference
-`docs/configuration.md` | `stamp run` configuration reference
 `docs/workflow.md` | The theory underpinning STAMP
 `tests/TESTS.md` | STAMP's test suite structure
 

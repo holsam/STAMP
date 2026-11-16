@@ -41,6 +41,14 @@ Identification compares each class average to a panel of experimentally-derived 
 ### Refine
 Refinement iterates over a the class average to improve each particle's estimated orientation, then re-averages with the better estimates (repeating this process *n* times). STAMP outsources refinement to existing tools (e.g. RELION, M) rather than implementing it natively. The refinement stage is where the remaining spin around the normal gets determined.
 
+STAMP has two subcommands related to refinement: `stamp refine prepare` takes each identified class, splits its particles by half-set, and writes one RELION-ready input directory per half, each seeded from that half's own class average. Refinement is then run externally as two jobs, with `stamp refine assess` taking the two final half-maps and computing the FSC between them.
+
+Between the two commands, STAMP enforces:
+- each half is seeded from its own class average, and the two seeds are different files
+- prepare only writes a class with particles in both halves
+- assess refuses half-maps that are the same file, share a directory, have different box shapes, are identical to each other, or are unchanged from their seed reference
+- assess refuses half-maps whose voxel size differs from the one prepare recorded
+
 <br>
 
 ## How STAMP reduces bias

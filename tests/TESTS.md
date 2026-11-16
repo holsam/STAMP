@@ -66,7 +66,7 @@ File | Covers
 `test_schemas.py` | Pydantic model validation (`Particle`, `RawPick`, etc.), including rejection of bad input
 `test_utils.py` | Half-set assignment determinism, I/O helpers, logging setup
 
-Anything that would require external tools uses the `--backend mock` to return mocked output for testing purposes.
+Nothing in the suite runs external tools. The refinement tests stand in for RELION and M by writing synthetic half-maps.
 
 ### `tests/conftest.py`
 Three shared fixtures are defined in `conftest.py`:
@@ -79,4 +79,3 @@ Fixture | Details
 
 ## Known gaps
 - Test data is synthetic. Due to upload size constratints, a deterministic generator is used to create synthetic data for test files which is an 'idealised' version of real tomogram/segmentation data.
-- Adapter testing only test command construction, not actual execution.
