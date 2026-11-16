@@ -12,7 +12,9 @@ from typing import TypeVar
 # Import internal STAMP objects
 from stamp.utils.log import get_worker_log_config, init_worker_logging, log
 
+# T: item type for worker helpers
 T = TypeVar('T')
+# R: worker result type for worker helpers
 R = TypeVar('R')
 
 # _new_pool: process pool with worker logging
@@ -25,7 +27,7 @@ def worker_pool(max_workers: int) -> ProcessPoolExecutor | nullcontext:
     return _new_pool(max_workers) if max_workers > 1 else nullcontext()
 
 # run_parallel: run worker_fn(item) for each item, sequentially in-process if max_workers <= 1, else pooled
-def run_parallel(
+def run_parallel[T, R](
     items: list[T],
     worker_fn: Callable[[T], R],
     *,
