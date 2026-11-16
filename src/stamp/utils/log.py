@@ -98,13 +98,13 @@ def resolve_log_directory(specified_dir: Path | None):
 # _worker_log_config: (level_name, log_path) as configured by main STAMP process
 _worker_log_config: tuple[str, Path | None] | None = None
 
-# configure_logging: returns None, configures the single terminal logging sink
+# configure_logging: configure the terminal and file logging sinks, returns (log_path, level_name)
 def configure_logging(
     directory: Path | None,
     mode: str,
     quiet: int,
     verbosity: int
-) -> None:
+) -> tuple[Path, str]:
     global _worker_log_config
     register_custom_levels()
     level_name = resolve_level(verbosity, quiet)
@@ -125,7 +125,6 @@ def configure_logging(
     # Set up actual log file sink
     logger.add(log_path, format=LOG_FORMAT, level=level_name, colorize=False, mode='a')
     _worker_log_config = (level_name, log_path)
-    # Return log file path
     return log_path, level_name
 
 # get_worker_log_config: the main process's currently configured (level_name, log_path)
