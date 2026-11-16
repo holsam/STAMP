@@ -64,7 +64,7 @@ class DecoySettings(_Strict):
 class PickStage(_Strict):
     picks_files: list[Path]
     picker_names: list[str] | None = None  # defaults to file stems
-    consensus_rule: Literal['union', 'intersection'] = 'intersection'
+    consensus_rule: Literal['union', 'intersection'] = 'union'
     distance_threshold: float = 15.0
     half_set_seed: int = 0
     max_surface_distance_angstrom: float = 300.0
