@@ -18,10 +18,6 @@ class StampConfigError(StampError):
 class StampValidationError(StampError):
     level = 'error'
 
-# StampAdapterError: external tool (RELION, M, stamp-native) failed or produced no usable output
-class StampAdapterError(StampError):
-    level = 'error'
-
 # StampPipelineError: unrecoverable failure, pipeline cannot produce a valid result
 class StampPipelineError(StampError):
     level = 'critical'

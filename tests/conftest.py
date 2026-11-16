@@ -6,11 +6,6 @@ STAMP: test suite shared fixtures
 import contextlib, json, logging, mrcfile, numpy as np, pytest
 from loguru import logger
 from pathlib import Path
-from typer.testing import CliRunner
-from stamp.cli.cli import stamp_app
-
-# Initialise CLI runner
-_runner = CliRunner()
 
 # _PropagateHandler: forwards loguru records into stdlib logging
 class _PropagateHandler(logging.Handler):
@@ -66,64 +61,7 @@ def _make_dataset(root: Path) -> Path:
     )
     return root
 
-# _write_config: an in-tmp stamp_run.toml pointing at the generated data
-def _write_config(root: Path, **overrides) -> Path:
-    body = f'''
-[run]
-segmentation_dir = "seg"
-raw_tomogram_dir = "tomo"
-output_dir = "."
-voxel_size_angstrom = 13.48
-backend = "mock"
-{overrides.get('run_extra', '')}
-
-[decoy]
-enabled = {str(overrides.get('decoy_enabled', True)).lower()}
-method = "shifted"
-
-[stage.pick]
-picks_files = ["picks.csv"]
-backend = "local"
-
-[stage.classify]
-method = "kmeans"
-n_clusters = 2
-n_components = 3
-min_cluster_size = 5
-box_angstrom = 120
-
-[stage.identify]
-candidates = "candidates.yaml"
-resolution = 25.0
-
-[stage.refine]
-tool = "relion"
-class_id = "all"
-iterations = 2
-'''
-    path = root / 'stamp_run.toml'
-    path.write_text(body)
-    return path
-
-# _run_mock_pipeline: generate data, write config, invoke `stamp run`, return the output dir
-def _run_mock_pipeline(root: Path, args: list[str] | None = None) -> Path:
-    _make_dataset(root)
-    config = _write_config(root)
-    result = _runner.invoke(stamp_app, ['-d', str(root), 'run', '--config', str(config), *(args or [])])
-    assert result.exit_code == 0, result.output
-    return root / 'stamp'
-
 # make_dataset: fixture to call _make_dataset
 @pytest.fixture
 def make_dataset():
     return _make_dataset
-
-# write_config: fixture to call _write_config
-@pytest.fixture
-def write_config():
-    return _write_config
-
-# run_mock_pipeline: fixture to call _run_mock_pipeline
-@pytest.fixture
-def run_mock_pipeline():
-    return _run_mock_pipeline

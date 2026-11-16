@@ -4,11 +4,12 @@ STAMP: unit tests for refinement FSC and halfset guard functions
 
 # Import external dependencies
 import numpy as np, pytest
+from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.refine.fsc import compute_fsc, soft_sphere_mask, _shell_fsc, _shell_map
 from stamp.refine.halfset_guard import (
-    assert_distinct_references, refine_output_tree, split_class_by_half,
+    assert_distinct_references, assert_independent_outputs, refine_output_tree, split_class_by_half,
 )
 from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle
 from stamp.utils.errors import StampValidationError
@@ -107,6 +108,41 @@ class TestRefineHalfsetGuard:
         tree = refine_output_tree(tmp_path, 'c00')
         assert tree['A'] != tree['B'] and tree['A'].is_dir() and tree['B'].is_dir()
 
+    def test_assert_independent_outputs_rejects_same_file(self, tmp_path):
+        path = tmp_path / 'a' / 'final.mrc'
+        path.parent.mkdir()
+        m, r = np.ones((4, 4, 4)), np.zeros((4, 4, 4))
+        with pytest.raises(StampValidationError, match='each half must be its own refinement output'):
+            assert_independent_outputs(path, path, m, m + 1, r, r)
+
+    def test_assert_independent_outputs_rejects_same_directory(self, tmp_path):
+        m, r = np.ones((4, 4, 4)), np.zeros((4, 4, 4))
+        with pytest.raises(StampValidationError, match='share a directory'):
+            assert_independent_outputs(tmp_path / 'x.mrc', tmp_path / 'y.mrc', m, m + 1, r, r)
+
+    def test_assert_independent_outputs_rejects_differing_shapes(self, tmp_path):
+        (tmp_path / 'a').mkdir(); (tmp_path / 'b').mkdir()
+        with pytest.raises(StampValidationError, match='boxes differ'):
+            assert_independent_outputs(tmp_path / 'a' / 'x.mrc', tmp_path / 'b' / 'y.mrc', np.ones((4, 4, 4)), np.ones((6, 6, 6)), np.zeros((4, 4, 4)), np.zeros((6, 6, 6)))
+
+    def test_assert_independent_outputs_rejects_unrefined_seed(self, tmp_path):
+        (tmp_path / 'a').mkdir(); (tmp_path / 'b').mkdir()
+        seed = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
+        with pytest.raises(StampValidationError, match='identical to its seed'):
+            assert_independent_outputs(tmp_path / 'a' / 'x.mrc', tmp_path / 'b' / 'y.mrc', seed, seed + 1, seed, np.zeros((4, 4, 4), np.float32))
+
+    def test_assert_independent_outputs_rejects_identical_maps(self, tmp_path):
+        (tmp_path / 'a').mkdir(); (tmp_path / 'b').mkdir()
+        m = np.ones((4, 4, 4), np.float32)
+        with pytest.raises(StampValidationError, match='identical'):
+            assert_independent_outputs(tmp_path / 'a' / 'x.mrc', tmp_path / 'b' / 'y.mrc', m, m.copy(), np.zeros((4, 4, 4), np.float32), np.zeros((4, 4, 4), np.float32))
+
+    def test_assert_independent_outputs_accepts_distinct_refinements(self, tmp_path):
+        (tmp_path / 'a').mkdir(); (tmp_path / 'b').mkdir()
+        rng = np.random.default_rng(0)
+        a, b = rng.random((4, 4, 4)), rng.random((4, 4, 4))
+        assert_independent_outputs(tmp_path / 'a' / 'x.mrc', tmp_path / 'b' / 'y.mrc', a, b, np.zeros((4, 4, 4)), np.ones((4, 4, 4)))
+
 # TestRefineCommand: class containing tests for src/stamp/commands/refine.py
 class TestRefineCommand:
     # test_full_poses_come_from_assignments_the_polish_step_posed: only rows with a rotation produce a pose, a missing shift is zero
@@ -120,3 +156,44 @@ class TestRefineCommand:
         ]
         poses = full_poses(rows)
         assert set(poses) == {'a', 'b'} and list(poses['a'][1]) == [1.0, 2.0, 3.0] and not poses['b'][1].any()
+
+# _relion_matrix: RELION 5 Euler::anglesToMatrix3 (jaz/math/Euler_angles_relion.h), the matrix mapping particle space to tomogram space
+def _relion_matrix(rot: float, tilt: float, psi: float):
+    import numpy as np
+    p, t, c = np.radians([rot, tilt, psi])
+    sp, cp, st, ct, sc, cc = np.sin(p), np.cos(p), np.sin(t), np.cos(t), np.sin(c), np.cos(c)
+    return np.array([[cc * ct * cp - sc * sp, cc * ct * sp + sc * cp, -cc * st], [-sc * ct * cp - cc * sp, -sc * ct * sp + cc * cp, sc * st], [st * cp, st * sp, ct]])
+
+# TestRelionPoses: class containing tests for writing class poses into RELION particle files
+class TestRelionPoses:
+    def test_euler_angles_round_trip(self) -> None:
+        import numpy as np
+        from scipy.spatial.transform import Rotation
+        from stamp.refine.relion_export import relion_euler_angles
+        for seed in range(5):
+            rotation = Rotation.random(random_state=seed).as_matrix()
+            rot, tilt, psi = relion_euler_angles(rotation)
+            assert np.allclose(_relion_matrix(rot, tilt, psi), rotation)
+            assert 0.0 <= tilt <= 180.0
+
+    def test_pose_is_composed_with_the_box_orientation_and_origin_is_in_angstrom(self) -> None:
+        import numpy as np
+        from scipy.spatial.transform import Rotation
+        from stamp.refine.relion_export import pose_to_relion
+        from stamp.classify.frames import azimuth_matrix, rotation_to_quaternion
+        orientation = rotation_to_quaternion(Rotation.from_euler('y', 90, degrees=True).as_matrix())
+        row = pose_to_relion(orientation, (azimuth_matrix(30.0), np.array([2.0, 0.0, 0.0])), 5.0)
+        composed = Rotation.from_euler('y', 90, degrees=True).as_matrix() @ azimuth_matrix(30.0)
+        assert np.allclose(_relion_matrix(row['rlnAngleRot'], row['rlnAngleTilt'], row['rlnAnglePsi']), composed)
+        # a 2 voxel box x shift is -z in the tomogram under this orientation, the origin is the negative of it, 5 A per voxel
+        assert np.allclose([row['rlnOriginXAngst'], row['rlnOriginYAngst'], row['rlnOriginZAngst']], [0.0, 0.0, 10.0], atol=1e-6)
+
+    def test_star_carries_poses_when_given_and_priors_otherwise(self, tmp_path: Path) -> None:
+        import numpy as np, starfile
+        from stamp.refine.relion_export import write_particle_star
+        from stamp.schemas.particles import HalfSet, Particle
+        make = lambda i: Particle(prior=OrientationPrior.NORMAL, particle_id=f'p{i}', tomogram_id='t', position=(1.0, 2.0, 3.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='x', half_set=HalfSet.A)
+        write_particle_star([make(0), make(1)], tmp_path / 'p.star', poses={'p0': (np.eye(3), np.zeros(3))}, voxel_size_angstrom=4.0)
+        table = starfile.read(tmp_path / 'p.star').set_index('rlnTomoParticleName')
+        assert 'rlnOriginXAngst' in table.columns and table.loc['p0', 'rlnOriginXAngst'] == 0.0
+        assert table.loc['p1', 'rlnAngleTiltPrior'] == 0.0     # no pose for p1, so the old normal-derived prior path

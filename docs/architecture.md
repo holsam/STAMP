@@ -5,9 +5,6 @@ This document contains information about STAMP's architecture and implementation
 **Contents**
 - [Package layout](#package-layout)
     - [Command shape](#command-shape)
-- [Adapters & Runners](#adapters--runners)
-    - [`ToolAdapter`](#tooladapter)
-    - [`Runner`](#runner)
 - [Schemas](#schemas)
 - [Coordinate conventions](#coordinate-conventions)
 - [Picking implementation](#picking-implementation)
@@ -23,16 +20,13 @@ This document contains information about STAMP's architecture and implementation
 ```
 src/stamp/
   cli/            CLI Typer definitions (parse args then call commands)
-  commands/       per-stage run orchestration via a run_<stage>() function, called by cli/ and run/
-  schemas/        pydantic models: config, particles, picks, manifest, provenance, cluster_profile
-  adapters/       ToolAdapter implementations: relion, m_refine, mock, (base protocol)
-  backends/       Runner implementations: local, cluster, mock, (base protocol) + factory
+  commands/       per-stage orchestration via a run_<stage>() function, called by cli/
+  schemas/        pydantic models: particles, picks, manifest, provenance
   picking/        pick command scripts: picks importer, geometry primitives, vesicle labelling, consensus reconciliation
   decoy/          decoy dataset generation and comparability checks
   classify/       subvolume extraction, feature engineering, clustering, class averaging
   identify/       candidate panel loading, shape fitting, decoy-control statistics
-  refine/         FSC computation, half-set guard/tree layout
-  run/            stamp_run.toml-driven orchestration, resume state, report generation
+  refine/         half-set guard/tree layout, RELION particle export and prepared-input README, FSC computation
   tools/          stamp tools subcommands: diagram generation, shell completion
   utils/          logging, half-set assignment, I/O, plotting, reporting helpers
 ```
@@ -42,11 +36,11 @@ Each stage has the same three-layer shape:
 
 ```
 cli/<stage>.py        CLI Typer command to parse/validate CLI args and calls commands.<stage>.run_<stage>()
-commands/<stage>.py   orchestration: selects adapter + backend, drives the stage end to end
+commands/<stage>.py   orchestration: drives the stage end to end
 <stage-specific>/     scripts with logic for <stage>
 ```
 
-`stamp run` is an overall orchestration command, calling each command using parameters defined in a `RunConfig` specified by `stamp_run.toml`.
+Each stage is a standalone command taking explicit flags. STAMP does not run an overall pipeline or read a configuration file.
 
 <br>
 
@@ -60,60 +54,13 @@ Command | Work directory | Unit checkpointed
 `decoy` | `raw/<method>/` | shifted: surfaces (`surfaces/<id>.npz`); synthetic-noise: volumes and picks
 `classify` | `raw/` | subvolumes, per-tomogram features, per-cluster alignment angles
 `identify` | `raw/{real,decoy}/` | one fit score per (class, candidate)
-`refine` | `<out>/<class>/` | finished half-maps
 
 Random sampling steps (decoy placement) are never checkpointed, only the deterministic work before them, so a resumed run is identical to an uninterrupted one for a given seed.
 
 <br>
 
-## Adapters & Runners
-STAMP separates what a tool is from how to run it, as a `ToolAdapter` and `Runner` respectively:
-- `ToolAdapter`: builds a `ToolCommand` from `AdapterInputs` and parses a `RunResult` into `AdapterOutput`.
-- `Runner`: executes a ToolCommand and returns a `RunResult`
-
-`ToolAdapter`s and `Runner`s do not communicate directly, as the calling command calls the adapter functions and selects a runner independently.
-
-### `ToolAdapter`
-```python
-class ToolAdapter(Protocol):
-    name: str
-    stage: str
-    mac_compatible: bool        # gates --backend local on MacOS
-    requires_gpu: bool          # gates --backend local
-    automatable: bool           # whether tool has non-interactive entry point
-    batches_natively: bool      # whether one call processes multiple tomograms
-    runs_in_process: bool       # whether tool runs in same process or spawns subprocess
-
-    def build_command(self, inputs: AdapterInputs) -> ToolCommand: ...
-    def parse_output(self, result: RunResult) -> AdapterOutput: ...
-```
-
-Available adapters:
-Adapter | File (`src/stamp/adapters/`) | Stage | `mac_compatible` | `requires_gpu` | `runs_in_process`
--- | -- | -- | -- | -- | --
-`RelionRefineAdapter` (`relion`) | `relion.py` | Refine | ✘ | ✔ | ✘
-`MRefineAdapter` (`m`) | `m_refine.py` | Refine | ✘ | ✔ | ✘
-`MockAdapter` | `mock.py` | Any (test adapter) | Configurable | Configurable | Configurable
-
-### `Runner`
-```python
-class Runner(Protocol):
-    def run(self, command: ToolCommand) -> RunResult: ...
-```
-
-Available runners:
-Runner | `--backend` | File (`src/stamp/backends/`) | Behaviour
--- | -- | -- | --
-`LocalRunner` | `local` | `local.py` | Runs `argv` as a real subprocess on current machine
-`ClusterRunner` | `cluster` | `cluster.py` | Submits via `sbatch`, using a `ClusterProfile` (partition, time/memory/CPU/GPU defaults, module loads)
-`MockRunner` | `mock` | `mock.py` | Returns a mocked successful `RunResult` with no subprocess
-
-Commands will select a `Runner` by mapping to the specified `--backend`. Using `--backend cluster` will raise an error if `sbatch` is not available on `PATH`, and will load the default `ClusterProfile` if none are explicitly passed. Using `--backend local` will raise an error if used with an adapter that requires a GPU or is not Mac-compatible (on MacOS).
-
-<br>
-
 ## Schemas
-All data which sits at the boundary of a stage (CLI/config input, inter-stage JSONs, provenance sidecars) are implemented using `pydantic`'s `BaseModel` class. Internal data objects use `dataclasses`' `dataclass` instead. 
+All data which sits at the boundary of a stage (CLI input, inter-stage JSONs, provenance sidecars) are implemented using `pydantic`'s `BaseModel` class. Internal data objects use `dataclasses`' `dataclass` instead. 
 
 <br>
 
@@ -127,7 +74,7 @@ Two conventions for tomogram coordinates are used throughout STAMP:
 
 ## Picking implementation 
 ### Geometric primitives
-`src/stamp/picking/geometry.py` contains several geometric primitives, used by STAMP's pick importer and refine command:
+`src/stamp/picking/geometry.py` contains several geometric primitives, used by STAMP's pick importer and refine preparation:
 
 Function | Role
 -- | --
@@ -172,4 +119,4 @@ With a single picks file, `reconcile_picks(...)` is reduced to deduplicating nea
 Function | Role
 -- | --
 `assign_half_sets()` | Runs once at the end of picking to assign RawPicks to a given half-set; deterministic for a given seed and set of particle IDs; splits picks as close to 50/50 as possible (with remaining particles assigned to halfset A)
-`validate_single_half_set()` | Called at the start of any stage that must process halves independently (classify, identify, refine) and raises an error if the input mixes A and B
+`validate_single_half_set()` | Raises an error if the input mixes A and B

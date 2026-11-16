@@ -1,11 +1,12 @@
 '''
-STAMP: integration tests for `stamp refine`
+STAMP: integration tests for `stamp refine prepare` and `stamp refine assess`
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np, pytest
+import json, mrcfile, numpy as np, pytest, starfile
 from typer.testing import CliRunner
 from stamp.cli.cli import stamp_app
+from stamp.utils.errors import StampValidationError
 
 # Initialise runner
 runner = CliRunner()
@@ -61,84 +62,91 @@ def _fixture(tmp_path, mixed=False):
     (tmp_path / 'tomo').mkdir()
     return stage_d
 
-def _invoke(tmp_path, stage_d, *extra):
+def _prepare(tmp_path, stage_d):
     return runner.invoke(stamp_app, [
         '-d', str(tmp_path),
-        'refine',
+        'refine', 'prepare',
         '--class-id', 'c00',
         '--identification', str(tmp_path / 'identification.json'),
         '--particles', str(tmp_path / 'particle_set.json'),
         '--class-assignments', str(stage_d / 'class_assignments.json'),
         '--raw-dir', str(tmp_path / 'tomo'),
-        '--out-dir', tmp_path,
+        '--out-dir', str(tmp_path),
         '--voxel-size-a', '3.0',
-        '--backend', 'mock',
+    ])
+
+def _assess(tmp_path, half_a, half_b, *extra):
+    return runner.invoke(stamp_app, [
+        '-d', str(tmp_path),
+        'refine', 'assess',
+        '--class-id', 'c00',
+        '--prepared-dir', str(tmp_path / 'stamp' / 'refine' / 'c00'),
+        '--half-a', str(half_a),
+        '--half-b', str(half_b),
         *extra,
     ])
 
-# TestRefineCommand: class containing tests for `stamp refine`
-class TestRefineCommand:
-    def test_refine_mock_writes_independent_halves(self, tmp_path):
-        stage_d = _fixture(tmp_path)
-        result = _invoke(tmp_path, stage_d)
-        assert result.exit_code == 0, result.output
-        out = tmp_path / 'stamp' / 'refine'
-        combined = out / 'c00'
-        assert (combined / 'final_A.mrc').is_file() and (combined / 'final_B.mrc').is_file()
-        assert (combined / 'fsc.txt').is_file() and (combined / 'fsc.svg').is_file()
-        assert (combined / 'params.toml').is_file()
-        assert (out / 'c00' / 'halfA').is_dir() and (out / 'c00' / 'halfB').is_dir()
+def _write_refined(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with mrcfile.new(path, overwrite=True) as mrc:
+        mrc.set_data(data.astype(np.float32))
+        mrc.voxel_size = 3.0
 
-    def test_refine_rejects_half_set_mixed_class(self, tmp_path):
+# TestRefinePrepare: class containing tests for `stamp refine prepare`
+class TestRefinePrepare:
+    def test_prepare_writes_disjoint_halves(self, tmp_path):
+        stage_d = _fixture(tmp_path)
+        result = _prepare(tmp_path, stage_d)
+        assert result.exit_code == 0, result.output
+        combined = tmp_path / 'stamp' / 'refine' / 'c00'
+        for half in ('halfA', 'halfB'):
+            assert (combined / half / 'particles.star').is_file()
+            assert (combined / half / 'reference.mrc').is_file()
+            assert (combined / half / 'README.md').is_file()
+        assert json.loads((combined / 'prepare.json').read_text())['voxel_size_angstrom'] == 3.0
+        rows_a = starfile.read(combined / 'halfA' / 'particles.star')
+        rows_b = starfile.read(combined / 'halfB' / 'particles.star')
+        assert list(rows_a['rlnTomoParticleName']) == ['p0'] and list(rows_b['rlnTomoParticleName']) == ['p1']
+
+    def test_prepare_rejects_half_set_mixed_class(self, tmp_path):
         stage_d = _fixture(tmp_path, mixed=True)
-        result = _invoke(tmp_path, stage_d)
+        result = _prepare(tmp_path, stage_d)
         assert result.exit_code != 0
-        out = tmp_path / 'stamp' / 'refine'
-        assert not (out / 'c00' / 'halfA' / 'particles.star').exists()
+        assert not (tmp_path / 'stamp' / 'refine' / 'c00' / 'halfA' / 'particles.star').exists()
 
-    def test_refine_resumes_unfinished_half(self, tmp_path, monkeypatch):
-        from stamp.commands import refine
+# TestRefineAssess: class containing tests for `stamp refine assess`
+class TestRefineAssess:
+    def _prepared(self, tmp_path):
         stage_d = _fixture(tmp_path)
-        real = refine.run_half
-        ran: list[str] = []
-        state = {'fail': True}
+        assert _prepare(tmp_path, stage_d).exit_code == 0
+        return stage_d, tmp_path / 'stamp' / 'refine' / 'c00'
 
-        # flaky: fail on half B until told otherwise, else refine normally
-        def flaky(adapter, runner, particles, reference, workdir, parameters):
-            if state['fail'] and workdir.name == 'halfB':
-                raise RuntimeError('boom')
-            ran.append(workdir.name)
-            return real(adapter, runner, particles, reference, workdir, parameters)
-
-        monkeypatch.setattr(refine, 'run_half', flaky)
-        assert _invoke(tmp_path, stage_d).exit_code != 0
-        assert ran == ['halfA']
-
-        state['fail'] = False
-        ran.clear()
-        result = _invoke(tmp_path, stage_d)
+    def test_assess_end_to_end(self, tmp_path):
+        _, prepared = self._prepared(tmp_path)
+        rng = np.random.default_rng(1)
+        signal = np.asarray(mrcfile.open(prepared / 'halfA' / 'reference.mrc').data, dtype=np.float32)
+        _write_refined(tmp_path / 'runA' / 'final.mrc', signal + 0.1 * rng.random(signal.shape))
+        _write_refined(tmp_path / 'runB' / 'final.mrc', signal + 0.1 * rng.random(signal.shape))
+        result = _assess(tmp_path, tmp_path / 'runA' / 'final.mrc', tmp_path / 'runB' / 'final.mrc')
         assert result.exit_code == 0, result.output
-        assert ran == ['halfB']
-        assert (tmp_path / 'stamp' / 'refine' / 'c00' / 'final_A.mrc').is_file()
+        assert (prepared / 'fsc.txt').is_file() and (prepared / 'fsc.svg').is_file()
+        assert (prepared / 'params.toml').is_file()
 
-    def test_refine_reuses_finished_halves_until_parameters_change(self, tmp_path, monkeypatch):
-        from stamp.commands import refine
-        stage_d = _fixture(tmp_path)
-        real = refine.run_half
-        ran: list[str] = []
+    def test_assess_rejects_same_directory(self, tmp_path):
+        self._prepared(tmp_path)
+        rng = np.random.default_rng(2)
+        _write_refined(tmp_path / 'runA' / 'final.mrc', rng.random((16, 16, 16)))
+        _write_refined(tmp_path / 'runA' / 'final_b.mrc', rng.random((16, 16, 16)))
+        result = _assess(tmp_path, tmp_path / 'runA' / 'final.mrc', tmp_path / 'runA' / 'final_b.mrc')
+        assert result.exit_code != 0
+        assert isinstance(result.exception, StampValidationError) and 'share a directory' in str(result.exception)
 
-        # counting: record which half ran, then refine normally
-        def counting(adapter, runner, particles, reference, workdir, parameters):
-            ran.append(workdir.name)
-            return real(adapter, runner, particles, reference, workdir, parameters)
-
-        monkeypatch.setattr(refine, 'run_half', counting)
-        assert _invoke(tmp_path, stage_d, '--iterations', '2').exit_code == 0
-        assert ran == ['halfA', 'halfB']
-
-        ran.clear()
-        assert _invoke(tmp_path, stage_d, '--iterations', '2').exit_code == 0
-        assert ran == []  # both halves reused, FSC recomputed
-
-        assert _invoke(tmp_path, stage_d, '--iterations', '3').exit_code == 0
-        assert ran == ['halfA', 'halfB']  # changed iterations wipe the class directory
+    def test_assess_rejects_unrefined_seed(self, tmp_path):
+        _, prepared = self._prepared(tmp_path)
+        rng = np.random.default_rng(3)
+        seed = np.asarray(mrcfile.open(prepared / 'halfA' / 'reference.mrc').data, dtype=np.float32)
+        _write_refined(tmp_path / 'runA' / 'final.mrc', seed)
+        _write_refined(tmp_path / 'runB' / 'final.mrc', rng.random(seed.shape))
+        result = _assess(tmp_path, tmp_path / 'runA' / 'final.mrc', tmp_path / 'runB' / 'final.mrc')
+        assert result.exit_code != 0
+        assert isinstance(result.exception, StampValidationError) and 'identical to its seed' in str(result.exception)

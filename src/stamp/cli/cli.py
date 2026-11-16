@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import internal commands
-from stamp.cli import classify, config, decoy, filter, identify, internal, pick, plot, refine, run, tools
+from stamp.cli import classify, decoy, filter, identify, pick, plot, refine, tools
 from stamp.utils.errors import StampError
 from stamp.utils.log import configure_logging, log
 
@@ -26,14 +26,7 @@ stamp_app.add_typer(pick.pickCli)
 stamp_app.add_typer(decoy.decoyCli)
 stamp_app.add_typer(classify.classifyCli)
 stamp_app.add_typer(identify.identifyCli)
-stamp_app.add_typer(refine.refineCli)
-stamp_app.add_typer(run.runCli)
-stamp_app.add_typer(
-    config.configCli,
-    name='config',
-    help='Manage stamp_run.toml config files.',
-    rich_help_panel='Utilities',
-)
+stamp_app.add_typer(refine.refineCli, name='refine', help='Prepare RELION half-set refinements and assess the results.')
 stamp_app.add_typer(filter.filterCli)
 stamp_app.add_typer(
     plot.plotCli,
@@ -46,12 +39,6 @@ stamp_app.add_typer(
     name='tools',
     help='Misc STAMP tools.',
     rich_help_panel='Utilities'
-)
-stamp_app.add_typer(
-    internal.internalCli,
-    name='internal',
-    help='STAMP internal commands.',
-    hidden=True,
 )
 
 # logging_callback: provide logging options and configure logging

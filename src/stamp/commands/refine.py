@@ -1,51 +1,33 @@
 '''
-STAMP: refinement with enforced half-set independence
+STAMP: refinement preparation and assessment with enforced half-set independence
 '''
 
 # Import external dependencies
-import json, numpy as np
+import json, shutil, numpy as np
 from pathlib import Path
 
 # Import STAMP objects
-from stamp.adapters.m_refine import MRefineAdapter
-from stamp.adapters.mock import get_mock_adapter
-from stamp.adapters.relion import RelionRefineAdapter
-from stamp.backends.base import ToolCommand
-from stamp.backends.factory import check_backend_supports, select_runner
 from stamp.refine.fsc import compute_fsc, soft_sphere_mask, write_fsc_files
 from stamp.refine.halfset_guard import (
-    assert_distinct_references, full_poses, half_map, refine_output_tree, run_half, seed_reference, split_class_by_half, with_inplane,
+    assert_distinct_references, assert_independent_outputs, full_poses, refine_output_tree, seed_reference, split_class_by_half, with_inplane,
 )
-from stamp.run.state import stage_dir
+from stamp.refine.relion_export import write_half_readme, write_particle_star
 from stamp.schemas.particles import load_class_assignments, load_particle_set
-from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
-from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
+from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.log import log
-from stamp.utils.mrc import read_mrc, require_voxel_size
-from stamp.utils.options.argv import plot_argv
+from stamp.utils.mrc import read_mrc, read_voxel_size_angstrom, require_voxel_size
 from stamp.utils.plotting.refine import plot_fsc
 from stamp.utils.provenance import write_sidecar
 
-# _ADAPTERS: real refine adapters by --tool name
-_ADAPTERS = {'relion': RelionRefineAdapter, 'm': MRefineAdapter}
-
-# run_refine: refine one class (or all) with structurally independent half-sets
-def run_refine(
+# run_refine_prepare: write independent half-set inputs for an external RELION refinement
+def run_refine_prepare(
     class_id: str,
     identification: Path,
     particles: Path,
     class_assignments: Path,
     raw_tomogram_dir: Path,
     output_dir: Path,
-    threshold: float,
-    tool: str,
-    mask: Path | None,
-    iterations: int,
-    backend: str,
     voxel_size_angstrom: float | None,
-    combined_halfset: bool,
-    make_plots: bool = True,
-    plot_format: str = 'tiff',
 ) -> None:
     voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir)
     particle_set = load_particle_set(particles)
@@ -54,19 +36,12 @@ def run_refine(
     angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None and row.particle_id not in poses}    # a full pose already contains the in-plane angle
     class_averages_dir = class_assignments.parent / 'class_averages'
     identified = {row['cluster_id'] for row in json.loads(identification.read_text())}
-
     targets = sorted(identified) if class_id == 'all' else [class_id]
     output_dir.mkdir(parents=True, exist_ok=True)
-    adapter = get_mock_adapter('relion' if tool == 'relion' else 'm-refine') if backend == 'mock' else _ADAPTERS[tool]()
-    check_backend_supports(adapter, backend)
-    runner = select_runner(backend, requires_gpu=getattr(adapter, 'requires_gpu', False))
-    parameters = {'voxel_size_angstrom': voxel_size_angstrom, 'iterations': iterations, 'poses': poses}     # poses ride along to the adapter that writes the particle file
 
     failed_targets: list[str] = []
     for target in targets:
-        log.progress(f'Refining class {target}')
-        if combined_halfset:
-            raise StampPipelineError('--combined-halfset escape hatch is A2 future work')
+        log.progress(f'Preparing class {target}')
         try:
             half_a, half_b = split_class_by_half(target, assignments, particle_set.particles)
             half_a = [with_inplane(p, angle_by_particle) for p in half_a]
@@ -74,97 +49,61 @@ def run_refine(
             reference_a = seed_reference(class_averages_dir, target, 'A')
             reference_b = seed_reference(class_averages_dir, target, 'B')
             assert_distinct_references(reference_a, reference_b)
-
-            # everything that changes a half-map; mask, threshold and plots only affect the FSC that always reruns, so they can change between runs
-            fingerprint = {
-                'particles': file_signature(particles, content=True),
-                'class_assignments': file_signature(class_assignments, content=True),
-                'references': signatures({'A': reference_a, 'B': reference_b}),
-                'tool': tool,
-                'iterations': iterations,
-                'voxel_size_angstrom': voxel_size_angstrom,
-                'backend': backend,
-            }
-            if sync_checkpoint(output_dir / target, fingerprint):  # the class directory is both output and work dir
-                log.info(f'{target}: found matching partial output, resuming')
-            tree = refine_output_tree(output_dir, target)
-
-            final_a = half_map(tree, 'A')
-            if final_a is None:
-                final_a = run_half(adapter, runner, half_a, reference_a, tree['A'], parameters)
-            else:
-                log.info(f'{target}: half A loaded from checkpoint')
-            final_b = half_map(tree, 'B')
-            if final_b is None:
-                final_b = run_half(adapter, runner, half_b, reference_b, tree['B'], parameters)
-            else:
-                log.info(f'{target}: half B loaded from checkpoint')
-
-            map_a = read_mrc(final_a, dtype=np.float32)
-            map_b = read_mrc(final_b, dtype=np.float32)
-            user_mask = None
-            if mask is not None:
-                user_mask = read_mrc(mask, dtype=np.float32)
-            log.progress(f'{target}: computing FSC')
-            fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape), threshold=threshold)
-        except (StampValidationError, StampAdapterError) as exc:
+        except (StampValidationError, StampPipelineError) as exc:
             log.error(f'{target}: {exc}')
             failed_targets.append(target)
             continue
-
-        final_a.replace(tree['combined'] / 'final_A.mrc')
-        final_b.replace(tree['combined'] / 'final_B.mrc')
-        write_fsc_files(fsc, tree['combined'], threshold=threshold)
-        log.info(f'{target}: resolution {fsc.resolution_angstrom:.1f} A @ FSC=0.143')
-
-        if make_plots:
-            plot_fsc(fsc, tree['combined'], target, plot_format)
-
+        tree = refine_output_tree(output_dir, target)
+        for half, members, reference in (('A', half_a, reference_a), ('B', half_b, reference_b)):
+            write_particle_star(members, tree[half] / 'particles.star', poses=poses, voxel_size_angstrom=voxel_size_angstrom)
+            shutil.copyfile(reference, tree[half] / 'reference.mrc')
+            write_half_readme(tree[half] / 'README.md', half, len(members), voxel_size_angstrom)
+        (tree['combined'] / 'prepare.json').write_text(json.dumps({'class_id': target, 'voxel_size_angstrom': voxel_size_angstrom, 'n_half_a': len(half_a), 'n_half_b': len(half_b)}, indent=2))
         write_sidecar(
             tree['combined'],
-            stage='refine',
-            tool=f'stamp-{tool}',
+            stage='refine-prepare',
+            tool='stamp',
             tool_version=None,
-            parameters={
-                'class_id': target,
-                'tool': tool,
-                'iterations': iterations,
-                'backend': backend,
-                'resolution_angstrom': fsc.resolution_angstrom,
-                'n_half_a': len(half_a),
-                'n_half_b': len(half_b),
-                'mask': str(mask) if mask else None,
-            },
-            inputs=[
-                ('particle_set', particles),
-                ('class_assignments', class_assignments),
-                ('reference:A', reference_a),
-                ('reference:B', reference_b),
-            ] + ([('mask', mask)] if mask else []),
+            parameters={'class_id': target, 'voxel_size_angstrom': voxel_size_angstrom, 'n_half_a': len(half_a), 'n_half_b': len(half_b)},
+            inputs=[('particle_set', particles), ('class_assignments', class_assignments), ('reference:A', reference_a), ('reference:B', reference_b)],
         )
+        log.info(f'{target}: wrote half-set inputs to {tree["combined"]}')
     if failed_targets:
         raise StampPipelineError(f'{len(failed_targets)} of {len(targets)} class(es) failed: {", ".join(failed_targets)}')
-    log.info(f'Refinement complete for {len(targets)} class(es)')
 
-# build_refine_commands: create ToolCommand for `stamp refine`
-def build_refine_commands(config, output_dir: Path) -> list[ToolCommand]:
-    target = stage_dir(output_dir, 'real', 'refine')
-    identify_dir = stage_dir(output_dir, 'real', 'identify')
-    argv = [
-        'stamp', 'refine',
-        '--class-id', config.stage.refine.class_id,
-        '--identification', str(identify_dir / 'identification.json'),
-        '--particles', str(stage_dir(output_dir, 'real', 'pick') / 'particle_set.json'),
-        '--class-assignments', str(stage_dir(output_dir, 'real', 'classify') / 'class_assignments.json'),
-        '--raw-dir', str(config.run.raw_tomogram_dir),
-        '--out-dir', str(target),
-        '--threshold', str(config.stage.refine.threshold),
-        '--voxel-size-a', str(config.run.voxel_size_angstrom),
-        '--tool', config.stage.refine.tool,
-        '--iterations', str(config.stage.refine.iterations),
-        '--backend', 'local',
-    ]
-    if config.stage.refine.mask is not None:
-        argv += ['--mask', str(config.stage.refine.mask)]
-    argv += plot_argv(config.plots)
-    return [ToolCommand(tool='refine', argv=argv, working_directory=target, output_paths=[target])]
+# run_refine_assess: FSC of two externally refined half-maps, after independence checks
+def run_refine_assess(
+    class_id: str,
+    prepared_dir: Path,
+    half_a: Path,
+    half_b: Path,
+    threshold: float,
+    mask: Path | None,
+    make_plots: bool = True,
+    plot_format: str = 'tiff',
+) -> None:
+    manifest = json.loads((prepared_dir / 'prepare.json').read_text())    # missing file raises, caught by the CLI error handler as a normal error
+    voxel_size_angstrom = manifest['voxel_size_angstrom']
+    map_a, map_b = read_mrc(half_a, dtype=np.float32), read_mrc(half_b, dtype=np.float32)
+    ref_a = read_mrc(prepared_dir / 'halfA' / 'reference.mrc', dtype=np.float32)
+    ref_b = read_mrc(prepared_dir / 'halfB' / 'reference.mrc', dtype=np.float32)
+    assert_independent_outputs(half_a, half_b, map_a, map_b, ref_a, ref_b)
+    for path in (half_a, half_b):
+        measured = read_voxel_size_angstrom(path)    # None when the header has no voxel size, then nothing to compare
+        if measured is not None and abs(measured - voxel_size_angstrom) > 1e-3 * voxel_size_angstrom:
+            raise StampValidationError(f'{path.name} voxel size {measured} A does not match {voxel_size_angstrom} A from prepare')
+    user_mask = read_mrc(mask, dtype=np.float32) if mask is not None else None
+    log.progress(f'{class_id}: computing FSC')
+    fsc = compute_fsc(map_a, map_b, voxel_size_angstrom, mask=user_mask if user_mask is not None else soft_sphere_mask(map_a.shape), threshold=threshold)
+    write_fsc_files(fsc, prepared_dir, threshold=threshold)
+    log.info(f'{class_id}: resolution {fsc.resolution_angstrom:.1f} A @ FSC={threshold}')
+    if make_plots:
+        plot_fsc(fsc, prepared_dir, class_id, plot_format)
+    write_sidecar(
+        prepared_dir,
+        stage='refine-assess',
+        tool='stamp',
+        tool_version=None,
+        parameters={'class_id': class_id, 'threshold': threshold, 'resolution_angstrom': fsc.resolution_angstrom, 'mask': str(mask) if mask else None},
+        inputs=[('half_a', half_a), ('half_b', half_b)] + ([('mask', mask)] if mask else []),
+    )

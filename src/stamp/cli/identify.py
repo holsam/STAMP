@@ -12,7 +12,6 @@ from stamp.utils.options.cli import NProcessesOption, OutDirOption, PlotFormatOp
 import stamp.commands.identify as identifyfuncs
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
-from stamp.utils.options.literals import BackendName, PlotFormat
 
 # Initialise Typer app
 identifyCli = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -37,10 +36,6 @@ def identify(
         Path | None,
         typer.Option('--decoy-classes', exists=True, file_okay=False, help='Decoy class averages.')
     ] = None,
-    backend: Annotated[
-        BackendName,
-        typer.Option('--backend', help='Backend to use for processing.', rich_help_panel = 'Backend')
-    ] = 'local',
     fitter: Annotated[
         Literal['native'],
         typer.Option('--fitter', help='Fitter to use for identification.', rich_help_panel = 'Backend')
@@ -61,7 +56,6 @@ def identify(
         output_dir=resolve_output_dir(output_dir, 'identify'),
         decoy_classes=decoy_classes,
         resolution=resolution,
-        backend=backend,
         fitter=fitter,
         fetch_missing=fetch_missing,
         n_workers=n_workers,

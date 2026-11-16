@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.backends.base import ToolCommand
 from stamp.decoy.generate import (
     METHOD_AUTO,
     METHOD_RANDOM_VOLUME,
@@ -23,7 +22,6 @@ from stamp.decoy.generate import (
 )
 from stamp.decoy.validate import assert_comparable
 from stamp.picking.manifests import load_tomogram_manifests, manifest_paths
-from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet, load_particle_set
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
@@ -31,7 +29,6 @@ from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import cleanup_raw
 from stamp.utils.log import log
 from stamp.utils.mrc import require_voxel_size
-from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
 from stamp.utils.provenance import write_sidecar
 
@@ -230,23 +227,3 @@ def run_decoy(
         style = pick_plot_style if segmentation_paths else 'none'
         plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths), plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
-
-# build_decoy_commands: create ToolCommand for `stamp decoy`
-def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
-    target = stage_dir(output_dir, 'decoy', 'pick')
-    real_particles = stage_dir(output_dir, 'real', 'pick') / 'particle_set.json'
-    argv = [
-        'stamp', 'decoy',
-        '--out-dir', str(output_dir),
-        '--voxel-size-a', str(config.run.voxel_size_angstrom),
-        '--method', config.decoy.method,
-        '--real-particle-set', str(real_particles),
-        '--raw-dir', str(config.run.raw_tomogram_dir),
-        '--min-border-a', str(config.decoy.min_border_angstrom),
-        '--seed', str(config.stage.pick.half_set_seed),
-        '--n-processes', str(config.decoy.n_workers),
-    ]
-    argv += seg_dir_argv(config.run.segmentation_dir)
-    argv += keep_raw_argv(config.decoy.keep_raw)
-    argv += plot_argv(config.plots, pick_options=True)
-    return [ToolCommand(tool='decoy', argv=argv, working_directory=target, output_paths=[target / 'decoy_particle_set.json'])]

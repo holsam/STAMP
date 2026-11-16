@@ -10,8 +10,8 @@ This document outlines the available command-line options for each STAMP command
 - [`stamp classify`](#stamp-classify)
 - [`stamp identify`](#stamp-identify)
 - [`stamp refine`](#stamp-refine)
-- [`stamp run`](#stamp-run)
-- [`stamp config`](#stamp-config)
+    - [`stamp refine prepare`](#stamp-refine-prepare)
+    - [`stamp refine assess`](#stamp-refine-assess)
 - [`stamp filter`](#stamp-filter)
 - [`stamp plot`](#stamp-plot)
 - [`stamp tools`](#stamp-tools)
@@ -40,11 +40,9 @@ Option | Default | Meaning | Notes
 
 ## Resuming interrupted commands
 
-STAMP's `pick`, `decoy`, `classify`, `identify` and `refine` commands periodically checkpoint finished work throughout processing. Re-running a command with the same inputs/parameters will be detected, and the command will resume from the previous checkpoint. Partial output lives in `raw/` (for `refine`, in the class directory) alongside a `checkpoint.json` fingerprint of everything that affects the results.
+STAMP's `pick`, `decoy`, `classify` and `identify` commands periodically checkpoint finished work throughout processing. Re-running a command with the same inputs/parameters will be detected, and the command will resume from the previous checkpoint. Partial output lives in `raw/` alongside a `checkpoint.json` fingerprint of everything that affects the results.
 
 If a command's inputs or parameters differ, any old partial output is discarded with a warning. Parameters which don't affect results (e.g. `--n-processes`, plots, `--keep-raw`) and steps applied after checkpointed work (for `pick`: consensus rule, distance threshold, seed and beam angle filter) can change between runs without invalidating a given checkpoint.
-
-`stamp run` re-runs will also reuse any valid partial output within a stage.
 
 <br>
 
@@ -114,7 +112,6 @@ Option | Default | Use
 `--n-synthetic-tomograms` | `3` | Number of volumes to produce for `--method synthetic-noise`
 `--synthetic-shape` | `'200,200,200'` | Volume shape (in `z,y,x`) to use for `--method synthetic-noise`
 `--seed` | `0` | Seed to use for sampling and half-set assignment
-`--backend` | `local` | Backend to use for picking (`local` or `mock`)
 `--plots/--no-plots` | `--plots` | Write decoy position plots
 `--pick-plot-style` | `segmented` | Style of decoy position plots (`segmented` or `none`)
 `--plot-format` | `tiff` | Decoy plot file format (`png` or `jpg` or `tiff` or `svg`)
@@ -181,7 +178,6 @@ Option | Default | Use
 `-r, --resolution` | *n/a (required)* | Class-average resolution in Å, used for low-pass filtering
 `-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/identify`)
 `--decoy-classes` | `None` | Directory containing decoy class averages from `stamp decoy`
-`--backend` | `local` | Backend to use for identification (`local` or `mock`)
 `--fitter` | `native` | Fitting tool to use
 `--fetch-missing` | `False` | Fetch model from AlphaFold when a candidate has no local `structure_path`
 `--plots/--no-plots` | `--plots` | Write fit-score heatmap and decoy-control histogram plots
@@ -192,83 +188,58 @@ Option | Default | Use
 
 ## `stamp refine`
 
+`stamp refine` has two subcommands: `prepare` writes independent half-set inputs for external refinement (RELION-5, or M) and `assess` computes the FSC between the two half-maps it gets back.
+
+### `stamp refine prepare`
+
 ```
-stamp refine --class-id ID --identification ID.json --particles P.json --class-assignments CA.json -r RAW_DIR [options]
+stamp refine prepare --class-id ID --identification ID.json --particles P.json --class-assignments CA.json -r RAW_DIR [options]
 ```
 
 Option | Default | Use
 -- | -- | --
-`--class-id` | *n/a (required)* | ID for class to refine, or `all` for every identified class
+`--class-id` | *n/a (required)* | ID for class to prepare, or `all` for every identified class
 `--identification` | *n/a (required)* | Path to `identification.json` from `stamp identify`
 `--particles` | *n/a (required)* | Path to `particle_set.json` from `stamp pick`
 `--class-assignments` | *n/a (required)* | Path to `class_assignments.json` from `stamp classify`
 `-r, --raw-dir` | *n/a (required)* | Directory of raw tomogram MRCs
 `-o, --out-dir` | `.` | Output directory (outputs will be saved to `<dir>/stamp/refine`)
-`--voxel-size-a` | `None` | Voxel size in Å
-`--tool` | `relion` | Refinement tool to use (`relion` or `m`)
-`--mask` | `None` | Path to MRC file to use as mask
-`--iterations` | `5` | Number of refinement iterations to use
-`--backend` | `local` | Backend to use for refinement (`local` or `mock`)
-`--threshold` | `0.143` | FSC threshold used to read the resolution
-`--plots/--no-plots` | `--plots` | Write FSC curve plots
-`--plot-format` | `tiff` | FSC curve plot file format  (`png` or `jpg` or `tiff` or `svg`)
+`--voxel-size-a` | `None` *(read from MRC file header)* | Voxel size in Å
 
-<br>
+For each class, `prepare` writes `<class>/halfA/` and `<class>/halfB/`, each containing:
+- `particles.star`: the particles of that half, in RELION-5 format, with full poses where classify estimated them and normal-derived angle priors otherwise
+- `reference.mrc`: a copy of that half's class average, used as the starting reference
+- `README.md`: suggested RELION settings for that half (advice only, nothing is executed)
 
-## `stamp run`
+It also writes `<class>/prepare.json` (class id, voxel size, half sizes), which `assess` reads, and a provenance sidecar.
+
+`prepare` refuses a class that does not have particles in both halves, or whose two seed references are the same file.
+
+### `stamp refine assess`
 
 ```
-stamp run --config stamp_run.toml [options]
+stamp refine assess --class-id ID --prepared-dir STAMP_REFINE/ID --half-a FINAL_A.mrc --half-b FINAL_B.mrc [options]
 ```
 
 Option | Default | Use
 -- | -- | --
-`--config` | *n/a (required)* | `stamp_run.toml` path
-`--force` | `False` | Re-run every stage, ignoring resume state
-`--from` | `None` | Re-run from this stage onward (`pick`, `classify`, `identify`, `refine`)
-`--no-decoy` | `False` | Skip the decoy control track
-`--backend` | `None` | Override configuration files's default backend
+`--class-id` | *n/a (required)* | Class ID the half-maps belong to
+`--prepared-dir` | *n/a (required)* | Class directory written by `stamp refine prepare` (`<dir>/stamp/refine/<class>`)
+`--half-a` | *n/a (required)* | Final map from the half A refinement
+`--half-b` | *n/a (required)* | Final map from the half B refinement
+`--threshold` | `0.143` | FSC threshold used to read the resolution
+`--mask` | `None` | Path to MRC file to use as mask (otherwise a soft sphere is used)
+`--plots/--no-plots` | `--plots` | Write FSC curve plots
+`--plot-format` | `tiff` | FSC curve plot file format (`png` or `jpg` or `tiff` or `svg`)
 
-See the [configuration documentation](./configuration.md) for information about `stamp_run.toml`.
+Before computing the FSC, `assess` refuses the half-maps unless:
+- `--half-a` and `--half-b` are different files, in different directories
+- the two maps have the same box shape
+- neither map is identical to its seed reference, so each was actually refined
+- the two maps are not identical to each other
+- each map's voxel size matches the one in `prepare.json`, where the header records one
 
-<br>
-
-## `stamp config`
-
-### `stamp config init`
-```
-stamp config init --path PATH [options]
-```
-
-Create an annotated, blank `stamp_run.toml` file.
-
-Argument/Option | Default | Use
--- | -- | --
-`--path` | `.` | Directory to write `stamp_run.toml` into, or path to `stamp_run.toml`
-`-f, --force` | `False` | Overwrite an existing `stamp_run.toml`
-
-### `stamp config edit`
-```
-stamp config edit <path> [options]
-```
-
-Edit a `stamp_run.toml` file directly in terminal.
-
-Argument/Option | Default | Use
--- | -- | --
-`path` (positional) | `.` | Directory containing `stamp_run.toml`, or path to `stamp_run.toml`
-`--editor` | `None` *(falls back to `$EDITOR`, then `vi`)* | Editor to use instead of `$EDITOR`
-
-### `stamp config show`
-```
-stamp config show <path>
-```
-
-Print the contents of a `stamp_run.toml` to the terminal.
-
-Argument/Option | Default | Use
--- | -- | --
-`path` (positional) | `.` | Directory containing `stamp_run.toml`, or path to `stamp_run.toml`
+Results (`fsc.txt`, `fsc.svg`, and a sidecar) are written to the class directory.
 
 <br>
 
