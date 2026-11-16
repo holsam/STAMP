@@ -5,6 +5,7 @@ STAMP: shared per-item multiprocessing helper
 # Import external dependencies
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import nullcontext
 from functools import partial
 from typing import TypeVar
 
@@ -13,6 +14,15 @@ from stamp.utils.log import get_worker_log_config, init_worker_logging, log
 
 T = TypeVar('T')
 R = TypeVar('R')
+
+# _new_pool: process pool with worker logging
+def _new_pool(max_workers: int) -> ProcessPoolExecutor:
+    level_name, log_path = get_worker_log_config()
+    return ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker_logging, initargs=(level_name, log_path))
+
+# worker_pool: pooled executor when max_workers > 1, else no-op context
+def worker_pool(max_workers: int) -> ProcessPoolExecutor | nullcontext:
+    return _new_pool(max_workers) if max_workers > 1 else nullcontext()
 
 # run_parallel: run worker_fn(item) for each item, sequentially in-process if max_workers <= 1, else pooled
 def run_parallel(
@@ -64,8 +74,7 @@ def run_parallel(
             _handle(item, index, future.result)
         return results
 
-    level_name, log_path = get_worker_log_config()
-    with ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker_logging, initargs=(level_name, log_path)) as owned_pool:
+    with _new_pool(max_workers) as owned_pool:
         future_to_item = {owned_pool.submit(worker_fn, item): item for item in items}
         for index, future in enumerate(as_completed(future_to_item), start=1):
             item = future_to_item[future]

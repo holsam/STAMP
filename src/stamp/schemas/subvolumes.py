@@ -43,12 +43,16 @@ class Subvolumes:
     def take(self, indices: Sequence[int]) -> 'Subvolumes':
         return Subvolumes(self.cache_dir, [self.index[i] for i in indices], self.box_voxels)
 
-    # iter_batches: yield (global_indices, dense_batch) grouped by tomogram, for disk-local reads
-    def iter_batches(self, batch_size: int = 512) -> Iterator[tuple[list[int], np.ndarray]]:
+    # indices_by_tomogram: tomogram id -> local indices of its particles, in index order
+    def indices_by_tomogram(self) -> dict[str, list[int]]:
         by_tomogram: dict[str, list[int]] = {}
         for local_index, (tomogram_id, _row) in enumerate(self.index):
             by_tomogram.setdefault(tomogram_id, []).append(local_index)
-        for tomogram_id, local_indices in by_tomogram.items():
+        return by_tomogram
+
+    # iter_batches: yield (global_indices, dense_batch) grouped by tomogram, for disk-local reads
+    def iter_batches(self, batch_size: int = 512) -> Iterator[tuple[list[int], np.ndarray]]:
+        for tomogram_id, local_indices in self.indices_by_tomogram().items():
             mmap = self._mmap_for(tomogram_id)
             for start in range(0, len(local_indices), batch_size):
                 chunk = local_indices[start : start + batch_size]
