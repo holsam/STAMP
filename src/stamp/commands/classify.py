@@ -22,13 +22,15 @@ from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.run.state import stage_dir
-from stamp.utils.halfset import split_by_half_set
-from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle, ParticleSet
+from stamp.utils.halfset import half_set_indices
+from stamp.schemas.particles import ClassAssignment, OrientationPrior, Particle
 from stamp.schemas.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import archive_and_remove_directory, glob_mrc, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import cleanup_raw, glob_mrc, load_particle_set, match_by_stem, paths_by_stem, require_voxel_size, write_sidecar
 from stamp.utils.log import log, log_config
-from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
+from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
+from stamp.utils.plotting.core import central_slice, finish, plot_path
+from stamp.utils.options.literals import PlotFormat
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
 # run_classify: cluster picked particles by structural similarity per orientation prior
@@ -65,13 +67,9 @@ def run_classify(
     reject_quantile: float = 0.95,
     merge_fraction: float = 1.0,
 ) -> None:
-    if voxel_size_angstrom is None:
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(raw_tomogram_dir))
-        if voxel_size_angstrom is None:
-            raise StampPipelineError('Voxel size not given and not found in any MRC header in --raw-dir.')
-        log.debug(f'Resolved voxel size from MRC headers: {voxel_size_angstrom} Å')
+    voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir)
     log.progress('Classifying particle set')
-    particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
+    particle_set = load_particle_set(particles)
     is_decoy = is_decoy_particle_set(particle_set)
     groups = particle_set.by_prior()
     log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles ({", ".join(f"{len(group)} {prior.value}" for prior, group in groups.items())})')
@@ -81,7 +79,7 @@ def run_classify(
         log.warning(f'No raw tomogram matching {stem_path.stem}, its particles will be skipped')
     tomogram_paths = {stem_path.stem: raw_path for stem_path, raw_path in matched.items()}
     segmentation_paths = (
-        {path.stem: str(path) for path in glob_mrc(segmentation_dir)} if segmentation_dir is not None else {}
+        {stem: str(path) for stem, path in paths_by_stem(segmentation_dir).items()} if segmentation_dir is not None else {}
     )
     box_voxels = int(round(box_angstrom / voxel_size_angstrom))
     if box_voxels % 2 == 0:
@@ -164,11 +162,7 @@ def run_classify(
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
 
-    if not keep_raw:
-        raw_dir = output_dir / 'raw'
-        if raw_dir.is_dir():
-            archive_path = archive_and_remove_directory(raw_dir)
-            log.info(f'Archived raw classify output to {archive_path}')
+    cleanup_raw(output_dir, keep_raw=keep_raw, label='raw classify output')
 
     write_sidecar(
         output_dir,
@@ -352,13 +346,11 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
     ]
     if config.run.tilt_max_degrees is not None:
         argv += ['--tilt-max', str(config.run.tilt_max_degrees)]
-    if config.run.segmentation_dir is not None:
-        argv += ['--seg-dir', str(config.run.segmentation_dir)]
+    argv += seg_dir_argv(config.run.segmentation_dir)
     if not settings.strict_halfset_independence:
         argv.append('--no-strict-halfset-independence')
-    argv.append('--keep-raw' if settings.keep_raw else '--no-keep-raw')
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--plot-format', config.plots.format]
+    argv += keep_raw_argv(settings.keep_raw)
+    argv += plot_argv(config.plots)
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
 # _pose_assignment: a class assignment carrying polish's pose, the in-plane angle only where it means something (membrane normal prior)
@@ -401,8 +393,7 @@ def _classify_combined(
     full = ParticleStore(subvols, orientations, *tilt)
     scale = subvols.box_voxels / working_voxels     # polish shifts are in working voxels
     averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
-    for half_set in (HalfSet.A, HalfSet.B):
-        half_indices = [i for i, particle in enumerate(particles) if particle.half_set == half_set]
+    for half_set, half_indices in half_set_indices(particles).items():
         if not half_indices:
             continue
         averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale, polish_config.prior)
@@ -427,9 +418,7 @@ def _classify_strict(
     work_dir: Path,
     voxel_size_angstrom: float,
 ) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
-    half_a, half_b = split_by_half_set(list(particles))
-    index_of = {particle.particle_id: i for i, particle in enumerate(particles)}
-    members = {'A': [index_of[p.particle_id] for p in half_a], 'B': [index_of[p.particle_id] for p in half_b]}
+    members = {half.value: indices for half, indices in half_set_indices(list(particles)).items()}
     if not members['A'] or not members['B']:
         raise StampPipelineError('Strict mode needs particles in both half-sets')
     seeds = {half: reduce_and_cluster(features[indices], config) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B

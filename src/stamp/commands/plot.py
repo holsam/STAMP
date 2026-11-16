@@ -3,13 +3,13 @@ STAMP: standalone plot generation logic
 '''
 
 # Import external dependencies
-import json, random
+import random
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.schemas.particles import Particle, ParticleSet
+from stamp.schemas.particles import Particle
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import glob_mrc
+from stamp.utils.io import load_particle_set, paths_by_stem
 from stamp.utils.log import log
 from stamp.utils.plotting.picks import plot_positions
 
@@ -46,14 +46,14 @@ def run_plots_pick(
     seed: int,
     n_workers: int,
 ) -> None:
-    particle_set = ParticleSet.model_validate(json.loads(particle_set_path.read_text()))
+    particle_set = load_particle_set(particle_set_path)
     all_tomogram_ids = sorted({p.tomogram_id for p in particle_set.particles})
     selected = _select_tomogram_ids(all_tomogram_ids, tomogram_ids, n_tomograms, seed)
     particles: list[Particle] = [p for p in particle_set.particles if p.tomogram_id in selected]
     log.info(f'Plotting {len(selected)} of {len(all_tomogram_ids)} tomogram(s)')
 
-    segmentation_paths = {path.stem: path for path in glob_mrc(segmentation_dir)} if segmentation_dir else {}
-    raw_tomogram_paths = {path.stem: path for path in glob_mrc(raw_tomogram_dir)} if raw_tomogram_dir else {}
+    segmentation_paths = paths_by_stem(segmentation_dir) if segmentation_dir else {}
+    raw_tomogram_paths = paths_by_stem(raw_tomogram_dir) if raw_tomogram_dir else {}
 
     output_dir.mkdir(parents=True, exist_ok=True)
     plot_positions(particles, output_dir, pick_plot_style, plot_format, segmentation_paths, raw_tomogram_paths, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)

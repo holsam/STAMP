@@ -53,7 +53,7 @@ class TestIdentifyCommand:
             '--classes', str(classes),
             '--candidates', str(tmp_path / 'candidates.yaml'),
             '--decoy-classes', str(decoys),
-            '--output-dir', tmp_path,
+            '--out-dir', tmp_path,
             '--resolution', '30.0',
         ])
         assert result.exit_code == 0, result.output
@@ -98,7 +98,7 @@ class TestIdentifyCommand:
             'identify',
             '--classes', str(classes),
             '--candidates', str(tmp_path / 'candidates.yaml'),
-            '--output-dir', str(tmp_path),
+            '--out-dir', str(tmp_path),
             '--resolution', '30.0',
             '-n', '1',
         ]

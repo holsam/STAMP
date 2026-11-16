@@ -7,12 +7,14 @@ import mrcfile, numpy as np, os, pytest, subprocess, tomllib
 from pathlib import Path
 
 # Import internal functions and schema
-from stamp.utils.halfset import assign_half_sets, split_by_half_set, validate_single_half_set
+from stamp.schemas.config import PlotSettings
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
-from stamp.utils import io as io_utils
 from stamp.schemas.provenance import ProvenanceSidecar
+from stamp.utils import io as io_utils
 from stamp.utils.errors import StampConfigError, StampPipelineError, StampValidationError
+from stamp.utils.halfset import assign_half_sets, half_set_indices, validate_single_half_set
 from stamp.utils.log import configure_logging
+from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.parallel import run_parallel, run_parallel_ordered
 
 # _particle: returns a valid Particle instance
@@ -111,15 +113,14 @@ class TestValidateHalfSet:
 
 class TestSplitHalfSet:
     '''A list of particles from different half sets should be split into separate lists'''
-    def test_split_by_half_set(self) -> None:
+    def test_half_set_indices(self) -> None:
         particles = [
             _particle('p001', HalfSet.A),
             _particle('p002', HalfSet.B),
             _particle('p003', HalfSet.A),
         ]
-        half_a, half_b = split_by_half_set(particles)
-        assert {p.particle_id for p in half_a} == {'p001', 'p003'}
-        assert {p.particle_id for p in half_b} == {'p002'}
+        assert half_set_indices(particles) == {HalfSet.A: [0, 2], HalfSet.B: [1]}
+        assert half_set_indices([]) == {HalfSet.A: [], HalfSet.B: []}
 
 class TestIo:
     def test_resolve_commit_reads_git_head(self):
@@ -180,15 +181,33 @@ class TestIo:
     def test_expected_output_dir_resolved(self, tmp_path, command):
         assert io_utils.resolve_output_dir(tmp_path, command) == tmp_path / 'stamp' / command
 
-    def test_archive_and_remove_directory(self, tmp_path):
+    def test_class_average_mrc_round_trip(self, tmp_path):
+        average = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+        path = tmp_path / 'c00.mrc'
+        io_utils.write_class_average_mrc(path, average, voxel_size=2.5)
+        loaded, voxel_size = io_utils.read_class_average_mrc(path)
+        assert np.array_equal(loaded, average) and voxel_size == 2.5
+        with mrcfile.open(path) as mrc:
+            assert mrc.data.shape == (4, 3, 2)
+
+    def test_require_voxel_size(self, tmp_path):
+        assert io_utils.require_voxel_size(2.5, None) == 2.5
+        with pytest.raises(StampPipelineError):
+            io_utils.require_voxel_size(None, None)
+        with pytest.raises(StampPipelineError):
+            io_utils.require_voxel_size(None, [])
+
+    def test_cleanup_raw(self, tmp_path):
         directory = tmp_path / 'raw'
         directory.mkdir()
         (directory / 'a.txt').write_text('one')
         (directory / 'b.txt').write_text('two')
-        archive_path = io_utils.archive_and_remove_directory(directory)
+        archive_path = io_utils.cleanup_raw(tmp_path, keep_raw=False, label='test')
         assert archive_path == tmp_path / 'raw.tar.gz'
         assert archive_path.is_file()
         assert not directory.exists()
+        assert io_utils.cleanup_raw(tmp_path, keep_raw=False, label='test') is None
+        assert io_utils.cleanup_raw(tmp_path, keep_raw=True, label='test') is None
         import tarfile
         with tarfile.open(archive_path) as tar:
             names = set(tar.getnames())
@@ -472,3 +491,24 @@ class TestPickCache:
         (tmp_path / 'cache' / 't1.json').write_text('[{"tomogram_id": ')  # truncated
         loaded = load_cached_picks(tmp_path / 'cache', ['t0', 't1'])
         assert [p.tomogram_id for p in loaded] == ['t0']
+
+# TestOptionsArgv: class containing unit tests for src/stamp/utils/options/argv.py
+class TestOptionsArgv:
+    # test_seg_and_keep_raw_argv: --seg-dir only when configured, --keep-raw only when kept, never --no-keep-raw
+    def test_seg_and_keep_raw_argv(self):
+        assert seg_dir_argv(None) == []
+        assert seg_dir_argv(Path('/seg')) == ['--seg-dir', '/seg']
+        assert keep_raw_argv(True) == ['--keep-raw']
+        assert keep_raw_argv(False) == []
+
+    # test_plot_argv_standard: classify, identify and refine always send plots on or off plus the format
+    def test_plot_argv_standard(self):
+        assert plot_argv(PlotSettings(enabled=True, format='png')) == ['--plots', '--plot-format', 'png']
+        assert plot_argv(PlotSettings(enabled=False, format='png')) == ['--no-plots', '--plot-format', 'png']
+
+    # test_plot_argv_pick_options: pick and decoy send explicit zstack and 3D on/off even when plotting is disabled
+    def test_plot_argv_pick_options(self):
+        off = plot_argv(PlotSettings(enabled=False, pick_zstack_movie=False, pick_plot_3d=False), pick_options=True)
+        assert off == ['--no-pick-zstack-movie', '--no-pick-plot-3d']
+        on = plot_argv(PlotSettings(enabled=True, pick_style='none', format='svg', pick_zstack_movie=True, pick_plot_3d=True), pick_options=True)
+        assert on == ['--plots', '--pick-plot-style', 'none', '--plot-format', 'svg', '--pick-zstack-movie', '--pick-plot-3d']

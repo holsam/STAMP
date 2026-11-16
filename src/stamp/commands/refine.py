@@ -20,11 +20,12 @@ from stamp.refine.halfset_guard import (
     assert_distinct_references, refine_output_tree, split_class_by_half,
 )
 from stamp.run.state import stage_dir
-from stamp.schemas.particles import ClassAssignment, ParticleSet
+from stamp.schemas.particles import ClassAssignment
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.utils.errors import StampAdapterError, StampPipelineError, StampValidationError
-from stamp.utils.io import glob_mrc, new_mrc, read_mrc, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import load_class_assignments, load_particle_set, new_mrc, read_mrc, require_voxel_size, write_sidecar
 from stamp.utils.log import log
+from stamp.utils.options.argv import plot_argv
 from stamp.utils.plotting.core import finish, plot_path
 from stamp.utils.plotting.refine import fsc_curve
 
@@ -100,13 +101,9 @@ def run_refine(
     make_plots: bool = True,
     plot_format: str = 'tiff',
 ) -> None:
-    if voxel_size_angstrom is None:
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(raw_tomogram_dir))
-        if voxel_size_angstrom is None:
-            raise StampValidationError('Voxel size not given and not found in any MRC header in --raw-dir.')
-        log.debug(f'Resolved voxel size from MRC headers: {voxel_size_angstrom} Å')
-    particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
-    assignments = [ClassAssignment.model_validate(row) for row in json.loads(class_assignments.read_text())]
+    voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir)
+    particle_set = load_particle_set(particles)
+    assignments = load_class_assignments(class_assignments)
     poses = _full_poses(assignments)
     angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None and row.particle_id not in poses}    # a full pose already contains the in-plane angle
     class_averages_dir = class_assignments.parent / 'class_averages'
@@ -225,6 +222,5 @@ def build_refine_commands(config, output_dir: Path) -> list[ToolCommand]:
     ]
     if config.stage.refine.mask is not None:
         argv += ['--mask', str(config.stage.refine.mask)]
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--plot-format', config.plots.format]
+    argv += plot_argv(config.plots)
     return [ToolCommand(tool='refine', argv=argv, working_directory=target, output_paths=[target])]

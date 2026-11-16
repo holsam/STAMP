@@ -12,10 +12,11 @@ from pathlib import Path
 from rich.console import Console
 from rich.text import Text
 from rich.tree import Tree
-from typing import Any
+from typing import Any, Literal
 
 # Import STAMP objects
 from stamp.schemas.manifest import TomogramManifest
+from stamp.schemas.particles import ClassAssignment, ParticleSet
 from stamp.schemas.picks import RawPick
 from stamp.schemas.provenance import ProvenanceSidecar
 
@@ -73,6 +74,23 @@ def new_mrc(path: Path | str, data: np.ndarray, *, voxel_size: Any = None) -> No
                 mrc.voxel_size = voxel_size
     except (OSError, ValueError) as exc:
         raise _mrc_error('write', path, exc) from exc
+
+# write_class_average_mrc: write an (x, y, z) class average to MRC with axes reversed
+def write_class_average_mrc(path: Path | str, average: np.ndarray, *, voxel_size: float) -> None:
+    new_mrc(path, np.transpose(average, (2, 1, 0)).astype(np.float32), voxel_size=voxel_size)
+
+# read_class_average_mrc: read a class average MRC back to (x, y, z) order
+def read_class_average_mrc(path: Path | str) -> tuple[np.ndarray, float]:
+    with open_mrc(path) as mrc:
+        return np.transpose(np.asarray(mrc.data), (2, 1, 0)), float(mrc.voxel_size.x)
+
+# paths_by_stem: {file stem: path} for MRC files in a directory
+def paths_by_stem(directory: Path) -> dict[str, Path]:
+    return {path.stem: path for path in glob_mrc(directory)}
+
+# manifest_paths: {tomogram_id: path} for manifests that have given path set
+def manifest_paths(manifests: list[TomogramManifest], attr: Literal['segmentation_path', 'raw_tomogram_path']) -> dict[str, Path]:
+    return {m.tomogram_id: getattr(m, attr) for m in manifests if getattr(m, attr) is not None}
 
 # glob_mrc: sorted *.mrc paths in a directory, raising StampConfigError if it is missing or unreadable
 def glob_mrc(directory: Path) -> list[Path]:
@@ -239,23 +257,16 @@ def load_tomogram_manifests(
     raw_tomogram_dir: Path,
     voxel_size_angstrom: float | None,
 ) -> list[TomogramManifest]:
-    from stamp.utils.errors import StampPipelineError
     from stamp.utils.log import log
     raw_paths = glob_mrc(raw_tomogram_dir)
     if segmentation_dir is None:
-        if voxel_size_angstrom is None:
-            voxel_size_angstrom = resolve_directory_voxel_size_angstrom(raw_paths)
-            if voxel_size_angstrom is None:
-                raise StampPipelineError(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
+        voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_paths)
         return [TomogramManifest(tomogram_id=path.stem, raw_tomogram_path=path, voxel_size_angstrom=voxel_size_angstrom) for path in raw_paths]
     segmentation_paths = glob_mrc(segmentation_dir)
     matched, unmatched = match_by_stem(segmentation_paths, raw_paths)
     for segmentation_path in unmatched:
         log.warning(f'No raw tomogram matching {segmentation_path.stem}, skipping')
-    if voxel_size_angstrom is None:
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(list(matched.values()))
-        if voxel_size_angstrom is None:
-            raise StampPipelineError(f'No voxel size in any raw tomogram header under {raw_tomogram_dir} and --voxel-size-a not given')
+    voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, list(matched.values()))
     return [
         TomogramManifest(
             tomogram_id=segmentation_path.stem,
@@ -265,6 +276,14 @@ def load_tomogram_manifests(
         )
         for segmentation_path, raw_path in matched.items()
     ]
+
+# load_particle_set: validate a ParticleSet JSON file
+def load_particle_set(path: Path) -> ParticleSet:
+    return ParticleSet.model_validate(json.loads(path.read_text()))
+
+# load_class_assignments: validate a list of ClassAssignment rows from a JSON file
+def load_class_assignments(path: Path) -> list[ClassAssignment]:
+    return [ClassAssignment.model_validate(row) for row in json.loads(path.read_text())]
 
 # read_voxel_size_angstrom: voxel size from an MRC header, Angstrom, or None if absent/zero/non-cubic
 def read_voxel_size_angstrom(path: Path) -> float | None:
@@ -295,12 +314,37 @@ def resolve_directory_voxel_size_angstrom(paths: list[Path]) -> float | None:
         log.warning(f'Multiple voxel sizes were found in MRC headers ({breakdown}) - using the most common {most_common_value}')
     return most_common_value
 
-# archive_and_remove_directory: tar+gzip a directory to '<directory>.tar.gz' next to it, then delete the directory
-def archive_and_remove_directory(directory: Path) -> Path:
+# require_voxel_size: if no voxel size given, resolve it from MRC headers or raise StampPipelineError if still unknown
+def require_voxel_size(voxel_size_angstrom: float | None, directory_or_paths: Path | list[Path] | None) -> float:
+    if voxel_size_angstrom is not None:
+        return voxel_size_angstrom
+    from stamp.utils.errors import StampPipelineError
+    from stamp.utils.log import log
+    if directory_or_paths is None:
+        raise StampPipelineError('No voxel size given and no tomogram directory to read it from; pass --voxel-size-a')
+    if isinstance(directory_or_paths, Path):
+        paths, where = glob_mrc(directory_or_paths), str(directory_or_paths)
+    else:
+        paths, where = directory_or_paths, f'{len(directory_or_paths)} tomogram(s)'
+    resolved = resolve_directory_voxel_size_angstrom(paths)
+    if resolved is None:
+        raise StampPipelineError(f'No voxel size in any MRC header in {where} and --voxel-size-a not given')
+    log.debug(f'Resolved voxel size from MRC headers: {resolved} Å')
+    return resolved
+
+# cleanup_raw: unless keep_raw, tar+gzip '<output_dir>/raw' to 'raw.tar.gz' next to it, then delete it and log under label
+def cleanup_raw(output_dir: Path, *, keep_raw: bool, label: str) -> Path | None:
+    if keep_raw:
+        return None
+    directory = output_dir / 'raw'
+    if not directory.is_dir():
+        return None
     archive_path = directory.with_suffix(directory.suffix + '.tar.gz')
     with tarfile.open(archive_path, 'w:gz') as tar:
         tar.add(directory, arcname=directory.name)
     shutil.rmtree(directory)
+    from stamp.utils.log import log
+    log.info(f'Archived {label} to {archive_path}')
     return archive_path
 
 # resolve_output_dir: append stamp/<command> to supplied output dir

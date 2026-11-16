@@ -10,11 +10,11 @@ from pathlib import Path
 
 # Import STAMP objects
 from stamp.adapters.base import AdapterInputs
-from stamp.classify.cluster import prior_of_class
 from stamp.adapters.mock import get_mock_adapter
-from stamp.backends.base import ToolCommand
 from stamp.backends.local import LocalRunner
 from stamp.backends.mock import MockRunner
+from stamp.classify.cluster import prior_of_class
+from stamp.backends.base import ToolCommand
 from stamp.identify.decoy_check import evaluate_decoy_control
 from stamp.run.state import stage_dir
 from stamp.schemas.particles import OrientationPrior
@@ -24,10 +24,12 @@ from stamp.identify.panel import Candidate, load_candidate_panel
 from stamp.identify.simulate import simulate_density, to_comparable
 from stamp.utils.checkpoint import atomic_write_json, directory_signatures, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import glob_mrc, open_mrc, write_sidecar
+from stamp.utils.io import glob_mrc, read_class_average_mrc, write_sidecar
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
-from stamp.utils.plotting.core import PlotFormat, finish, plot_path
+from stamp.utils.options.argv import plot_argv
+from stamp.utils.plotting.core import finish, plot_path
+from stamp.utils.options.literals import PlotFormat
 from stamp.utils.plotting.identify import decoy_hist, score_heatmap
 
 # _CLASS_ID: leading {prior}-cNN token of a class-average filename
@@ -41,9 +43,9 @@ def load_class_averages(directory: Path, *, allow_empty: bool = False) -> dict[s
         match = _CLASS_ID.match(path.stem)
         if not match:
             continue
-        with open_mrc(path) as mrc:
-            grouped[match.group(1)].append(np.transpose(np.asarray(mrc.data), (2, 1, 0)))
-            voxel_sizes[match.group(1)] = float(mrc.voxel_size.x)
+        volume, voxel_size = read_class_average_mrc(path)
+        grouped[match.group(1)].append(volume)
+        voxel_sizes[match.group(1)] = voxel_size
     if not grouped:
         if allow_empty:
             return {}
@@ -215,7 +217,7 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
         'stamp', 'identify',
         '--classes', str(real_classes),
         '--candidates', str(config.stage.identify.candidates),
-        '--output-dir', str(target),
+        '--out-dir', str(target),
         '--fitter', config.stage.identify.fitter,
         '--backend', 'local',
         '-n', str(config.stage.identify.n_workers),
@@ -226,8 +228,7 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
         argv += ['--resolution', str(config.stage.identify.resolution)]
     if config.stage.identify.fetch_missing:
         argv.append('--fetch-missing')
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--plot-format', config.plots.format]
+    argv += plot_argv(config.plots)
     return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present

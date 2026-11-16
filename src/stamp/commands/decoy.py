@@ -27,8 +27,9 @@ from stamp.schemas.manifest import TomogramManifest
 from stamp.schemas.particles import ParticleSet
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import archive_and_remove_directory, glob_mrc, load_tomogram_manifests, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import cleanup_raw, load_particle_set, load_tomogram_manifests, manifest_paths, require_voxel_size, write_sidecar
 from stamp.utils.log import log
+from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
 
 # METHODS: decoy generation methods
@@ -108,9 +109,7 @@ def run_decoy(
     min_border_angstrom: float = 200.0,
 ) -> None:
     '''Generate a decoy dataset to run through STAMP alongside real data'''
-    if voxel_size_angstrom is None:
-        _HEADER_DIR = raw_tomogram_dir or segmentation_dir
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(_HEADER_DIR))
+    voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir or segmentation_dir)
     log.progress(f'Generating decoy dataset ({method})')
     config = DecoyGeometry(voxel_size_angstrom=voxel_size_angstrom, density_sign=density_sign)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -137,8 +136,9 @@ def run_decoy(
 
     if method == METHOD_AUTO and real_particle_set is None:
         raise StampPipelineError('--method auto needs --real-particle-set')
-    if real_particle_set is not None:
-        present = ParticleSet.model_validate(json.loads(real_particle_set.read_text())).by_prior()
+    real_set = load_particle_set(real_particle_set) if real_particle_set is not None else None
+    if real_set is not None:
+        present = real_set.by_prior()
         if method == METHOD_AUTO:
             if METHOD_SHIFTED in resolve_methods(method, set(present)) and segmentation_dir is None:
                 raise StampPipelineError('--method auto needs --seg-dir for the normal-prior particles of this particle set')
@@ -169,7 +169,6 @@ def run_decoy(
         except StampValidationError as exc:
             raise StampPipelineError(str(exc)) from exc
     else:
-        real_set = ParticleSet.model_validate(json.loads(real_particle_set.read_text()))
         decoy_sets: list[ParticleSet] = []
         manifests: list[TomogramManifest] = []
         for resolved in resolve_methods(method, set(real_set.by_prior())):
@@ -199,11 +198,7 @@ def run_decoy(
     decoy_path = output_dir / 'decoy_particle_set.json'
     decoy_path.write_text(decoy_set.model_dump_json(indent=2))
 
-    if not keep_raw:
-        raw_dir = output_dir / 'raw'
-        if raw_dir.is_dir():
-            archive_path = archive_and_remove_directory(raw_dir)
-            log.info(f'Archived raw decoy output to {archive_path}')
+    cleanup_raw(output_dir, keep_raw=keep_raw, label='raw decoy output')
 
     write_sidecar(
         output_dir,
@@ -231,7 +226,7 @@ def run_decoy(
     )
     log.info(f'Wrote {len(decoy_set.particles)} decoy particles to {decoy_path}')
     if make_plots:
-        segmentation_paths = {m.tomogram_id: m.segmentation_path for m in manifests if m.segmentation_path} if method != METHOD_SYNTHETIC_NOISE else {}
+        segmentation_paths = manifest_paths(manifests, 'segmentation_path') if method != METHOD_SYNTHETIC_NOISE else {}
         style = pick_plot_style if segmentation_paths else 'none'
         plot_positions(decoy_set.particles, output_dir, style, plot_format, segmentation_paths, zstack_movie=pick_zstack_movie and bool(segmentation_paths), plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
@@ -251,15 +246,7 @@ def build_decoy_commands(config, output_dir: Path) -> list[ToolCommand]:
         '--seed', str(config.stage.pick.half_set_seed),
         '--n-processes', str(config.decoy.n_workers),
     ]
-    if config.run.segmentation_dir is not None:
-        argv += ['--seg-dir', str(config.run.segmentation_dir)]
-    if config.decoy.keep_raw:
-        argv.append('--keep-raw')
-    if config.plots.enabled:
-        argv.append('--plots')
-        argv += ['--pick-plot-style', config.plots.pick_style, '--plot-format', config.plots.format]
-    if config.plots.pick_zstack_movie:
-        argv.append('--pick-zstack-movie')
-    if config.plots.pick_plot_3d:
-        argv.append('--pick-plot-3d')
+    argv += seg_dir_argv(config.run.segmentation_dir)
+    argv += keep_raw_argv(config.decoy.keep_raw)
+    argv += plot_argv(config.plots, pick_options=True)
     return [ToolCommand(tool='decoy', argv=argv, working_directory=target, output_paths=[target / 'decoy_particle_set.json'])]

@@ -38,8 +38,9 @@ def validate_single_half_set(particles: list[Particle]) -> HalfSet:
         raise StampPipelineError(f'Particle list mixes half-sets {sorted(h.value for h in half_sets)}')
     return half_sets.pop()
 
-# split_by_half_set: split a list of Particles into a tuple of lists of Particles by assigned half-set
-def split_by_half_set(particles: list[Particle]) -> tuple[list[Particle], list[Particle]]:
-    half_a = [particle for particle in particles if particle.half_set == HalfSet.A]
-    half_b = [particle for particle in particles if particle.half_set == HalfSet.B]
-    return half_a, half_b
+# half_set_indices: positions of each half-set's particles in the given list
+def half_set_indices(particles: list[Particle]) -> dict[HalfSet, list[int]]:
+    indices: dict[HalfSet, list[int]] = {HalfSet.A: [], HalfSet.B: []}
+    for index, particle in enumerate(particles):
+        indices[particle.half_set].append(index)
+    return indices
