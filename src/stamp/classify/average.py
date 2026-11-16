@@ -8,7 +8,7 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.classify.frames import rotate_density
-from stamp.utils.io import new_mrc
+from stamp.utils.mrc import write_class_average_mrc
 from stamp.utils.log import log
 
 # write_class_averages: write each class average as an MRC with its voxel size set
@@ -24,7 +24,7 @@ def write_class_averages(
         suffix = f'_half{half_set_label}' if half_set_label else ''
         path = output_dir / f'{cluster_id}{suffix}_n{count}.mrc'
         log.debug(f'Writing class average {cluster_id} (half-set: {half_set_label})')
-        new_mrc(path, np.transpose(average, (2, 1, 0)).astype(np.float32), voxel_size=voxel_size_angstrom)
+        write_class_average_mrc(path, average, voxel_size=voxel_size_angstrom)
         written.append(path)
     return written
 

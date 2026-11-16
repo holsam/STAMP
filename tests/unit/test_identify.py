@@ -15,8 +15,8 @@ from stamp.identify.fit import rank_candidates
 from stamp.identify.panel import load_candidate_panel
 from stamp.identify.register import register_score
 from stamp.identify.simulate import simulate_density
-from stamp.utils.io import new_mrc
 from stamp.schemas.particles import OrientationPrior
+from stamp.utils.mrc import new_mrc
 from synthetic import asymmetric_object
 
 # _REGISTER_BOX: box edge of the registration tests
@@ -40,13 +40,13 @@ def _write_cloud(path, seed):
 class TestAlignedIdentify:
     # test_aligned_average_picks_its_own_candidate_in_any_orientation: a randomly rotated average of candidate a scores highest against a
     def test_aligned_average_picks_its_own_candidate_in_any_orientation(self, tmp_path):
-        from stamp.commands.identify import _score_panel
+        from stamp.identify.scoring import score_panel
         for name in ('a', 'b'):
             _write_cloud(tmp_path / f'{name}.pdb', {'a': 1, 'b': 2}[name])
         (tmp_path / 'candidates.yaml').write_text('candidates:\n  - name: a\n    structure_path: a.pdb\n  - name: b\n    structure_path: b.pdb\n')
         panel = load_candidate_panel(tmp_path / 'candidates.yaml')
         average = rotate_density(simulate_density(tmp_path / 'a.pdb', 25, 4.0, 16.0), Rotation.random(random_state=3).as_matrix())
-        scores = _score_panel({'none-c00': (average, 4.0)}, panel, 16.0, 'native', 'local')['none-c00']
+        scores = score_panel({'none-c00': (average, 4.0)}, panel, 16.0, 'native', 'local')['none-c00']
         assert scores['a'] > 0.9 and scores['a'] > scores['b'] + 0.08
 
 # TestClassPriors: class containing tests for reading the orientation prior from class ids
@@ -56,7 +56,7 @@ class TestClassPriors:
         assert prior_of_class('none-c00') is OrientationPrior.NONE
 
     def test_load_class_averages_keeps_priors_apart(self, tmp_path):
-        from stamp.commands.identify import load_class_averages
+        from stamp.identify.averages import load_class_averages
         for name in ('normal-c00_halfA_n5.mrc', 'axis-c00_halfA_n5.mrc'):
             new_mrc(tmp_path / name, np.zeros((5, 5, 5), dtype=np.float32), voxel_size=10.0)
         assert sorted(load_class_averages(tmp_path)) == ['axis-c00', 'normal-c00']

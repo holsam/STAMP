@@ -53,7 +53,7 @@ class TestIdentifyCommand:
             '--classes', str(classes),
             '--candidates', str(tmp_path / 'candidates.yaml'),
             '--decoy-classes', str(decoys),
-            '--output-dir', tmp_path,
+            '--out-dir', tmp_path,
             '--resolution', '30.0',
         ])
         assert result.exit_code == 0, result.output
@@ -70,6 +70,7 @@ class TestIdentifyCommand:
 
     def test_identify_resumes_after_interruption(self, tmp_path, monkeypatch):
         from stamp.commands import identify
+        from stamp.identify import scoring
         classes = tmp_path / 'classes'
         classes.mkdir()
         _write_average(classes / 'normal-c00_halfA_n40.mrc', 21, 2.0)
@@ -81,7 +82,7 @@ class TestIdentifyCommand:
             '  - name: small\n    structure_path: small.pdb\n'
             '  - name: large\n    structure_path: large.pdb\n'
         )
-        real = identify._fit_one
+        real = scoring._fit_one
         fitted: list[tuple[str, str]] = []
         state = {'fail': True}
 
@@ -92,13 +93,13 @@ class TestIdentifyCommand:
             fitted.append((job.class_id, job.candidate.name))
             return real(job)
 
-        monkeypatch.setattr(identify, '_fit_one', flaky)
+        monkeypatch.setattr(scoring, '_fit_one', flaky)
         args = [
             '-d', str(tmp_path),
             'identify',
             '--classes', str(classes),
             '--candidates', str(tmp_path / 'candidates.yaml'),
-            '--output-dir', str(tmp_path),
+            '--out-dir', str(tmp_path),
             '--resolution', '30.0',
             '-n', '1',
         ]

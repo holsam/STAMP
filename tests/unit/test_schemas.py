@@ -20,7 +20,7 @@ from stamp.schemas.particles import (
     ParticleSet,
 )
 from stamp.schemas.provenance import ProvenanceSidecar
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 
 # _write_cache: helper writing a fake per-tomogram cache of n subvolumes
@@ -202,7 +202,7 @@ class TestSubvolumes:
         subvols = Subvolumes(tmp_path, index, box_voxels)
         for i in range(len(subvols)):
             _ = subvols[i]  # touch every tomogram once, sequentially
-        assert len(subvols._mmaps) <= 64
+        assert len(subvols._mmaps.entries) <= 64
 
     def test_write_rolled_produces_a_readable_subvols(self, tmp_path):
         box_voxels = 2

@@ -13,8 +13,8 @@ from stamp.picking.geometry import (
     beam_angle_deviation_degrees,
     compose_roll_about_normal,
     extract_surface,
-    quaternion_from_reference_to,
 )
+from stamp.utils.rotation import quaternion_from_reference_to
 from stamp.picking.vesicles import (
     load_vesicle_labels,
     summarise_vesicles,
@@ -85,7 +85,7 @@ class TestGeometry:
 
     # test_compose_roll_preserves_normal: rolling about the normal does not move +z's image
     def test_compose_roll_preserves_normal(self):
-        from stamp.classify.extract import quaternion_to_matrix
+        from stamp.utils.rotation import quaternion_to_matrix
         target = np.array([0.1, 0.2, 0.97])
         target /= np.linalg.norm(target)
         base = quaternion_from_reference_to(target)

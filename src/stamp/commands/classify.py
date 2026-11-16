@@ -3,33 +3,31 @@ STAMP: unsupervised classification logic
 '''
 
 # Import external dependencies
-import json, os, matplotlib.pyplot as plt, numpy as np
-from dataclasses import dataclass
+import json, os, numpy as np
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.classify.average import write_class_averages
-from stamp.classify.cluster import ClusteringConfig, ClusteringResult, label_to_cluster_id, reduce_and_cluster
+from stamp.classify.cluster import ClusteringConfig, ClusteringResult
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
-from stamp.classify.polish import PolishConfig, posed_class_averages, run_polish
+from stamp.classify.polish import PolishConfig
 from stamp.classify.extract import extract_particle_set
-from stamp.classify.halves import express_in_frame_of_a, run_polish_by_half
-from stamp.classify.frames import azimuth_degrees, rotation_to_quaternion
-from stamp.classify.prepare import working_box
 from stamp.classify.shfeatures import build_sh_feature_matrix
-from stamp.classify.store import ParticleStore, build_store
 from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
 from stamp.decoy.validate import is_decoy_particle_set
+from stamp.picking.manifests import match_by_stem
 from stamp.run.state import stage_dir
-from stamp.utils.halfset import split_by_half_set
-from stamp.schemas.particles import ClassAssignment, HalfSet, OrientationPrior, Particle, ParticleSet
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.schemas.particles import ClassAssignment, OrientationPrior, Particle, load_particle_set
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import archive_and_remove_directory, glob_mrc, match_by_stem, resolve_directory_voxel_size_angstrom, write_sidecar
+from stamp.utils.io import cleanup_raw
 from stamp.utils.log import log, log_config
-from stamp.utils.plotting.core import PlotFormat, central_slice, finish, plot_path
-from stamp.utils.plotting.classify import class_average_grid, scatter_labels
+from stamp.utils.mrc import glob_mrc, paths_by_stem, require_voxel_size
+from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
+from stamp.utils.provenance import write_sidecar
+from stamp.utils.plotting.classify import plot_classify
+from stamp.classify.settings import GroupSettings
+from stamp.classify.strategies import classify_combined, classify_strict
 
 # run_classify: cluster picked particles by structural similarity per orientation prior
 def run_classify(
@@ -65,13 +63,9 @@ def run_classify(
     reject_quantile: float = 0.95,
     merge_fraction: float = 1.0,
 ) -> None:
-    if voxel_size_angstrom is None:
-        voxel_size_angstrom = resolve_directory_voxel_size_angstrom(glob_mrc(raw_tomogram_dir))
-        if voxel_size_angstrom is None:
-            raise StampPipelineError('Voxel size not given and not found in any MRC header in --raw-dir.')
-        log.debug(f'Resolved voxel size from MRC headers: {voxel_size_angstrom} Å')
+    voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir)
     log.progress('Classifying particle set')
-    particle_set = ParticleSet.model_validate(json.loads(particles.read_text()))
+    particle_set = load_particle_set(particles)
     is_decoy = is_decoy_particle_set(particle_set)
     groups = particle_set.by_prior()
     log.info(f'Loaded {len(particle_set.particles)} {"decoy" if is_decoy else "real"} particles ({", ".join(f"{len(group)} {prior.value}" for prior, group in groups.items())})')
@@ -81,45 +75,13 @@ def run_classify(
         log.warning(f'No raw tomogram matching {stem_path.stem}, its particles will be skipped')
     tomogram_paths = {stem_path.stem: raw_path for stem_path, raw_path in matched.items()}
     segmentation_paths = (
-        {path.stem: str(path) for path in glob_mrc(segmentation_dir)} if segmentation_dir is not None else {}
+        {stem: str(path) for stem, path in paths_by_stem(segmentation_dir).items()} if segmentation_dir is not None else {}
     )
     box_voxels = int(round(box_angstrom / voxel_size_angstrom))
     if box_voxels % 2 == 0:
         box_voxels += 1  # odd box keeps the particle exactly centred
         log.debug(f'Using odd box voxel for centred particles: {box_voxels - 1} -> {box_voxels}')
     log.progress(f'Using box voxels: {box_voxels}')
-
-    # everything that changes results; n_workers, plots and keep_raw are left out so a run can resume with different resources
-    fingerprint = {
-        'particles': file_signature(particles, content=True),
-        'raw': signatures(tomogram_paths),
-        'segmentation': signatures(segmentation_paths),
-        'voxel_size_angstrom': voxel_size_angstrom,
-        'box_voxels': box_voxels,
-        'n_radial_bins': n_radial_bins,
-        'azimuthal_modes': azimuthal_modes,
-        'n_azimuthal_samples': n_azimuthal_samples,
-        'min_radius_fraction': min_radius_fraction,
-        'feature_normalisation': feature_normalisation,
-        'method': method,
-        'min_cluster_size': min_cluster_size,
-        'n_clusters': n_clusters,
-        'n_components': n_components,
-        'strict_halfset_independence': strict_halfset_independence,
-        'inplane_angular_step_degrees': inplane_angular_step_degrees,
-        'random_state': random_state,
-        'tilt_max_degrees': tilt_max_degrees,
-        'tilt_axis_degrees': tilt_axis_degrees,
-        'bin_factor': bin_factor,
-        'n_rotations': n_rotations,
-        'shift_range_voxels': shift_range_voxels,
-        'polish_rounds': polish_rounds,
-        'null_sigmas': null_sigmas,
-        'reject_quantile': reject_quantile,
-        'merge_fraction': merge_fraction,
-    }    # the particle set signature already covers every prior
-    if sync_checkpoint(output_dir / 'raw', fingerprint):
-        log.info('Found matching partial output, resuming')
 
     config = ClusteringConfig(
         method=method,
@@ -137,7 +99,7 @@ def run_classify(
     if not strict_halfset_independence:
         log.warning('--no-strict-halfset-independence used, half-A and half-B particles are classified together; FSC built on these classes will be inflated')
 
-    settings = _GroupSettings(
+    settings = GroupSettings(
         box_voxels=box_voxels, voxel_size_angstrom=voxel_size_angstrom, n_radial_bins=n_radial_bins,
         azimuthal_modes=azimuthal_modes, n_azimuthal_samples=n_azimuthal_samples, min_radius_fraction=min_radius_fraction,
         feature_normalisation=feature_normalisation, clustering=config, strict_halfset_independence=strict_halfset_independence,
@@ -146,6 +108,15 @@ def run_classify(
         reject_quantile=reject_quantile, random_state=random_state, bin_factor=bin_factor,
         tilt_max_degrees=tilt_max_degrees, tilt_axis_degrees=tilt_axis_degrees, n_workers=n_workers,
     )
+    # everything that changes results; n_workers is left out so a run can resume with different resources
+    fingerprint = {
+        'particles': file_signature(particles, content=True),
+        'raw': signatures(tomogram_paths),
+        'segmentation': signatures(segmentation_paths),
+        **{key: value for key, value in asdict(settings).items() if key != 'n_workers'},
+    }    # the particle set signature already covers every prior
+    if sync_checkpoint(output_dir / 'raw', fingerprint):
+        log.info('Found matching partial output, resuming')
     results: dict[OrientationPrior, _GroupResult] = {}
     failures: dict[OrientationPrior, str] = {}
     for prior, group in groups.items():
@@ -164,11 +135,7 @@ def run_classify(
     assignments_path = output_dir / 'class_assignments.json'
     assignments_path.write_text(json.dumps([a.model_dump() for a in assignments], indent=2))
 
-    if not keep_raw:
-        raw_dir = output_dir / 'raw'
-        if raw_dir.is_dir():
-            archive_path = archive_and_remove_directory(raw_dir)
-            log.info(f'Archived raw classify output to {archive_path}')
+    cleanup_raw(output_dir, keep_raw=keep_raw, label='raw classify output')
 
     write_sidecar(
         output_dir,
@@ -177,31 +144,9 @@ def run_classify(
         tool_version=None,
         parameters={
             'box_angstrom': box_angstrom,
-            'box_voxels': box_voxels,
-            'n_radial_bins': n_radial_bins,
-            'method': method,
-            'min_cluster_size': min_cluster_size,
-            'n_clusters': n_clusters,
-            'n_components': n_components,
-            'strict_halfset_independence': strict_halfset_independence,
-            'inplane_angular_step_degrees': inplane_angular_step_degrees,
-            'random_state': random_state,
+            **asdict(settings),
             'orientation_priors': {prior.value: len(group) for prior, group in groups.items()},
             'skipped_priors': {prior.value: reason for prior, reason in failures.items()},
-            'tilt_max_degrees': tilt_max_degrees,
-            'tilt_axis_degrees': tilt_axis_degrees,
-            'bin_factor': bin_factor,
-            'n_rotations': n_rotations,
-            'shift_range_voxels': shift_range_voxels,
-            'polish_rounds': polish_rounds,
-            'null_sigmas': null_sigmas,
-            'reject_quantile': reject_quantile,
-            'merge_fraction': merge_fraction,
-            'azimuthal_modes': azimuthal_modes,
-            'n_azimuthal_samples': n_azimuthal_samples,
-            'min_radius_fraction': min_radius_fraction,
-            'feature_normalisation': feature_normalisation,
-            'n_workers': n_workers,
             'is_decoy': is_decoy,
             'membrane_subtracted': bool(segmentation_paths),
             'n_extracted': sum(len(result.kept) for result in results.values()),
@@ -213,33 +158,7 @@ def run_classify(
     log.info(f'Wrote {len(assignments)} class assignments to {assignments_path}')
     if make_plots:
         for prior, result in results.items():
-            _plot_classify(result.result_by_half, result.averages_by_half, output_dir, plot_format, prior.value)
-
-# _GroupSettings: classify settings shared by every orientation prior group
-@dataclass(frozen=True)
-class _GroupSettings:
-    box_voxels: int
-    voxel_size_angstrom: float
-    n_radial_bins: int
-    azimuthal_modes: int
-    n_azimuthal_samples: int
-    min_radius_fraction: float
-    feature_normalisation: str
-    clustering: ClusteringConfig
-    strict_halfset_independence: bool
-    inplane_angular_step_degrees: float
-    n_rotations: int
-    shift_range_voxels: int
-    polish_rounds: int
-    min_cluster_size: int
-    merge_fraction: float
-    null_sigmas: float
-    reject_quantile: float
-    random_state: int
-    bin_factor: int
-    tilt_max_degrees: float | None
-    tilt_axis_degrees: float
-    n_workers: int
+            plot_classify(result.result_by_half, result.averages_by_half, output_dir, plot_format, prior.value)
 
 # _GroupResult: results of classifying one orientation prior
 @dataclass
@@ -256,7 +175,7 @@ def _classify_prior(
     particles: list[Particle],
     tomogram_paths: dict[str, str],
     segmentation_paths: dict[str, str],
-    settings: _GroupSettings,
+    settings: GroupSettings,
     output_dir: Path,
 ) -> _GroupResult:
     work_dir = output_dir / 'raw' / prior.value
@@ -299,26 +218,9 @@ def _classify_prior(
         n_polish_rounds=settings.polish_rounds, min_seed_size=settings.min_cluster_size, merge_fraction=settings.merge_fraction, null_sigmas=settings.null_sigmas,
         reject_quantile=settings.reject_quantile, seed=settings.random_state, threads=settings.n_workers,
     )
-    classify = _classify_strict if settings.strict_halfset_independence else _classify_combined
-    assignments, result_by_half, averages_by_half = classify(kept, subvols, features, settings.clustering, polish_config, working_box(settings.box_voxels, settings.bin_factor), (settings.tilt_max_degrees, settings.tilt_axis_degrees), output_dir, work_dir, settings.voxel_size_angstrom)
+    classify = classify_strict if settings.strict_halfset_independence else classify_combined
+    assignments, result_by_half, averages_by_half = classify(kept, subvols, features, settings, polish_config, output_dir, work_dir)
     return _GroupResult(assignments, kept, skipped, result_by_half, averages_by_half)
-
-# _plot_classify: create plots (PCA embedding scatter + class-average thumbnail grid) for one orientation prior
-def _plot_classify(result_by_half: dict[str, ClusteringResult], averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]], output_dir: Path, fmt: PlotFormat, tag: str) -> None:
-    halves = sorted(result_by_half)
-    fig, axes = plt.subplots(1, len(halves), figsize=(5.5 * len(halves), 4), squeeze=False)
-    for ax, half in zip(axes[0], halves):
-        result = result_by_half[half]
-        scatter_labels(ax, result.embedding[:, :2], result.labels, f'{tag} half {half}: PCA -> {result.labels.max() + 1} cluster(s)')
-    finish(fig, plot_path(output_dir, f'embedding_{tag}', fmt))
-
-    for half, averages in averages_by_half.items():
-        ids = sorted(averages)
-        if not ids:
-            continue
-        fig, axes = plt.subplots(1, max(2, len(ids)), figsize=(2.6 * max(2, len(ids)), 3), squeeze=False)
-        class_average_grid(axes[0], ids, {cid: central_slice(volume) for cid, (volume, _count) in averages.items()}, lambda c: c)
-        finish(fig, plot_path(output_dir, f'class_averages_{tag}_half{half}', fmt))
 
 # build_classify_commands: create ToolCommand for `stamp classify`
 def build_classify_commands(config, output_dir: Path, track: str = 'real') -> list[ToolCommand]:
@@ -352,119 +254,10 @@ def build_classify_commands(config, output_dir: Path, track: str = 'real') -> li
     ]
     if config.run.tilt_max_degrees is not None:
         argv += ['--tilt-max', str(config.run.tilt_max_degrees)]
-    if config.run.segmentation_dir is not None:
-        argv += ['--seg-dir', str(config.run.segmentation_dir)]
+    argv += seg_dir_argv(config.run.segmentation_dir)
     if not settings.strict_halfset_independence:
         argv.append('--no-strict-halfset-independence')
-    argv.append('--keep-raw' if settings.keep_raw else '--no-keep-raw')
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--plot-format', config.plots.format]
+    argv += keep_raw_argv(settings.keep_raw)
+    argv += plot_argv(config.plots)
     return [ToolCommand(tool='classify', argv=argv, working_directory=target, output_paths=[target / 'class_averages'])]
 
-# _pose_assignment: a class assignment carrying polish's pose, the in-plane angle only where it means something (membrane normal prior)
-def _pose_assignment(particle, cluster_id: str, classifier: str, prior: OrientationPrior, rotation: np.ndarray, shift_voxels: np.ndarray, cc: float, margin: float, polarity: int) -> ClassAssignment:
-    if cluster_id == 'noise':
-        return ClassAssignment(particle_id=particle.particle_id, cluster_id=cluster_id, classifier=classifier, vesicle_id=particle.vesicle_id, cc=cc, margin=margin)
-    return ClassAssignment(
-        particle_id=particle.particle_id,
-        cluster_id=cluster_id,
-        classifier=classifier,
-        inplane_angle_degrees=azimuth_degrees(rotation.T) if prior is OrientationPrior.NORMAL else None,
-        vesicle_id=particle.vesicle_id,
-        rotation=rotation_to_quaternion(rotation),
-        shift_voxels=tuple(float(v) for v in shift_voxels),
-        cc=cc,
-        margin=margin,
-        polarity=polarity if prior is OrientationPrior.AXIS else None,
-    )
-
-# _classify_combined: seed clusters from the features, run polish over all particles together, then average each half at polish's poses
-def _classify_combined(
-    particles,
-    subvols: Subvolumes,
-    features,
-    config,
-    polish_config: PolishConfig,
-    working_voxels: int,
-    tilt: tuple[float | None, float],
-    output_dir: Path,
-    work_dir: Path,
-    voxel_size_angstrom: float,
-) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
-    seeds = reduce_and_cluster(features, config)
-    (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
-    orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
-    outcome = run_polish(store, seeds.embedding, seeds.labels, polish_config, checkpoint_dir=work_dir / 'polish')
-    cluster_ids = [label_to_cluster_id(int(label), polish_config.prior) for label in outcome.labels]
-    _report_clusters(cluster_ids, seeds.explained_variance_ratio)
-    full = ParticleStore(subvols, orientations, *tilt)
-    scale = subvols.box_voxels / working_voxels     # polish shifts are in working voxels
-    averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
-    for half_set in (HalfSet.A, HalfSet.B):
-        half_indices = [i for i, particle in enumerate(particles) if particle.half_set == half_set]
-        if not half_indices:
-            continue
-        averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale, polish_config.prior)
-        write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_set.value)
-        averages_by_half[half_set.value] = averages
-    assignments = [
-        _pose_assignment(particle, cluster_id, 'stamp-polish-classifier', polish_config.prior, outcome.rotations[index], outcome.shifts[index] * scale, float(outcome.cc[index]), float(outcome.margin[index]), int(outcome.polarity[index]))
-        for index, (particle, cluster_id) in enumerate(zip(particles, cluster_ids))
-    ]
-    return assignments, {'combined': seeds}, averages_by_half
-
-# _classify_strict: seed and polish each half on its own, match half-B clusters to half A by reference similarity and express half-B poses in the half-A frame so the two half averages can be compared
-def _classify_strict(
-    particles,
-    subvols: Subvolumes,
-    features,
-    config,
-    polish_config: PolishConfig,
-    working_voxels: int,
-    tilt: tuple[float | None, float],
-    output_dir: Path,
-    work_dir: Path,
-    voxel_size_angstrom: float,
-) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
-    half_a, half_b = split_by_half_set(list(particles))
-    index_of = {particle.particle_id: i for i, particle in enumerate(particles)}
-    members = {'A': [index_of[p.particle_id] for p in half_a], 'B': [index_of[p.particle_id] for p in half_b]}
-    if not members['A'] or not members['B']:
-        raise StampPipelineError('Strict mode needs particles in both half-sets')
-    seeds = {half: reduce_and_cluster(features[indices], config) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
-    (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
-    orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
-    results, matches = run_polish_by_half(store, members, {h: seeds[h].embedding for h in members}, {h: seeds[h].labels for h in members}, polish_config, checkpoint_dir=work_dir / 'polish')
-    for label_b, match in sorted(matches.items()):
-        log.debug(f'Cross-half cluster matching (B -> A, by reference): c{label_b:02d} -> c{match.label_a:02d}  similarity={match.similarity:.3f}')
-    n_a = len(results['A'].references)
-    renumber = {label_b: match.label_a for label_b, match in matches.items()}
-    unmatched = [label_b for label_b in range(len(results['B'].references)) if label_b not in matches]
-    renumber.update({label_b: n_a + position for position, label_b in enumerate(unmatched)})   # unmatched half-B clusters get ids that cannot collide with half A
-    rotations_b, shifts_b = express_in_frame_of_a(results['B'], matches)
-    poses = {'A': (results['A'].rotations, results['A'].shifts), 'B': (rotations_b, shifts_b)}
-    labels = {'A': results['A'].labels, 'B': np.array([renumber[int(l)] if l >= 0 else -1 for l in results['B'].labels])}
-    full = ParticleStore(subvols, orientations, *tilt)
-    scale = subvols.box_voxels / working_voxels
-    assignments: list[ClassAssignment] = []
-    averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
-    for half, indices in members.items():
-        averages = posed_class_averages(full.take(indices), labels[half], poses[half][0], poses[half][1] * scale, polish_config.prior)
-        write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half)
-        averages_by_half[half] = averages
-        result = results[half]
-        for local, index in enumerate(indices):
-            cluster_id = label_to_cluster_id(int(labels[half][local]), polish_config.prior)
-            assignments.append(_pose_assignment(particles[index], cluster_id, 'stamp-polish-classifier-strict', polish_config.prior, poses[half][0][local], poses[half][1][local] * scale, float(result.cc[local]), float(result.margin[local]), int(result.polarity[local])))
-    return assignments, {half: seeds[half] for half in seeds}, averages_by_half
-
-# _report_clusters: echo PCA variance and per-cluster sizes
-def _report_clusters(cluster_ids: list[str], explained_variance: np.ndarray) -> None:
-    counts: dict[str, int] = {}
-    for cluster_id in cluster_ids:
-        counts[cluster_id] = counts.get(cluster_id, 0) + 1
-    log.debug(f'PCA: top 5 components explain {explained_variance[:5].sum():.1%} of variance')
-    for cluster_id, count in sorted(counts.items()):
-        log.debug(f'cluster {cluster_id}: {count}')

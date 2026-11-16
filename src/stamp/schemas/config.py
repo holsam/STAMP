@@ -12,6 +12,7 @@ from typing import Literal
 from stamp.schemas.particles import OrientationPrior
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.log import log, log_config
+from stamp.utils.options.literals import BackendName, PickPlotStyle, PlotFormat
 
 # _Strict: reject unknown keys, treat "" as unset
 class _Strict(BaseModel):
@@ -30,7 +31,7 @@ class RunSettings(_Strict):
     raw_tomogram_dir: Path
     output_dir: Path
     voxel_size_angstrom: float | None = None
-    backend: Literal['local', 'mock', 'cluster'] = 'local'
+    backend: BackendName = 'local'
     stop_after: Literal['pick', 'classify', 'identify', 'refine'] | None = None
     orientation_prior: OrientationPrior = OrientationPrior.NORMAL
     tilt_max_degrees: float | None = Field(default=None, gt=0, lt=90)   # None means no missing wedge is modelled
@@ -39,8 +40,8 @@ class RunSettings(_Strict):
 # PlotSettings: the [plots] table
 class PlotSettings(_Strict):
     enabled: bool = True
-    format: Literal['png', 'jpg', 'tiff', 'svg'] = 'tiff'
-    pick_style: Literal['segmented', 'none'] = 'segmented'
+    format: PlotFormat = 'tiff'
+    pick_style: PickPlotStyle = 'segmented'
     pick_zstack_movie: bool = False
     pick_plot_3d: bool = False
 
@@ -63,11 +64,11 @@ class DecoySettings(_Strict):
 class PickStage(_Strict):
     picks_files: list[Path]
     picker_names: list[str] | None = None  # defaults to file stems
-    consensus_rule: Literal['union', 'intersection'] = 'intersection'
+    consensus_rule: Literal['union', 'intersection'] = 'union'
     distance_threshold: float = 15.0
     half_set_seed: int = 0
     max_surface_distance_angstrom: float = 300.0
-    backend: Literal['local', 'mock', 'cluster'] | None = None  # inert for pick, kept so run.backend inheritance is uniform
+    backend: BackendName | None = None  # inert for pick, kept so run.backend inheritance is uniform
     n_workers: int = 1
     keep_raw: bool = False
 
@@ -96,7 +97,7 @@ class IdentifyStage(_Strict):
     resolution: float | None = None
     fitter: Literal['native'] = 'native'
     fetch_missing: bool = False
-    backend: Literal['local', 'mock', 'cluster'] | None = None
+    backend: BackendName | None = None
     n_workers: int = 1
 
 class RefineStage(_Strict):
@@ -105,7 +106,7 @@ class RefineStage(_Strict):
     threshold: float = 0.143
     iterations: int = 5
     mask: Path | None = None
-    backend: Literal['local', 'mock', 'cluster'] | None = None
+    backend: BackendName | None = None
 
 # StageConfigs: the [stage.*] tables
 class StageConfigs(_Strict):

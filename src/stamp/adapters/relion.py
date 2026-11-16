@@ -10,7 +10,7 @@ from scipy.spatial.transform import Rotation
 # Import STAMP objects
 from stamp.adapters.base import AdapterInputs, AdapterOutput
 from stamp.backends.base import RunResult, ToolCommand
-from stamp.classify.extract import quaternion_to_matrix
+from stamp.utils.rotation import quaternion_to_matrix
 from stamp.schemas.particles import Particle
 from stamp.utils.errors import StampAdapterError
 from stamp.utils.log import log
@@ -141,3 +141,7 @@ class RelionRefineAdapter:
             output_paths=[p for p in (final_map,) if p is not None],
             parsed={'final_map': str(final_map) if final_map else None, 'resolution_angstrom': resolution},
         )
+
+    # collect_final_map: move the tool's refined map to final_map
+    def collect_final_map(self, result: RunResult, reference: Path, final_map: Path) -> None:
+        Path(self.parse_output(result).parsed['final_map']).replace(final_map)

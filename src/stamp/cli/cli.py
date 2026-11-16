@@ -84,12 +84,13 @@ def logging_callback(
     verbosity = min(verbosity, 2)
     quiet = min(quiet, 2)
     log_path, log_level = configure_logging(directory=log_dir, mode=log_mode, quiet=quiet, verbosity=verbosity)
-    print()
+    log.info('')
     log.debug(f'Logging configured to stderr and log file (mode: {log_mode}) at level {log_level}')
     log.info(f'Logs will be saved to: {log_path}')
 
 def stamp() -> None:
     try:
         stamp_app()
-    except StampError:
+    except StampError as exc:
+        getattr(log, exc.level, log.error)(str(exc))
         raise SystemExit(1) from None

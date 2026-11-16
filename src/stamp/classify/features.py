@@ -4,17 +4,15 @@ STAMP: rotationally invariant features from subvolumes
 
 # Import external dependencies
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor
-from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 from scipy.ndimage import map_coordinates
 
 # Import internal STAMP objects
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 from stamp.utils.checkpoint import atomic_save_npz
-from stamp.utils.log import get_worker_log_config, init_worker_logging, log
-from stamp.utils.parallel import run_parallel_ordered
+from stamp.utils.log import log
+from stamp.utils.parallel import run_parallel_ordered, worker_pool
 
 # FEATURE_NORMALISATIONS: how 1+ modes are made comparable across particles and tomograms
 FEATURE_NORMALISATIONS = ('none', 'particle', 'tomogram', 'both')
@@ -165,15 +163,8 @@ def build_feature_matrix(
     magnitudes: list[np.ndarray | None] = [None] * len(subvols)
     total_particles = len(subvols)
     # create process pool for feature extraction to be reused across batches
-    pool_context = (
-        ProcessPoolExecutor(max_workers=n_workers, initializer=init_worker_logging, initargs=get_worker_log_config())
-        if n_workers > 1
-        else nullcontext()
-    )
-    by_tomogram: dict[str, list[int]] = {}
-    for local_index, (tomogram_id, _row) in enumerate(subvols.index):
-        by_tomogram.setdefault(tomogram_id, []).append(local_index)
-    with pool_context as pool:
+    by_tomogram = subvols.indices_by_tomogram()
+    with worker_pool(n_workers) as pool:
         completed = 0
         n_resumed = 0
         for tomogram_id, local_indices in by_tomogram.items():

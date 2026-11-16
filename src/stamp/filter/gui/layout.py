@@ -8,7 +8,7 @@ from tkinter import ttk
 
 # Import internal STAMP objects
 from stamp.filter.gui import actions, interactions
-from stamp.filter.gui.components import icon, make_button, make_live_spinbox, make_swatch
+from stamp.filter.gui.components import make_button, make_live_spinbox, make_swatch
 from stamp.filter.gui.context import GuiContext
 from stamp.filter.gui.style import ACCENT, BG, BUTTON_ACTIVE_BG, BUTTON_BG, FG, PANEL_BG
 from stamp.filter.render import volume_depth

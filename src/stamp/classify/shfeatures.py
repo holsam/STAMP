@@ -11,7 +11,7 @@ from scipy.ndimage import map_coordinates
 from stamp.classify.prepare import normalise, soft_mask
 from stamp.classify.spherical import degree_power, fit_matrix, lm_pairs, real_sh_basis, sphere_grid
 from stamp.classify.wedge import observed_directions
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 from stamp.utils.parallel import run_parallel_ordered
 
 # _MARGIN_DEGREES: angular safety margin inside wedge edge, where interpolation and soft mask leak

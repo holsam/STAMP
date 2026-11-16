@@ -11,9 +11,8 @@ from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.render import render_diagram
 from stamp.tools.diagram.utils.walkthrough import Walkthrough
 from stamp.utils.plotting.core import BLUE, GREY, bare, finish, scatter_groups, show_segmentation, style_axis, subgrid_axes, tile_particles
-from stamp.utils.plotting.classify import class_average_grid, cluster_colour, scatter_labels
+from stamp.utils.plotting.classify import class_average_grid, cluster_colour
 from stamp.utils.plotting.identify import decoy_hist, score_heatmap
-from stamp.utils.plotting.refine import fsc_curve
 
 # --- panels ---
 # plot_ground_truth: ground-truth projection per species, tagged target / distractor / unknown

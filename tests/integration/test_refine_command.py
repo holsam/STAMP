@@ -99,18 +99,18 @@ class TestRefineCommand:
     def test_refine_resumes_unfinished_half(self, tmp_path, monkeypatch):
         from stamp.commands import refine
         stage_d = _fixture(tmp_path)
-        real = refine._run_half
+        real = refine.run_half
         ran: list[str] = []
         state = {'fail': True}
 
         # flaky: fail on half B until told otherwise, else refine normally
-        def flaky(adapter, runner, particles, reference, workdir, parameters, backend):
+        def flaky(adapter, runner, particles, reference, workdir, parameters):
             if state['fail'] and workdir.name == 'halfB':
                 raise RuntimeError('boom')
             ran.append(workdir.name)
-            return real(adapter, runner, particles, reference, workdir, parameters, backend)
+            return real(adapter, runner, particles, reference, workdir, parameters)
 
-        monkeypatch.setattr(refine, '_run_half', flaky)
+        monkeypatch.setattr(refine, 'run_half', flaky)
         assert _invoke(tmp_path, stage_d).exit_code != 0
         assert ran == ['halfA']
 
@@ -124,15 +124,15 @@ class TestRefineCommand:
     def test_refine_reuses_finished_halves_until_parameters_change(self, tmp_path, monkeypatch):
         from stamp.commands import refine
         stage_d = _fixture(tmp_path)
-        real = refine._run_half
+        real = refine.run_half
         ran: list[str] = []
 
         # counting: record which half ran, then refine normally
-        def counting(adapter, runner, particles, reference, workdir, parameters, backend):
+        def counting(adapter, runner, particles, reference, workdir, parameters):
             ran.append(workdir.name)
-            return real(adapter, runner, particles, reference, workdir, parameters, backend)
+            return real(adapter, runner, particles, reference, workdir, parameters)
 
-        monkeypatch.setattr(refine, '_run_half', counting)
+        monkeypatch.setattr(refine, 'run_half', counting)
         assert _invoke(tmp_path, stage_d, '--iterations', '2').exit_code == 0
         assert ran == ['halfA', 'halfB']
 

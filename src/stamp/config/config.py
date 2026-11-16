@@ -3,18 +3,17 @@ STAMP: manage a stamp_run.toml file
 '''
 
 # -- Import external dependencies
-import os, subprocess, typer, tomllib
+import os, subprocess
 from pathlib import Path
-from typing import Annotated, Literal
 
 # Import internal stamp objects
 from stamp.config.template import TEMPLATE
 from stamp.utils.errors import StampError
-from stamp.utils.io import print_toml
 from stamp.utils.log import log
+from stamp.utils.toml_view import print_toml
 
 # _resolve_config_path: resolve a given path to a stamp_run.toml and whether it exists
-def _resolve_config_path(path: Path) -> tuple(Path, bool):
+def _resolve_config_path(path: Path) -> tuple[Path, bool]:
     path = path.resolve()
     if path.match('stamp_run.toml'):
         return (path, path.exists())
@@ -29,7 +28,6 @@ def init_config(path: Path, force: bool = False):
     path, path_exists = _resolve_config_path(path)
     if path_exists and not force:
         raise StampError(f'{path} already exists, use --force to overwrite')
-        return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(TEMPLATE)
     log.info(f'Wrote stamp_run.toml to {path}')
@@ -48,6 +46,8 @@ def edit_config(path: Path, editor: str | None):
                 return
             except Exception as e:
                 raise StampError(f'Could not open {path} in editor {editor}: {e}')
+        else:
+            raise StampError(f'editor {editor!r} not found on PATH')
     else:
         editor = os.environ.get('EDITOR', 'vi')
         subprocess.call([editor, str(path)])
@@ -57,5 +57,4 @@ def show_config(path: Path):
     path, path_exists = _resolve_config_path(path)
     if not path_exists:
         raise StampError(f'No config file found at/under {path}, run stamp config init first.')
-        return
     print_toml(path)

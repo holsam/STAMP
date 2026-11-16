@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import pick command functions/variables
+from stamp.utils.options.cli import KeepRawOption, NProcessesOption, OutDirOption, PickPlot3dOption, PickPlotStyleOption, PickZstackMovieOption, PlotFormatOption, PlotsOption, RawDirOption, SegDirOption, VoxelSizeOption
 import stamp.commands.pick as pickfuncs
 from stamp.schemas.particles import OrientationPrior
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
+from stamp.utils.options.literals import PlotFormat
 
 # Initialise Typer app
 pickCli = typer.Typer(
@@ -26,22 +28,10 @@ def pick(
         list[Path],
         typer.Argument(exists=True, dir_okay=False, readable=True, help='Picks files to import (.csv, .star, .json, .jsonl); one picker per file.'),
     ],
-    raw_tomogram_dir: Annotated[
-        Path,
-        typer.Option('-r', '--raw-dir', exists=True, file_okay=False, help='Directory of raw tomogram MRCs, matched to segmentations by filename stem.')
-    ],
-    segmentation_dir: Annotated[
-        Path | None,
-        typer.Option('-s', '--seg-dir', exists=True, file_okay=False, help='Directory of segmented MRC files; filename stems are tomogram IDs. Used to infer orientations. Required when any pick has the normal orientation prior.'),
-    ] = None,
-    output_dir: Annotated[
-        Path,
-        typer.Option('-o', '--out-dir', file_okay=False, help='Directory to write outputs to.')
-    ] = Path('.'),
-    voxel_size_angstrom: Annotated[
-        float | None,
-        typer.Option('--voxel-size-a', help='Voxel size of the input tomograms, in Angstrom.')
-    ] = None,
+    raw_tomogram_dir: RawDirOption,
+    segmentation_dir: SegDirOption = None,
+    output_dir: OutDirOption = Path('.'),
+    voxel_size_angstrom: VoxelSizeOption = None,
     orientation_prior: Annotated[
         OrientationPrior,
         typer.Option('--orientation-prior', help='Default orientation prior for picks that do not state one in a prior column (CSV) or key (JSON): normal (membrane proteins, orientation inferred from --seg-dir), axis (filaments, every pick needs an orientation) or none (soluble particles, orientations are ignored).'),
@@ -62,10 +52,7 @@ def pick(
         int,
         typer.Option('--half-set-seed', help='Seed for half-set assignment.', rich_help_panel = 'Consensus'),
     ] = 0,
-    n_workers: Annotated[
-        int,
-        typer.Option('-n', '--n-processes', help='Processes to use for reconciliation, the vesicle summary and plots (1 = sequential).', rich_help_panel = 'Backend'),
-    ] = 1,
+    n_workers: NProcessesOption = 1,
     max_beam_angle_deviation: Annotated[
         float | None,
         typer.Option('--max-beam-angle-deviation', help='Normal deviation from beam-orthogonal plane to drop particles.', rich_help_panel = 'Filtering'),
@@ -78,30 +65,12 @@ def pick(
         Path | None,
         typer.Option('--vesicle-labels-mrc', help='Path to an EValuator labelled MRC, or a directory to be matched by filename stem.', exists=True, readable=True, rich_help_panel = 'Filtering'),
     ] = None,
-    make_plots: Annotated[
-        bool,
-        typer.Option('--plots', help='Write consensus-pick position plots.', rich_help_panel = 'Plotting'),
-    ] = False,
-    pick_plot_style: Annotated[
-        Literal['segmented', 'none'],
-        typer.Option('--pick-plot-style', help='Plot style to use.', rich_help_panel = 'Plotting'),
-    ] = 'segmented',
-    plot_format: Annotated[
-        Literal['png', 'jpg', 'tiff', 'svg'],
-        typer.Option('--plot-format', help='Image format for static plots.', rich_help_panel = 'Plotting'),
-    ] = 'tiff',
-    pick_zstack_movie: Annotated[
-        bool,
-        typer.Option('--pick-zstack-movie/--no-pick-zstack-movie', help='Create a per-tomogram movie stepping through Z with picks highlighted.', rich_help_panel = 'Plotting'),
-    ] = True,
-    pick_plot_3d: Annotated[
-        bool,
-        typer.Option('--pick-plot-3d/--no-pick-plot-3d', help='Create a static 3D pick visualisation per tomogram.', rich_help_panel = 'Plotting'),
-    ] = False,
-    keep_raw: Annotated[
-        bool,
-        typer.Option('--keep-raw', help='Keep the per-picker import cache instead of archiving it to raw.tar.gz.', rich_help_panel = 'Backend'),
-    ] = False,
+    make_plots: PlotsOption = False,
+    pick_plot_style: PickPlotStyleOption = 'segmented',
+    plot_format: PlotFormatOption = 'tiff',
+    pick_zstack_movie: PickZstackMovieOption = True,
+    pick_plot_3d: PickPlot3dOption = False,
+    keep_raw: KeepRawOption = False,
 ) -> None:
     '''Import external picks, infer orientations, reconcile across pickers, and assign half-sets.'''
     log_started('picking')

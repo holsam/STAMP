@@ -3,111 +3,24 @@ STAMP: identification against predicted structures
 '''
 
 # Import external dependencies
-import json, matplotlib.pyplot as plt, numpy as np, re, shutil
-from collections import defaultdict
-from dataclasses import dataclass
+import json, shutil
 from pathlib import Path
 
 # Import STAMP objects
-from stamp.adapters.base import AdapterInputs
 from stamp.classify.cluster import prior_of_class
-from stamp.adapters.mock import get_mock_adapter
 from stamp.backends.base import ToolCommand
-from stamp.backends.local import LocalRunner
-from stamp.backends.mock import MockRunner
+from stamp.identify.averages import load_class_averages
 from stamp.identify.decoy_check import evaluate_decoy_control
+from stamp.identify.scoring import score_panel
 from stamp.run.state import stage_dir
-from stamp.schemas.particles import OrientationPrior
 from stamp.identify.fit import rank_candidates
-from stamp.identify.register import register_score
-from stamp.identify.panel import Candidate, load_candidate_panel
-from stamp.identify.simulate import simulate_density, to_comparable
-from stamp.utils.checkpoint import atomic_write_json, directory_signatures, signatures, sync_checkpoint
+from stamp.identify.panel import load_candidate_panel
+from stamp.utils.checkpoint import directory_signatures, signatures, sync_checkpoint
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import glob_mrc, open_mrc, write_sidecar
 from stamp.utils.log import log
-from stamp.utils.parallel import run_parallel
-from stamp.utils.plotting.core import PlotFormat, finish, plot_path
-from stamp.utils.plotting.identify import decoy_hist, score_heatmap
-
-# _CLASS_ID: leading {prior}-cNN token of a class-average filename
-_CLASS_ID = re.compile(rf'^((?:{"|".join(prior.value for prior in OrientationPrior)})-c\d+)')
-
-# load_class_averages: {class_id: (mean_volume, voxel_size)} merged across half-set MRCs
-def load_class_averages(directory: Path, *, allow_empty: bool = False) -> dict[str, tuple[np.ndarray, float]]:
-    grouped: dict[str, list[np.ndarray]] = defaultdict(list)
-    voxel_sizes: dict[str, float] = {}
-    for path in (glob_mrc(directory) if directory.is_dir() else []):
-        match = _CLASS_ID.match(path.stem)
-        if not match:
-            continue
-        with open_mrc(path) as mrc:
-            grouped[match.group(1)].append(np.transpose(np.asarray(mrc.data), (2, 1, 0)))
-            voxel_sizes[match.group(1)] = float(mrc.voxel_size.x)
-    if not grouped:
-        if allow_empty:
-            return {}
-        raise StampPipelineError(f'No {{prior}}-cNN class averages in {directory}')
-    return {cid: (np.mean(volumes, axis=0), voxel_sizes[cid]) for cid, volumes in grouped.items()}
-
-# _FitJob: one (class, candidate) pair
-@dataclass(frozen=True)
-class _FitJob:
-    class_id: str
-    comparable_average: np.ndarray
-    box_voxels: int
-    voxel_size: float
-    resolution: float
-    candidate: Candidate
-    aligned_prior: OrientationPrior
-
-# _fit_one: multiprocessing worker entry point
-def _fit_one(job: _FitJob) -> tuple[str, str, float]:
-    simulated = simulate_density(job.candidate.structure_path, job.box_voxels, job.voxel_size, job.resolution)
-    simulated = to_comparable(simulated, job.voxel_size, job.resolution, already_bandlimited=True)
-    score = register_score(job.comparable_average, simulated, job.aligned_prior)
-    return job.class_id, job.candidate.name, score
-
-# _score_path: checkpoint file for one (class, candidate) score; the name is sanitised for the filesystem, the payload keeps the true names
-def _score_path(checkpoint_dir: Path, class_id: str, candidate_name: str) -> Path:
-    return checkpoint_dir / f'{class_id}__{re.sub(r"[^\w.-]", "_", candidate_name)}.json'
-
-# _load_score: a checkpointed score, or None when absent, unreadable or for a different (class, candidate)
-def _load_score(checkpoint_dir: Path | None, class_id: str, candidate_name: str) -> float | None:
-    if checkpoint_dir is None:
-        return None
-    try:
-        saved = json.loads(_score_path(checkpoint_dir, class_id, candidate_name).read_text())
-        if saved['class_id'] != class_id or saved['candidate'] != candidate_name:
-            return None
-        return float(saved['score'])
-    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None
-
-# _score_panel: fit every candidate to every class average, each finished fit checkpointed in checkpoint_dir when given, returns {class_id: {candidate: score}}
-def _score_panel(class_averages, panel, resolution, fitter, backend, n_workers: int = 1, checkpoint_dir: Path | None = None):
-    all_scores: dict[str, dict[str, float]] = {class_id: {} for class_id in class_averages}
-    jobs = []
-    for class_id, (average, voxel_size) in class_averages.items():
-        for candidate in panel:
-            saved = _load_score(checkpoint_dir, class_id, candidate.name)
-            if saved is None:
-                jobs.append(_FitJob(class_id, to_comparable(average, voxel_size, resolution), average.shape[-1], voxel_size, resolution, candidate, prior_of_class(class_id)))
-            else:
-                all_scores[class_id][candidate.name] = saved
-    n_resumed = sum(len(scores) for scores in all_scores.values())
-    if n_resumed:
-        log.info(f'Resuming identification: {n_resumed} score(s) loaded from checkpoint')
-
-    def _on_success(job: _FitJob, result: tuple[str, str, float]) -> None:
-        class_id, candidate_name, score = result
-        all_scores[class_id][candidate_name] = score
-        log.debug(f'{class_id}/{candidate_name}: score={score:.3f}')
-        if checkpoint_dir is not None:
-            atomic_write_json(_score_path(checkpoint_dir, class_id, candidate_name), {'class_id': class_id, 'candidate': candidate_name, 'score': float(score)})
-
-    run_parallel(jobs, _fit_one, max_workers=n_workers, label='identify-fit', on_success=_on_success)
-    return all_scores
+from stamp.utils.options.argv import plot_argv
+from stamp.utils.plotting.identify import plot_identify
+from stamp.utils.provenance import write_sidecar
 
 # run_identify: fit the candidate panel to each class average and rank per class
 def run_identify(
@@ -144,7 +57,7 @@ def run_identify(
         log.info('Found matching partial output, resuming')
 
     log.progress(f'Fitting {len(panel)} candidates against {len(class_averages)} classes')
-    real_scores = _score_panel(class_averages, panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'real')
+    real_scores = score_panel(class_averages, panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'real')
     results = [rank_candidates(class_id, scores, method=f'stamp-{fitter}') for class_id, scores in sorted(real_scores.items())]
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -154,7 +67,7 @@ def run_identify(
     real_best, decoy_best = None, None
     if decoy_classes is not None:
         log.progress('Fitting candidates against decoy classes for control')
-        decoy_scores = _score_panel(load_class_averages(decoy_classes, allow_empty=True), panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'decoy')
+        decoy_scores = score_panel(load_class_averages(decoy_classes, allow_empty=True), panel, resolution, fitter, backend, n_workers, checkpoint_dir / 'decoy')
         real_best = [max(s.values()) for s in real_scores.values()]
         decoy_best = [max(s.values()) for s in decoy_scores.values()]
         decoy_control = evaluate_decoy_control(real_best, decoy_best)
@@ -191,20 +104,7 @@ def run_identify(
     shutil.rmtree(checkpoint_dir, ignore_errors=True)  # identify has no keep_raw, the checkpoint is only needed until it completes
 
     if make_plots:
-        _plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir, plot_format)
-
-# _plot_identify: CC heatmap (+ decoy histogram, if a decoy control ran)
-def _plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir: Path, fmt: PlotFormat) -> None:
-    cluster_ids = [r.cluster_id for r in results]
-    names = sorted({name for scores in real_scores.values() for name in scores})
-    row_labels = [f'{r.cluster_id} = {r.candidate_protein} (score={r.fit_score:.2f})' for r in results]
-    fig, ax = plt.subplots(figsize=(6.5, 0.6 * len(cluster_ids) + 2))
-    score_heatmap(ax, cluster_ids, names, real_scores, row_labels=row_labels, title='identify: fit score per candidate')
-    finish(fig, plot_path(output_dir, 'identify_scores', fmt))
-    if decoy_control is not None and decoy_best:
-        fig, ax = plt.subplots(figsize=(5, 4))
-        decoy_hist(ax, real_best, decoy_best, decoy_control.passed)
-        finish(fig, plot_path(output_dir, 'decoy_control', fmt))
+        plot_identify(real_scores, results, decoy_control, real_best, decoy_best, output_dir, plot_format)
 
 # build_identify_commands: create ToolCommand for `stamp identify`
 def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
@@ -215,7 +115,7 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
         'stamp', 'identify',
         '--classes', str(real_classes),
         '--candidates', str(config.stage.identify.candidates),
-        '--output-dir', str(target),
+        '--out-dir', str(target),
         '--fitter', config.stage.identify.fitter,
         '--backend', 'local',
         '-n', str(config.stage.identify.n_workers),
@@ -226,8 +126,7 @@ def build_identify_commands(config, output_dir: Path) -> list[ToolCommand]:
         argv += ['--resolution', str(config.stage.identify.resolution)]
     if config.stage.identify.fetch_missing:
         argv.append('--fetch-missing')
-    argv.append('--plots' if config.plots.enabled else '--no-plots')
-    argv += ['--plot-format', config.plots.format]
+    argv += plot_argv(config.plots)
     return [ToolCommand(tool='identify', argv=argv, working_directory=target, output_paths=[target / 'identification.json'])]
 
 # _write_report: human-readable ranked table per class, decoy verdict first if present

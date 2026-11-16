@@ -11,7 +11,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.classify.prepare import prepare_particle
 from stamp.classify.wedge import box_wedge
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 
 # ParticleStore: prepared (normalised, masked, binned) particles on disk plus what is needed to rebuild each particle's wedge
 @dataclass(frozen=True)

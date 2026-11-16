@@ -1,5 +1,5 @@
 '''
-STAMP: filter-picks session state — load a particle set + manifests, track accept/reject
+STAMP: filter-picks session state: load a particle set + manifests, track accept/reject
 '''
 
 # Import external dependencies
@@ -10,7 +10,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.schemas.particles import Particle, ParticleSet
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import glob_mrc
+from stamp.utils.mrc import glob_mrc
 
 # FilterState: a filtering session's data and accept/reject decisions
 @dataclass

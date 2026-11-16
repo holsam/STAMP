@@ -9,7 +9,6 @@ from typing import Annotated
 
 # Import internal stamp objects
 import stamp.config.config as configFuncs
-from stamp.utils.errors import StampError
 from stamp.utils.log import log
 
 # Initialise Typer app
