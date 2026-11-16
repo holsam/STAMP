@@ -20,7 +20,7 @@ from stamp.schemas.particles import (
     ParticleSet,
 )
 from stamp.schemas.provenance import ProvenanceSidecar
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 
 # _write_cache: helper writing a fake per-tomogram cache of n subvolumes

@@ -11,7 +11,7 @@ from scipy.ndimage import map_coordinates
 # Import STAMP schema
 from stamp.utils.rotation import quaternion_to_matrix
 from stamp.schemas.particles import OrientationPrior, Particle
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 from stamp.utils.errors import StampValidationError
 from stamp.utils.mrc import new_mrc, open_mrc, read_mrc
 from stamp.utils.log import log

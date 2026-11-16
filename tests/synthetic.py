@@ -15,7 +15,7 @@ from stamp.classify.store import ParticleStore
 from stamp.classify.wedge import apply_wedge, box_wedge
 from stamp.utils.rotation import quaternion_from_reference_to
 from stamp.schemas.particles import OrientationPrior
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 
 # asymmetric_object: smooth volume of random gaussian blobs, no symmetry, so every rotation and flip is distinguishable
 def asymmetric_object(box: int, seed: int, *, n_blobs: int = 7, spread: float = 0.22) -> np.ndarray:

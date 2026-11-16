@@ -41,6 +41,8 @@ SUPPORTED_PRIORS = {
     METHOD_SYNTHETIC_NOISE: {OrientationPrior.NORMAL},
     METHOD_RANDOM_VOLUME: {OrientationPrior.AXIS, OrientationPrior.NONE},
 }
+# METHODS: decoy generation methods
+METHODS = (METHOD_AUTO, METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE, METHOD_RANDOM_VOLUME)
 
 # DecoyGeometry: voxel size and density sign shared by the decoy generators
 @dataclass(frozen=True)

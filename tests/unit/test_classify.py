@@ -29,7 +29,7 @@ from stamp.classify.spherical import fit_matrix, lm_pairs, real_sh_basis, sphere
 from stamp.classify.store import ParticleStore, build_store
 from stamp.classify.wedge import apply_wedge, box_wedge, observed_directions
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 from synthetic import asymmetric_object, make_particle, rod_object, synthetic_set
 
 # _BOX: working box edge for alignment tests
@@ -91,7 +91,7 @@ def _c_n_particle(box: int = 25, n_fold: int = 4, radius: float = 6.0) -> np.nda
 # _concatenate: one store from the volumes of two synthetic sets
 def _concatenate(directory: Path, first, second):
     from stamp.classify.store import ParticleStore
-    from stamp.schemas.subvolumes import Subvolumes
+    from stamp.classify.subvolumes import Subvolumes
     directory.mkdir(parents=True)
     volumes = [np.stack([s.store.volumes[i] for i in range(len(s.store))]) for s in (first, second)]
     np.save(directory / 'all.npy', np.concatenate(volumes))

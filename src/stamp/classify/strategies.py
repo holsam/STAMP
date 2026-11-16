@@ -14,7 +14,7 @@ from stamp.classify.halves import express_in_frame_of_a, run_polish_by_half
 from stamp.classify.polish import PolishConfig, posed_class_averages, run_polish
 from stamp.classify.store import ParticleStore, build_store
 from stamp.schemas.particles import ClassAssignment, OrientationPrior
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 from stamp.utils.errors import StampPipelineError
 from stamp.utils.halfset import half_set_indices
 from stamp.utils.log import log

@@ -22,7 +22,7 @@ from stamp.utils.log import log
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
 from stamp.utils.provenance import write_sidecar
-from stamp.utils.reporting import report_beam_angle_distribution
+from stamp.picking.reporting import report_beam_angle_distribution
 
 # _import_picker: read one picks file, infer orientations per tomogram, cache under cache_dir and return the cached picks
 def _import_picker(

@@ -35,9 +35,6 @@ from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
 from stamp.utils.provenance import write_sidecar
 
-# METHODS: decoy generation methods
-METHODS = (METHOD_AUTO, METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE, METHOD_RANDOM_VOLUME)
-
 # _generate_for_method: run one concrete method on the full real set, loading the manifests that method needs
 def _generate_for_method(
     method: str,
