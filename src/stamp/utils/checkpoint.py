@@ -3,10 +3,11 @@ STAMP: fingerprint-gated working directories for resumable commands
 '''
 
 # Import external dependencies
-import hashlib, json, numpy as np, os, shutil
+import json, numpy as np, os, shutil
 from pathlib import Path
 
 # Import internal STAMP objects
+from stamp.utils.io import checksum_file
 from stamp.utils.log import log
 
 # _CHECKPOINT_NAME: fingerprint file stored inside the working directory
@@ -15,7 +16,7 @@ _CHECKPOINT_NAME = 'checkpoint.json'
 # file_signature: identity of an input file, content hash when content is True else size and mtime
 def file_signature(path: Path, *, content: bool = False) -> str:
     if content:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        return checksum_file(path)
     stat = path.stat()
     return f'{stat.st_size}:{stat.st_mtime_ns}'
 
