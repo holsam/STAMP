@@ -283,7 +283,7 @@ class TestPickOrientationPrior:
         assert list(particle_set.by_prior()) == [OrientationPrior.AXIS] and all(p.orientation is not None for p in particle_set.particles)
         without = _write_picks(tmp_path / 'without.csv', ['tomo000'])
         bad = runner.invoke(stamp_app, [*base[:2], base[2], str(without), *base[3:]])
-        assert bad.exit_code != 0 and 'axis needs an orientation' in bad.output
+        assert bad.exit_code != 0 and 'axis needs an orientation' in str(bad.exception)
 
     # check the normal prior still demands a segmentation directory
     def test_normal_prior_requires_segmentation(self, tmp_path: Path) -> None:
@@ -291,4 +291,4 @@ class TestPickOrientationPrior:
         _write_pair(tmp_path / 'seg', raw_dir, 'tomo000')
         picks = _write_picks(tmp_path / 'picks.csv', ['tomo000'])
         result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'pick', str(picks), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0'])
-        assert result.exit_code != 0 and 'needs --seg-dir' in result.output
+        assert result.exit_code != 0 and 'needs --seg-dir' in str(result.exception)

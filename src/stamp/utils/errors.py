@@ -2,16 +2,13 @@
 STAMP: custom exception hierarchy for logging integration
 '''
 
-# Import internal STAMP objects
-from stamp.utils.log import log
-
-# StampError: base exception class for all STAMP errors
+# StampError: base exception class for all STAMP errors, logged once by the CLI entry point
 class StampError(Exception):
     level: str = 'error'
 
     def __init__(self, message: str, *, level: str | None = None) -> None:
         super().__init__(message)
-        log._log((level or self.level).upper(), message)
+        self.level = level or self.level
 
 # StampConfigError: bad or missing configuration (CLI args, YAML/TOML config, panel/candidate files)
 class StampConfigError(StampError):
