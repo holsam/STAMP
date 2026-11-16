@@ -22,18 +22,18 @@ from stamp.decoy.generate import (
     resolve_methods,
 )
 from stamp.decoy.validate import assert_comparable
+from stamp.picking.manifests import load_tomogram_manifests, manifest_paths
 from stamp.run.state import stage_dir
 from stamp.schemas.manifest import TomogramManifest
-from stamp.schemas.particles import ParticleSet
+from stamp.schemas.particles import ParticleSet, load_particle_set
 from stamp.utils.checkpoint import directory_signatures, file_signature, sync_checkpoint
 from stamp.utils.errors import StampPipelineError, StampValidationError
-from stamp.utils.io import cleanup_raw, load_particle_set, load_tomogram_manifests, manifest_paths, require_voxel_size, write_sidecar
+from stamp.utils.io import cleanup_raw
 from stamp.utils.log import log
+from stamp.utils.mrc import require_voxel_size
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.plotting.picks import plot_positions
-
-# METHODS: decoy generation methods
-METHODS = (METHOD_AUTO, METHOD_SHIFTED, METHOD_SYNTHETIC_NOISE, METHOD_RANDOM_VOLUME)
+from stamp.utils.provenance import write_sidecar
 
 # _generate_for_method: run one concrete method on the full real set, loading the manifests that method needs
 def _generate_for_method(

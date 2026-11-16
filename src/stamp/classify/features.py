@@ -9,7 +9,7 @@ from pathlib import Path
 from scipy.ndimage import map_coordinates
 
 # Import internal STAMP objects
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel_ordered, worker_pool

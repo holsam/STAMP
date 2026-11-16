@@ -10,8 +10,8 @@ from typing import Annotated, Literal
 # Import internal stamp objects
 from stamp.config.template import TEMPLATE
 from stamp.utils.errors import StampError
-from stamp.utils.io import print_toml
 from stamp.utils.log import log
+from stamp.utils.toml_view import print_toml
 
 # _resolve_config_path: resolve a given path to a stamp_run.toml and whether it exists
 def _resolve_config_path(path: Path) -> tuple(Path, bool):

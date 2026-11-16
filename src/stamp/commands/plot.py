@@ -7,10 +7,10 @@ import random
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.schemas.particles import Particle
+from stamp.schemas.particles import Particle, load_particle_set
 from stamp.utils.errors import StampPipelineError
-from stamp.utils.io import load_particle_set, paths_by_stem
 from stamp.utils.log import log
+from stamp.utils.mrc import paths_by_stem
 from stamp.utils.plotting.picks import plot_positions
 
 # _select_tomogram_ids: resolve which tomogram IDs to plot, by explicit list, random sample, or all

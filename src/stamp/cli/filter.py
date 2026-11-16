@@ -1,5 +1,5 @@
 '''
-STAMP: CLI for `stamp tools filter-picks`
+STAMP: CLI for `stamp filter`
 '''
 
 # Import external dependencies

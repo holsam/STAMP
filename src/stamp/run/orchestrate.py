@@ -16,8 +16,8 @@ from stamp.commands.pick import run_pick
 from stamp.commands.refine import _ADAPTERS as REFINE_ADAPTERS, run_refine
 from stamp.run.state import STAGE_ORDER, is_complete, mark_complete, stage_dir, stages_to_run
 from stamp.schemas.config import RunConfig
-from stamp.utils.io import glob_mrc, open_mrc
 from stamp.utils.log import log
+from stamp.utils.mrc import glob_mrc, open_mrc
 
 # RunOutcome: completed run information reported
 @dataclass

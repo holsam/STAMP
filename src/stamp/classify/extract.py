@@ -9,10 +9,11 @@ from pathlib import Path
 from scipy.ndimage import map_coordinates
 
 # Import STAMP schema
+from stamp.utils.rotation import quaternion_to_matrix
 from stamp.schemas.particles import OrientationPrior, Particle
-from stamp.schemas.subvolumes import Subvolumes
+from stamp.classify.subvolumes import Subvolumes
 from stamp.utils.errors import StampValidationError
-from stamp.utils.io import new_mrc, open_mrc, read_mrc
+from stamp.utils.mrc import new_mrc, open_mrc, read_mrc
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
 
@@ -34,17 +35,6 @@ class _SubtractTomogramJob:
     tomogram_path: str
     segmentation_path: str
     output_path: Path
-
-# quaternion_to_matrix: return a rotation matrix from a unit quaternion (w, x, y, z)
-def quaternion_to_matrix(quaternion: tuple[float, float, float, float]) -> np.ndarray:
-    w, x, y, z = quaternion
-    return np.array(
-        [
-            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-        ]
-    )
 
 # canonical_grid: sampling grid for a cubic box centred on the origin
 def canonical_grid(box_voxels: int) -> np.ndarray:

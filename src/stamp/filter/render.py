@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.schemas.particles import Particle
-from stamp.utils.io import open_mrc
+from stamp.utils.mrc import open_mrc
 from stamp.utils.plotting.core import PROTEIN_CMAP, bare, central_slice
 
 # load_central_slice: memory-mapped and downsampled central Z slice of an MRC volume

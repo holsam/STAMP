@@ -57,3 +57,7 @@ class MRefineAdapter:
             output_paths=[Path(refined_map)],
             parsed={'final_map': str(refined_map)},
         )
+
+    # collect_final_map: move the tool's refined map to final_map
+    def collect_final_map(self, result: RunResult, reference: Path, final_map: Path) -> None:
+        Path(self.parse_output(result).parsed['final_map']).replace(final_map)

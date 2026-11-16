@@ -8,7 +8,7 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.classify.frames import rotate_density
-from stamp.utils.io import write_class_average_mrc
+from stamp.utils.mrc import write_class_average_mrc
 from stamp.utils.log import log
 
 # write_class_averages: write each class average as an MRC with its voxel size set

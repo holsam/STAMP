@@ -8,14 +8,14 @@ from dataclasses import dataclass
 from matplotlib.animation import FFMpegWriter, FuncAnimation, PillowWriter
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from pathlib import Path
-from skimage import measure
 from typing import Literal
 
 # Import internal STAMP objects
+from stamp.picking.geometry import mesh_surface
 from stamp.utils.plotting.core import GREEN, GREY, central_slice, finish, plot_path, show_segmentation
 from stamp.utils.options.literals import PlotFormat
-from stamp.utils.io import read_mrc
 from stamp.utils.log import log
+from stamp.utils.mrc import read_mrc
 from stamp.utils.parallel import run_parallel
 
 # _group_by_tomogram: {tomogram_id: [particle, ...]}
@@ -268,7 +268,7 @@ def _render_3d_job(job: _Scatter3DJob) -> None:
         step = max(1, max(segmentation.shape) // 128)
         membrane = (segmentation[::step, ::step, ::step] == 1).astype(np.float32)
         if membrane.any() and membrane.min() != membrane.max():
-            verts, faces, _normals, _values = measure.marching_cubes(membrane, level=0.5)
+            verts, faces, _normals = mesh_surface(membrane)
             verts *= step
             mesh = Poly3DCollection(verts[faces], alpha=0.15, facecolor=GREY, edgecolor='none')
             ax.add_collection3d(mesh)
