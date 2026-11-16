@@ -3,7 +3,7 @@ STAMP: RELION-5 particle export and suggested-settings README for prepared half-
 '''
 
 # Import external dependencies
-import numpy as np, starfile
+import numpy as np, pandas as pd, starfile
 from pathlib import Path
 from scipy.spatial.transform import Rotation
 
@@ -77,7 +77,6 @@ def write_particle_star(
         })
     path.parent.mkdir(parents=True, exist_ok=True)
     log.debug(f'Writing {len(rows)} particles to {path}')
-    import pandas as pd
     starfile.write({'particles': pd.DataFrame(rows)}, path, overwrite=True)
 
 # write_half_readme: suggested RELION-5 settings for one prepared half, nothing here is executed by STAMP
