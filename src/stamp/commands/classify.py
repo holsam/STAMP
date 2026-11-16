@@ -4,7 +4,7 @@ STAMP: unsupervised classification logic
 
 # Import external dependencies
 import json, os, numpy as np
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 # Import internal STAMP objects
@@ -12,7 +12,6 @@ from stamp.classify.cluster import ClusteringConfig, ClusteringResult
 from stamp.utils.checkpoint import file_signature, signatures, sync_checkpoint
 from stamp.classify.polish import PolishConfig
 from stamp.classify.extract import extract_particle_set
-from stamp.classify.prepare import working_box
 from stamp.classify.shfeatures import build_sh_feature_matrix
 from stamp.classify.features import build_feature_matrix
 from stamp.backends.base import ToolCommand
@@ -27,6 +26,7 @@ from stamp.utils.mrc import glob_mrc, paths_by_stem, require_voxel_size
 from stamp.utils.options.argv import keep_raw_argv, plot_argv, seg_dir_argv
 from stamp.utils.provenance import write_sidecar
 from stamp.utils.plotting.classify import plot_classify
+from stamp.classify.settings import GroupSettings
 from stamp.classify.strategies import classify_combined, classify_strict
 
 # run_classify: cluster picked particles by structural similarity per orientation prior
@@ -83,38 +83,6 @@ def run_classify(
         log.debug(f'Using odd box voxel for centred particles: {box_voxels - 1} -> {box_voxels}')
     log.progress(f'Using box voxels: {box_voxels}')
 
-    # everything that changes results; n_workers, plots and keep_raw are left out so a run can resume with different resources
-    fingerprint = {
-        'particles': file_signature(particles, content=True),
-        'raw': signatures(tomogram_paths),
-        'segmentation': signatures(segmentation_paths),
-        'voxel_size_angstrom': voxel_size_angstrom,
-        'box_voxels': box_voxels,
-        'n_radial_bins': n_radial_bins,
-        'azimuthal_modes': azimuthal_modes,
-        'n_azimuthal_samples': n_azimuthal_samples,
-        'min_radius_fraction': min_radius_fraction,
-        'feature_normalisation': feature_normalisation,
-        'method': method,
-        'min_cluster_size': min_cluster_size,
-        'n_clusters': n_clusters,
-        'n_components': n_components,
-        'strict_halfset_independence': strict_halfset_independence,
-        'inplane_angular_step_degrees': inplane_angular_step_degrees,
-        'random_state': random_state,
-        'tilt_max_degrees': tilt_max_degrees,
-        'tilt_axis_degrees': tilt_axis_degrees,
-        'bin_factor': bin_factor,
-        'n_rotations': n_rotations,
-        'shift_range_voxels': shift_range_voxels,
-        'polish_rounds': polish_rounds,
-        'null_sigmas': null_sigmas,
-        'reject_quantile': reject_quantile,
-        'merge_fraction': merge_fraction,
-    }    # the particle set signature already covers every prior
-    if sync_checkpoint(output_dir / 'raw', fingerprint):
-        log.info('Found matching partial output, resuming')
-
     config = ClusteringConfig(
         method=method,
         n_components=n_components,
@@ -131,7 +99,7 @@ def run_classify(
     if not strict_halfset_independence:
         log.warning('--no-strict-halfset-independence used, half-A and half-B particles are classified together; FSC built on these classes will be inflated')
 
-    settings = _GroupSettings(
+    settings = GroupSettings(
         box_voxels=box_voxels, voxel_size_angstrom=voxel_size_angstrom, n_radial_bins=n_radial_bins,
         azimuthal_modes=azimuthal_modes, n_azimuthal_samples=n_azimuthal_samples, min_radius_fraction=min_radius_fraction,
         feature_normalisation=feature_normalisation, clustering=config, strict_halfset_independence=strict_halfset_independence,
@@ -140,6 +108,15 @@ def run_classify(
         reject_quantile=reject_quantile, random_state=random_state, bin_factor=bin_factor,
         tilt_max_degrees=tilt_max_degrees, tilt_axis_degrees=tilt_axis_degrees, n_workers=n_workers,
     )
+    # everything that changes results; n_workers is left out so a run can resume with different resources
+    fingerprint = {
+        'particles': file_signature(particles, content=True),
+        'raw': signatures(tomogram_paths),
+        'segmentation': signatures(segmentation_paths),
+        **{key: value for key, value in asdict(settings).items() if key != 'n_workers'},
+    }    # the particle set signature already covers every prior
+    if sync_checkpoint(output_dir / 'raw', fingerprint):
+        log.info('Found matching partial output, resuming')
     results: dict[OrientationPrior, _GroupResult] = {}
     failures: dict[OrientationPrior, str] = {}
     for prior, group in groups.items():
@@ -167,31 +144,9 @@ def run_classify(
         tool_version=None,
         parameters={
             'box_angstrom': box_angstrom,
-            'box_voxels': box_voxels,
-            'n_radial_bins': n_radial_bins,
-            'method': method,
-            'min_cluster_size': min_cluster_size,
-            'n_clusters': n_clusters,
-            'n_components': n_components,
-            'strict_halfset_independence': strict_halfset_independence,
-            'inplane_angular_step_degrees': inplane_angular_step_degrees,
-            'random_state': random_state,
+            **asdict(settings),
             'orientation_priors': {prior.value: len(group) for prior, group in groups.items()},
             'skipped_priors': {prior.value: reason for prior, reason in failures.items()},
-            'tilt_max_degrees': tilt_max_degrees,
-            'tilt_axis_degrees': tilt_axis_degrees,
-            'bin_factor': bin_factor,
-            'n_rotations': n_rotations,
-            'shift_range_voxels': shift_range_voxels,
-            'polish_rounds': polish_rounds,
-            'null_sigmas': null_sigmas,
-            'reject_quantile': reject_quantile,
-            'merge_fraction': merge_fraction,
-            'azimuthal_modes': azimuthal_modes,
-            'n_azimuthal_samples': n_azimuthal_samples,
-            'min_radius_fraction': min_radius_fraction,
-            'feature_normalisation': feature_normalisation,
-            'n_workers': n_workers,
             'is_decoy': is_decoy,
             'membrane_subtracted': bool(segmentation_paths),
             'n_extracted': sum(len(result.kept) for result in results.values()),
@@ -204,32 +159,6 @@ def run_classify(
     if make_plots:
         for prior, result in results.items():
             plot_classify(result.result_by_half, result.averages_by_half, output_dir, plot_format, prior.value)
-
-# _GroupSettings: classify settings shared by every orientation prior group
-@dataclass(frozen=True)
-class _GroupSettings:
-    box_voxels: int
-    voxel_size_angstrom: float
-    n_radial_bins: int
-    azimuthal_modes: int
-    n_azimuthal_samples: int
-    min_radius_fraction: float
-    feature_normalisation: str
-    clustering: ClusteringConfig
-    strict_halfset_independence: bool
-    inplane_angular_step_degrees: float
-    n_rotations: int
-    shift_range_voxels: int
-    polish_rounds: int
-    min_cluster_size: int
-    merge_fraction: float
-    null_sigmas: float
-    reject_quantile: float
-    random_state: int
-    bin_factor: int
-    tilt_max_degrees: float | None
-    tilt_axis_degrees: float
-    n_workers: int
 
 # _GroupResult: results of classifying one orientation prior
 @dataclass
@@ -246,7 +175,7 @@ def _classify_prior(
     particles: list[Particle],
     tomogram_paths: dict[str, str],
     segmentation_paths: dict[str, str],
-    settings: _GroupSettings,
+    settings: GroupSettings,
     output_dir: Path,
 ) -> _GroupResult:
     work_dir = output_dir / 'raw' / prior.value
@@ -290,7 +219,7 @@ def _classify_prior(
         reject_quantile=settings.reject_quantile, seed=settings.random_state, threads=settings.n_workers,
     )
     classify = classify_strict if settings.strict_halfset_independence else classify_combined
-    assignments, result_by_half, averages_by_half = classify(kept, subvols, features, settings.clustering, polish_config, working_box(settings.box_voxels, settings.bin_factor), (settings.tilt_max_degrees, settings.tilt_axis_degrees), output_dir, work_dir, settings.voxel_size_angstrom)
+    assignments, result_by_half, averages_by_half = classify(kept, subvols, features, settings, polish_config, output_dir, work_dir)
     return _GroupResult(assignments, kept, skipped, result_by_half, averages_by_half)
 
 # build_classify_commands: create ToolCommand for `stamp classify`

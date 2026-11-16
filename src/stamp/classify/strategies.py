@@ -12,6 +12,8 @@ from stamp.classify.cluster import ClusteringResult, label_to_cluster_id, reduce
 from stamp.classify.frames import azimuth_degrees, rotation_to_quaternion
 from stamp.classify.halves import express_in_frame_of_a, run_polish_by_half
 from stamp.classify.polish import PolishConfig, posed_class_averages, run_polish
+from stamp.classify.prepare import working_box
+from stamp.classify.settings import GroupSettings
 from stamp.classify.store import ParticleStore, build_store
 from stamp.schemas.particles import ClassAssignment, OrientationPrior
 from stamp.classify.subvolumes import Subvolumes
@@ -41,15 +43,15 @@ def classify_combined(
     particles,
     subvols: Subvolumes,
     features,
-    config,
+    settings: GroupSettings,
     polish_config: PolishConfig,
-    working_voxels: int,
-    tilt: tuple[float | None, float],
     output_dir: Path,
     work_dir: Path,
-    voxel_size_angstrom: float,
 ) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
-    seeds = reduce_and_cluster(features, config)
+    working_voxels = working_box(settings.box_voxels, settings.bin_factor)
+    tilt = (settings.tilt_max_degrees, settings.tilt_axis_degrees)
+    voxel_size_angstrom = settings.voxel_size_angstrom
+    seeds = reduce_and_cluster(features, settings.clustering)
     (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
     store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
@@ -76,18 +78,18 @@ def classify_strict(
     particles,
     subvols: Subvolumes,
     features,
-    config,
+    settings: GroupSettings,
     polish_config: PolishConfig,
-    working_voxels: int,
-    tilt: tuple[float | None, float],
     output_dir: Path,
     work_dir: Path,
-    voxel_size_angstrom: float,
 ) -> tuple[list[ClassAssignment], dict[str, ClusteringResult], dict[str, dict[str, tuple[np.ndarray, int]]]]:
+    working_voxels = working_box(settings.box_voxels, settings.bin_factor)
+    tilt = (settings.tilt_max_degrees, settings.tilt_axis_degrees)
+    voxel_size_angstrom = settings.voxel_size_angstrom
     members = {half.value: indices for half, indices in half_set_indices(list(particles)).items()}
     if not members['A'] or not members['B']:
         raise StampPipelineError('Strict mode needs particles in both half-sets')
-    seeds = {half: reduce_and_cluster(features[indices], config) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
+    seeds = {half: reduce_and_cluster(features[indices], settings.clustering) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
     (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
     store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
