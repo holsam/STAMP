@@ -48,6 +48,10 @@ class StreamDir:
     def tomogram_dir(self, tomogram_id: str) -> Path:
         return self.root / 'tomograms' / tomogram_id
 
+    # particle_dir: per-particle MRC export directory for one tomogram
+    def particle_dir(self, tomogram_id: str) -> Path:
+        return self.root / 'particles' / tomogram_id
+
     # subvolume_dir: subvolume cache directory for one kind and prior
     def subvolume_dir(self, kind: str, prior: str) -> Path:     # kind is 'real' or 'decoy'
         return self.root / 'subvolumes' / kind / prior

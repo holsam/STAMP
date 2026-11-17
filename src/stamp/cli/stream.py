@@ -121,6 +121,10 @@ def append(
     plot_format: PlotFormatOption = 'tiff',
     pick_zstack_movie: PickZstackMovieOption = True,
     pick_plot_3d: PickPlot3dOption = False,
+    export_particles: Annotated[
+        bool,
+        typer.Option('--export-particles/--no-export-particles', help='Write an oriented box MRC per real particle under particles/<tomogram_id>/.', rich_help_panel = 'Export'),
+    ] = False,
 ) -> None:
     '''Pick, decoy and extract one tomogram into a stream directory at <out>/stamp/stream.'''
     log_started('stream append')
@@ -166,6 +170,7 @@ def append(
         pick_plot_style=pick_plot_style,
         pick_zstack_movie=pick_zstack_movie,
         pick_plot_3d=pick_plot_3d,
+        export_particles=export_particles,
     )
 
 # Define finalise command

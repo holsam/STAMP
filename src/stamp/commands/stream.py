@@ -3,7 +3,7 @@ STAMP: stream logic
 '''
 
 # Import external dependencies
-import json
+import json, shutil
 from dataclasses import asdict
 from pathlib import Path
 
@@ -31,7 +31,7 @@ from stamp.stream.state import StreamDir, StreamSettings, load_or_init_settings
 from stamp.utils.checkpoint import atomic_write_json, file_signature
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.log import log
-from stamp.utils.mrc import open_mrc
+from stamp.utils.mrc import new_mrc, open_mrc
 from stamp.utils.plotting.picks import plot_positions
 
 # _particles_from_picks: real particles for one tomogram
@@ -60,6 +60,32 @@ def _set_payload(particles: list[Particle], consensus_rule: str, contributing_pi
         'consensus_rule': consensus_rule,
         'contributing_pickers': contributing_pickers,
     }
+
+# _export_particles: write each kept real particle as one raw (not membrane-subtracted) oriented box MRC
+def _export_particles(
+    particles: list[Particle],
+    tomogram_id: str,
+    tomogram_path: Path,
+    stream: StreamDir,
+    box_voxels: int,
+    voxel_size_angstrom: float,
+    n_workers: int,
+) -> int:
+    export_dir = stream.particle_dir(tomogram_id)
+    scratch = export_dir / '.scratch'   # extraction cache, removed once the MRCs are written
+    shutil.rmtree(scratch, ignore_errors=True)
+    by_prior: dict[OrientationPrior, list[Particle]] = {}
+    for particle in particles:
+        by_prior.setdefault(particle.prior, []).append(particle)
+    n_written = 0
+    for prior, group in by_prior.items():
+        subvols, kept, _ = extract_particle_set(group, {tomogram_id: str(tomogram_path)}, box_voxels, segmentation_paths={}, n_workers=n_workers, cache_dir=scratch / prior.value, prior=prior)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        for row, particle in enumerate(kept):   # one tomogram, so kept[row] is the row of subvols[row]
+            new_mrc(export_dir / f'{particle.particle_id}.mrc', subvols[row], voxel_size=voxel_size_angstrom)
+            n_written += 1
+    shutil.rmtree(scratch, ignore_errors=True)
+    return n_written
 
 # _decoys_for_tomogram: decoys for one tomogram's real particles, by the methods run_decoy would use, with no generator-level cache
 def _decoys_for_tomogram(real: ParticleSet, manifest: TomogramManifest, settings: StreamSettings) -> ParticleSet | None:
@@ -130,6 +156,7 @@ def run_stream_append(
     pick_plot_style: str = 'segmented',
     pick_zstack_movie: bool = True,
     pick_plot_3d: bool = False,
+    export_particles: bool = False,
 ) -> None:
     if requested.decoy_method == METHOD_SYNTHETIC_NOISE:
         raise StampPipelineError('stream append does not support --decoy-method synthetic-noise (it makes its own volumes, not tomogram decoys), use `stamp decoy --method synthetic-noise` instead')
@@ -172,6 +199,10 @@ def run_stream_append(
     segmentation_paths = {tomogram_id: str(segmentation_path)} if segmentation_path is not None else {}
     n_kept_real, n_skipped_real = _extract_set(real_particles, 'real', stream, tomogram_path, settings.box_voxels, segmentation_paths, n_workers)
     n_kept_decoy, n_skipped_decoy = _extract_set(decoy_particles, 'decoy', stream, tomogram_path, settings.box_voxels, segmentation_paths, n_workers)
+
+    if export_particles and real_particles:
+        n_exported = _export_particles(real_particles, tomogram_id, tomogram_path, stream, settings.box_voxels, settings.voxel_size_angstrom, n_workers)
+        log.info(f'{tomogram_id}: exported {n_exported} particle box(es)')
 
     tomogram_dir = stream.tomogram_dir(tomogram_id)
     tomogram_dir.mkdir(parents=True, exist_ok=True)

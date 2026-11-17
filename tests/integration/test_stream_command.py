@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 # Import internal STAMP objects
 from stamp.cli.cli import stamp_app
+from stamp.classify.extract import extract_subvolume
 from stamp.stream.state import StreamDir
 from stamp.utils.errors import StampError, StampPipelineError, StampValidationError
 
@@ -265,3 +266,45 @@ class TestStreamClassify:
         result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', '-p', str(stream_dir / 'particle_set.json'), '-r', str(tmp_path / 'raw'), '-s', str(tmp_path / 'seg'), '-o', str(classify_out), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
         assert result.exit_code == 0, result.output
         assert _partition(stream_dir / 'classify' / 'real' / 'class_assignments.json') == _partition(classify_out / 'stamp' / 'classify' / 'class_assignments.json')
+
+# TestStreamExport: class checking the optional per-particle raw box export on append
+class TestStreamExport:
+    def test_export_writes_one_box_per_kept_real_particle(self, tmp_path: Path) -> None:
+        '''One MRC per kept real particle, at the stream box and voxel size; the scratch cache is removed.'''
+        picks = _write_picks(tmp_path / 'picks.csv', ['t0'])
+        seg, raw = _write_pair(tmp_path / 'seg', tmp_path / 'raw', 't0')
+        result = runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw, '--export-particles'))
+        assert result.exit_code == 0, result.output
+        stream = _stream(tmp_path)
+        done = json.loads((stream.tomogram_dir('t0') / 'done.json').read_text())
+        files = sorted(stream.particle_dir('t0').glob('*.mrc'))
+        assert len(files) == sum(done['n_kept_by_prior']['real'].values()) > 0
+        with mrcfile.open(files[0]) as mrc:
+            assert mrc.data.shape == (15, 15, 15)
+            assert abs(float(mrc.voxel_size.x) - 10.0) < 1e-3
+        assert not (stream.particle_dir('t0') / '.scratch').exists()
+
+    def test_exported_box_matches_raw_extraction(self, tmp_path: Path) -> None:
+        '''Each exported box equals extract_subvolume of the raw tomogram at the particle's position and orientation.'''
+        picks = _write_picks(tmp_path / 'picks.csv', ['t0'])
+        seg, raw = _write_pair(tmp_path / 'seg', tmp_path / 'raw', 't0')
+        raw_data = np.array(mrcfile.open(raw).data, dtype=np.float32)
+        result = runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw, '--export-particles'))
+        assert result.exit_code == 0, result.output
+        stream = _stream(tmp_path)
+        particles = {p['particle_id']: p for p in json.loads((stream.tomogram_dir('t0') / 'particles.json').read_text())['particles']}
+        files = sorted(stream.particle_dir('t0').glob('*.mrc'))
+        assert files
+        for path in files:
+            particle = particles[path.stem]
+            orientation = tuple(particle['orientation']) if particle['orientation'] is not None else None
+            expected = extract_subvolume(raw_data, tuple(particle['position']), orientation, 15)
+            with mrcfile.open(path) as mrc:
+                np.testing.assert_allclose(mrc.data, expected, rtol=1e-5, atol=1e-5)
+
+    def test_export_off_writes_no_particles_directory(self, tmp_path: Path) -> None:
+        '''Without --export-particles there is no particles/ directory.'''
+        picks = _write_picks(tmp_path / 'picks.csv', ['t0'])
+        seg, raw = _write_pair(tmp_path / 'seg', tmp_path / 'raw', 't0')
+        assert runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw)).exit_code == 0
+        assert not (_stream(tmp_path).root / 'particles').exists()
