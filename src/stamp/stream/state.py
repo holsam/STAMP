@@ -58,7 +58,7 @@ class StreamDir:
 
     # done_tomograms: sorted ids of every completed tomogram
     def done_tomograms(self) -> list[str]:
-        return sorted(path.parent.parent.name for path in (self.root / 'tomograms').glob('*/done.json'))
+        return sorted(path.parent.name for path in (self.root / 'tomograms').glob('*/done.json'))
 
 # load_or_init_settings: read stream.json, or write it on the first append
 def load_or_init_settings(stream: StreamDir, requested: StreamSettings) -> StreamSettings:
