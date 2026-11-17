@@ -63,7 +63,7 @@ def _position_columns(
         x, y, z = particle.position
         return {'rlnCoordinateX': x, 'rlnCoordinateY': y, 'rlnCoordinateZ': z}
     if shape_by_tomogram is None or particle.tomogram_id not in shape_by_tomogram:
-        raise StampValidationError(f'no raw tomogram size for {particle.tomogram_id!r}, cannot write its centred coordinates (pass -r/--raw-dir with that tomogram, or use --coordinate-system pixel)')
+        raise StampValidationError(f'no tomogram size for {particle.tomogram_id!r}, cannot write its centred coordinates (it is not in -r/--raw-dir or appended to --stream-dir; or use --coordinate-system pixel)')
     x, y, z = centred_coordinates_angstrom(particle.position, shape_by_tomogram[particle.tomogram_id], voxel_size_angstrom)
     return {'rlnCenteredCoordinateXAngst': x, 'rlnCenteredCoordinateYAngst': y, 'rlnCenteredCoordinateZAngst': z}
 

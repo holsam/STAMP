@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import refine command functions/variables
-from stamp.utils.options.cli import OutDirOption, PlotFormatOption, PlotsOption, RawDirOption, VoxelSizeOption
+from stamp.utils.options.cli import OptionalRawDirOption, OutDirOption, PlotFormatOption, PlotsOption, RawDirOption, VoxelSizeOption
 import stamp.commands.refine as refinefuncs
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
@@ -35,7 +35,11 @@ def prepare(
         Path,
         typer.Option('--class-assignments', exists=True, dir_okay=False),
     ],
-    raw_tomogram_dir: RawDirOption,
+    raw_tomogram_dir: OptionalRawDirOption = None,
+    stream_dir: Annotated[
+        Path | None,
+        typer.Option('--stream-dir', exists=True, file_okay=False, help='Stream directory (<out>/stamp/stream).', rich_help_panel = 'Tomogram sizes'),
+    ] = None,
     output_dir: OutDirOption = Path('.'),
     voxel_size_angstrom: VoxelSizeOption = None,
     coordinate_system: Annotated[
@@ -43,7 +47,7 @@ def prepare(
         typer.Option('--coordinate-system', help='Particle position columns: centred (RELION 5 rlnCenteredCoordinate*Angst) or pixel (rlnCoordinate*).', rich_help_panel = 'Coordinates'),
     ] = 'centred',
 ) -> None:
-    '''Write RELION half-set inputs for an external refinement.'''
+    '''Write RELION half-set inputs for an external refinement. Tomogram sizes come from the raw headers in -r/--raw-dir or from --stream-dir.'''
     log_started('refinement preparation')
     refinefuncs.run_refine_prepare(
         class_id=class_id,
@@ -54,6 +58,7 @@ def prepare(
         output_dir=resolve_output_dir(output_dir, 'refine'),
         voxel_size_angstrom=voxel_size_angstrom,
         coordinate_system=coordinate_system,
+        stream_dir=stream_dir,
     )
 
 # assess: FSC of two externally refined half-maps for one class

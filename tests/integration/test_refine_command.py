@@ -3,7 +3,7 @@ STAMP: integration tests for `stamp refine prepare` and `stamp refine assess`
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np, pytest, starfile
+import json, mrcfile, numpy as np, pandas as pd, pytest, starfile
 from typer.testing import CliRunner
 from stamp.cli.cli import stamp_app
 from stamp.utils.errors import StampValidationError
@@ -172,3 +172,79 @@ class TestRefineAssess:
         result = _assess(tmp_path, tmp_path / 'runA' / 'final.mrc', tmp_path / 'runB' / 'final.mrc')
         assert result.exit_code != 0
         assert isinstance(result.exception, StampValidationError) and 'identical to its seed' in str(result.exception)
+
+# STREAM_PARTICLES: six particle positions (x, y, z) inside the 60^3 test vesicle, 14 voxels from its centre
+STREAM_PARTICLES = ((30, 30, 44), (30, 30, 16), (30, 44, 30), (30, 16, 30), (44, 30, 30), (16, 30, 30))
+
+# _write_stream_pair: a vesicle segmentation and a noisy tomogram with a blob at each particle, deterministic per id
+def _write_stream_pair(seg_dir, raw_dir, tomogram_id):
+    import zlib
+    shape = (60, 60, 60)
+    centre = np.array(shape) / 2.0
+    grid = np.stack(np.meshgrid(*[np.arange(n) for n in shape], indexing='ij'), axis=-1)
+    segmentation = ((np.linalg.norm(grid - centre, axis=-1) > 16.0) & (np.linalg.norm(grid - centre, axis=-1) < 20.0)).astype(np.float32)
+    tomogram = np.random.default_rng(zlib.crc32(tomogram_id.encode())).normal(0.0, 1.0, shape).astype(np.float32)
+    tomogram[segmentation > 0] -= 1.0
+    for x, y, z in STREAM_PARTICLES:
+        tomogram[z - 2:z + 3, y - 2:y + 3, x - 2:x + 3] -= 6.0
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    for path, data in ((seg_dir / f'{tomogram_id}.mrc', segmentation), (raw_dir / f'{tomogram_id}.mrc', tomogram)):
+        with mrcfile.new(path, overwrite=True) as mrc:
+            mrc.set_data(data)
+            mrc.voxel_size = 10.0
+
+# TestRefinePrepareFromStream: class checking that refine prepare takes tomogram sizes from a stream directory, with no tomograms on disk
+class TestRefinePrepareFromStream:
+    def test_stream_source_matches_raw_source_and_needs_no_tomograms(self, tmp_path):
+        import shutil
+        from typer.testing import CliRunner
+        from stamp.cli.cli import stamp_app
+        from stamp.utils.errors import StampValidationError
+        cli = CliRunner()
+        ids = ['t0', 't1', 't2']
+        seg_dir, raw_dir = tmp_path / 'seg', tmp_path / 'raw'
+        for tomogram_id in ids:
+            _write_stream_pair(seg_dir, raw_dir, tomogram_id)
+        picks = tmp_path / 'picks.csv'
+        picks.write_text('\n'.join(['tomogram_id,x,y,z'] + [f'{t},{x},{y},{z}' for t in ids for x, y, z in STREAM_PARTICLES]) + '\n')
+        stream = tmp_path / 'stamp' / 'stream'
+        small_decoys = ['--min-shift-a', '30', '--max-shift-a', '60', '--min-distance-from-real-a', '20', '--min-distance-from-picks-a', '25']
+        for tomogram_id in ids:
+            args = ['-d', str(tmp_path), 'stream', 'append', str(picks), '-r', str(raw_dir / f'{tomogram_id}.mrc'), '-s', str(seg_dir / f'{tomogram_id}.mrc'), '--out-dir', str(tmp_path), '--voxel-size-a', '10.0', '--box-length-a', '150', *small_decoys]
+            assert cli.invoke(stamp_app, args).exit_code == 0
+        assert cli.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'finalise', '--out-dir', str(tmp_path)]).exit_code == 0
+        assert cli.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), '--method', 'kmeans', '--n-clusters', '2', '--min-cluster-size', '2', '--seed', '0', '--no-plots', '--no-strict-halfset-independence']).exit_code == 0
+        assignments = stream / 'classify' / 'real' / 'class_assignments.json'
+        cluster = sorted({row['cluster_id'] for row in json.loads(assignments.read_text())})[0]
+        identification = tmp_path / 'identification.json'
+        identification.write_text(json.dumps([{'cluster_id': cluster, 'candidate_protein': 'x', 'fit_score': 0.9}]))
+
+        def prepare(out, *source):
+            return cli.invoke(stamp_app, ['-d', str(tmp_path), 'refine', 'prepare', '--class-id', cluster, '--identification', str(identification), '--particles', str(stream / 'particle_set.json'), '--class-assignments', str(assignments), '--out-dir', str(tmp_path / out), *source])
+
+        # raw source first, while the tomograms are still on disk
+        result = prepare('out_raw', '--raw-dir', str(raw_dir), '--voxel-size-a', '10.0')
+        assert result.exit_code == 0, result.output
+        # now delete every tomogram and segmentation; the stream alone must be enough
+        shutil.rmtree(raw_dir)
+        shutil.rmtree(seg_dir)
+        result = prepare('out_stream', '--stream-dir', str(stream))
+        assert result.exit_code == 0, result.output
+        for half in ('halfA', 'halfB'):
+            raw_rows = starfile.read(tmp_path / 'out_raw' / 'stamp' / 'refine' / cluster / half / 'particles.star')
+            stream_rows = starfile.read(tmp_path / 'out_stream' / 'stamp' / 'refine' / cluster / half / 'particles.star')
+            pd.testing.assert_frame_equal(raw_rows, stream_rows)
+        assert json.loads((tmp_path / 'out_stream' / 'stamp' / 'refine' / cluster / 'prepare.json').read_text())['voxel_size_angstrom'] == 10.0
+
+    def test_source_must_be_exactly_one(self, tmp_path):
+        from typer.testing import CliRunner
+        from stamp.cli.cli import stamp_app
+        cli = CliRunner()
+        for name in ('x.json',):
+            (tmp_path / name).write_text('[]')
+        common = ['-d', str(tmp_path), 'refine', 'prepare', '--class-id', 'c00', '--identification', str(tmp_path / 'x.json'), '--particles', str(tmp_path / 'x.json'), '--class-assignments', str(tmp_path / 'x.json'), '--out-dir', str(tmp_path)]
+        for source in ([], ['--raw-dir', str(tmp_path), '--stream-dir', str(tmp_path)]):
+            result = cli.invoke(stamp_app, [*common, *source])
+            assert isinstance(result.exception, StampValidationError) and 'exactly one' in str(result.exception)
+
