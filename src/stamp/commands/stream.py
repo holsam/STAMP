@@ -3,11 +3,15 @@ STAMP: stream logic
 '''
 
 # Import external dependencies
+import json
 from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.classify.extract import extract_particle_set
 from stamp.commands.pick import pick_tomogram
+from stamp.decoy.validate import assert_comparable
+from stamp.utils.halfset import assign_half_sets
+from stamp.utils.provenance import write_sidecar
 from stamp.decoy.generate import (
     METHOD_RANDOM_VOLUME,
     METHOD_SYNTHETIC_NOISE,
@@ -193,3 +197,80 @@ def run_stream_append(
         'shape_xyz': shape_xyz,
     })
     log.info(f'{tomogram_id}: appended {len(real_particles)} particles and {len(decoy_particles)} decoys')
+
+# _load_set_payload: particles and contributing pickers from one tomogram's particle set JSON
+def _load_set_payload(path: Path) -> tuple[list[Particle], list[str]]:
+    payload = json.loads(path.read_text())
+    return [Particle.model_validate(particle) for particle in payload['particles']], payload['contributing_pickers']
+
+# _with_half_sets: assign half-sets once over the whole stream, so whole tomograms land in one half
+def _with_half_sets(particles: list[Particle], seed: int) -> list[Particle]:
+    group_of = {particle.particle_id: particle.tomogram_id for particle in particles}
+    half_by_id = assign_half_sets([particle.particle_id for particle in particles], seed=seed, group_of=group_of)
+    return [particle.model_copy(update={'half_set': half_by_id[particle.particle_id]}) for particle in particles]
+
+# run_stream_finalise: merge appended tomograms into one real and one decoy particle set with global half-sets, check comparability, then mark the stream finalised last
+def run_stream_finalise(*, stream_dir: Path) -> None:
+    stream = StreamDir(stream_dir)
+    if not stream.settings_path.is_file():
+        raise StampValidationError(f'{stream_dir} is not a stream directory (no stream.json)')
+    settings = StreamSettings.model_validate(json.loads(stream.settings_path.read_text()))
+    done = stream.done_tomograms()
+    if not done:
+        raise StampPipelineError(f'{stream_dir} has no appended tomograms to finalise')
+    log.info(f'Finalising {len(done)} appended tomogram(s)')
+
+    real: list[Particle] = []
+    decoy: list[Particle] = []
+    decoy_pickers: set[str] = set()
+    tomogram_inputs: list[tuple[str, Path]] = []
+    for tomogram_id in done:
+        tomogram_dir = stream.tomogram_dir(tomogram_id)
+        particles, _ = _load_set_payload(tomogram_dir / 'particles.json')
+        decoys, pickers = _load_set_payload(tomogram_dir / 'decoy_particles.json')
+        real.extend(particles)
+        decoy.extend(decoys)
+        decoy_pickers.update(pickers)
+        tomogram_inputs.append((f'particles:{tomogram_id}', tomogram_dir / 'particles.json'))
+    if not real:
+        raise StampPipelineError('no real particles in the appended tomograms, nothing to finalise')
+    if not decoy:
+        raise StampPipelineError('no decoy particles in the appended tomograms, nothing to finalise')
+    if len({particle.tomogram_id for particle in real}) < 2:
+        log.warning('One tomogram only; half-sets are not independent (all particles in half A)')
+
+    real_set = ParticleSet(particles=_with_half_sets(real, settings.half_set_seed), consensus_rule=settings.consensus_rule, contributing_pickers=settings.picker_names)
+    decoy_set = ParticleSet(particles=_with_half_sets(decoy, settings.seed), consensus_rule='union', contributing_pickers=sorted(decoy_pickers))
+    assert_comparable(real_set, decoy_set)
+
+    atomic_write_json(stream.root / 'particle_set.json', real_set.model_dump(mode='json'))
+    atomic_write_json(stream.root / 'decoy_particle_set.json', decoy_set.model_dump(mode='json'))
+
+    vesicle_rows: list[dict] = []
+    for tomogram_id in done:
+        summary = stream.tomogram_dir(tomogram_id) / 'vesicle_summary.json'
+        if summary.is_file():
+            vesicle_rows.extend(json.loads(summary.read_text()))
+    if vesicle_rows:
+        atomic_write_json(stream.root / 'vesicle_summary.json', vesicle_rows)
+
+    write_sidecar(
+        stream.root,
+        stage='stream-finalise',
+        tool='stamp-stream',
+        tool_version=None,
+        parameters={
+            'n_tomograms': len(done),
+            'n_particles': len(real),
+            'n_decoys': len(decoy),
+            'consensus_rule': settings.consensus_rule,
+            'half_set_seed': settings.half_set_seed,
+            'seed': settings.seed,
+        },
+        inputs=tomogram_inputs,
+    )
+
+    # last, so a failure anywhere above leaves the stream open to retry
+    settings.finalised = True
+    atomic_write_json(stream.settings_path, settings.model_dump())
+    log.info(f'Wrote {len(real)} particles and {len(decoy)} decoys to {stream.root}')

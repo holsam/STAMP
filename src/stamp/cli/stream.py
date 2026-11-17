@@ -161,3 +161,12 @@ def append(
         pick_zstack_movie=pick_zstack_movie,
         pick_plot_3d=pick_plot_3d,
     )
+
+# Define finalise command
+@streamCli.command()
+def finalise(
+    output_dir: OutDirOption = Path('.'),
+) -> None:
+    '''Merge appended tomograms into one real and one decoy particle set with global half-sets, then mark stream finalised.'''
+    log_started('stream finalise')
+    streamfuncs.run_stream_finalise(stream_dir=resolve_output_dir(output_dir, 'stream'))

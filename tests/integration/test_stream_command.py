@@ -132,3 +132,74 @@ class TestStreamAppend:
         seg, raw = _write_pair(tmp_path / 'seg', tmp_path / 'raw', 't0')
         result = runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw, '--decoy-method', 'synthetic-noise'))
         assert isinstance(result.exception, StampError) and 'stamp decoy' in str(result.exception)
+
+
+# _rows: comparable (id, tomogram, position, orientation, prior, picker, half-set) rows from a particle set JSON, sorted by id
+def _rows(path: Path) -> list[list]:
+    keys = ['particle_id', 'tomogram_id', 'position', 'orientation', 'prior', 'source_picker', 'half_set']
+    return sorted([[particle[key] for key in keys] for particle in json.loads(path.read_text())['particles']], key=lambda row: row[0])
+
+# _dataset: three tomograms with a dataset-wide picks file, returning (picks, seg dir, raw dir)
+def _dataset(tmp_path: Path) -> tuple[Path, Path, Path]:
+    ids = ['t0', 't1', 't2']
+    seg_dir, raw_dir = tmp_path / 'seg', tmp_path / 'raw'
+    for tomogram_id in ids:
+        _write_pair(seg_dir, raw_dir, tomogram_id)
+    return _write_picks(tmp_path / 'picks.csv', ids), seg_dir, raw_dir
+
+# TestStreamFinalise: class checking that finalise merges the appended tomograms into the same sets as pick and decoy
+class TestStreamFinalise:
+    def test_finalised_sets_match_pick_and_decoy(self, tmp_path: Path) -> None:
+        '''Finalised sets equal the sets stamp pick and stamp decoy produce over the same inputs.'''
+        picks, seg_dir, raw_dir = _dataset(tmp_path)
+        pick_out, decoy_out = tmp_path / 'pick_out', tmp_path / 'decoy_out'
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'pick', str(picks), '--seg-dir', str(seg_dir), '--raw-dir', str(raw_dir), '--out-dir', str(pick_out), '--voxel-size-a', '10.0'])
+        assert result.exit_code == 0, result.output
+        pick_set = pick_out / 'stamp' / 'pick' / 'particle_set.json'
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'decoy', '--method', 'auto', '--real-particle-set', str(pick_set), '--seg-dir', str(seg_dir), '--raw-dir', str(raw_dir), '--out-dir', str(decoy_out), '--voxel-size-a', '10.0'])
+        assert result.exit_code == 0, result.output
+
+        for tomogram_id in ['t0', 't1', 't2']:
+            result = runner.invoke(stamp_app, _append_args(tmp_path, picks, seg_dir / f'{tomogram_id}.mrc', raw_dir / f'{tomogram_id}.mrc'))
+            assert result.exit_code == 0, result.output
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'finalise', '--out-dir', str(tmp_path)])
+        assert result.exit_code == 0, result.output
+
+        stream = tmp_path / 'stamp' / 'stream'
+        assert _rows(stream / 'particle_set.json') == _rows(pick_set)
+        assert _rows(stream / 'decoy_particle_set.json') == _rows(decoy_out / 'stamp' / 'decoy' / 'decoy_particle_set.json')
+
+    def test_whole_tomograms_stay_in_one_half(self, tmp_path: Path) -> None:
+        '''Every tomogram's particles share one half-set, and the halves are as even as whole tomograms allow.'''
+        picks, seg_dir, raw_dir = _dataset(tmp_path)
+        for tomogram_id in ['t0', 't1', 't2']:
+            assert runner.invoke(stamp_app, _append_args(tmp_path, picks, seg_dir / f'{tomogram_id}.mrc', raw_dir / f'{tomogram_id}.mrc')).exit_code == 0
+        assert runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'finalise', '--out-dir', str(tmp_path)]).exit_code == 0
+        rows = _rows(tmp_path / 'stamp' / 'stream' / 'particle_set.json')
+        halves_by_tomogram: dict[str, set[str]] = {}
+        for row in rows:
+            halves_by_tomogram.setdefault(row[1], set()).add(row[6])
+        assert all(len(halves) == 1 for halves in halves_by_tomogram.values())
+        counts = [sum(row[6] == half for row in rows) for half in ('A', 'B')]
+        assert abs(counts[0] - counts[1]) <= len(PARTICLES_XYZ)
+
+    def test_comparability_failure_raises_with_decoy_count(self, tmp_path: Path) -> None:
+        '''A decoy set under half the real size is refused with the count message.'''
+        picks = _write_picks(tmp_path / 'picks.csv', ['t0'])
+        seg, raw = _write_pair(tmp_path / 'seg', tmp_path / 'raw', 't0')
+        assert runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw)).exit_code == 0
+        decoy_path = _stream(tmp_path).tomogram_dir('t0') / 'decoy_particles.json'
+        payload = json.loads(decoy_path.read_text())
+        payload['particles'] = payload['particles'][:1]
+        decoy_path.write_text(json.dumps(payload))
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'finalise', '--out-dir', str(tmp_path)])
+        assert isinstance(result.exception, StampError) and 'less than half' in str(result.exception)
+        assert not _stream(tmp_path).settings_path.read_text().count('"finalised": true')
+
+    def test_append_after_finalise_is_rejected(self, tmp_path: Path) -> None:
+        '''Once finalised, a stream refuses further appends.'''
+        picks, seg_dir, raw_dir = _dataset(tmp_path)
+        assert runner.invoke(stamp_app, _append_args(tmp_path, picks, seg_dir / 't0.mrc', raw_dir / 't0.mrc')).exit_code == 0
+        assert runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'finalise', '--out-dir', str(tmp_path)]).exit_code == 0
+        result = runner.invoke(stamp_app, _append_args(tmp_path, picks, seg_dir / 't1.mrc', raw_dir / 't1.mrc'))
+        assert isinstance(result.exception, StampValidationError) and 'finalised' in str(result.exception)
