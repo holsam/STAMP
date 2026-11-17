@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.picking.consensus import build_particle_set, reconcile_picks
+from stamp.picking.importers import filter_beam_angle
 from stamp.utils.errors import StampValidationError
 from stamp.picking.geometry import (
     beam_angle_deviation_degrees,
@@ -301,3 +302,28 @@ class TestVesicle:
             half_set_seed=0,
         )
         assert particle_set.particles[0].vesicle_id == 'tomo000:v0002'
+
+# TestBeamAngleFilter: class checking that the beam angle filter acts on raw picks before ids are assigned
+class TestBeamAngleFilter:
+    def test_drops_picks_over_the_maximum(self):
+        picks = [
+            RawPick(tomogram_id='t', position=(0.0, 0.0, 0.0), source_picker='p', beam_angle_deviation_degrees=5.0),
+            RawPick(tomogram_id='t', position=(9.0, 0.0, 0.0), source_picker='p', beam_angle_deviation_degrees=40.0),
+        ]
+        assert [p.position for p in filter_beam_angle(picks, 20.0)] == [(0.0, 0.0, 0.0)]
+
+    def test_keeps_picks_without_a_recorded_deviation(self):
+        picks = [RawPick(tomogram_id='t', position=(0.0, 0.0, 0.0), source_picker='p')]
+        assert filter_beam_angle(picks, 20.0) == picks
+
+    def test_none_maximum_keeps_everything(self):
+        picks = [RawPick(tomogram_id='t', position=(0.0, 0.0, 0.0), source_picker='p', beam_angle_deviation_degrees=89.0)]
+        assert filter_beam_angle(picks, None) == picks
+
+    def test_ids_are_contiguous_after_filtering(self):
+        picks = [
+            RawPick(tomogram_id='t', position=(0.0, 0.0, 0.0), source_picker='p', prior=OrientationPrior.NORMAL, beam_angle_deviation_degrees=80.0),
+            RawPick(tomogram_id='t', position=(30.0, 0.0, 0.0), source_picker='p', prior=OrientationPrior.NORMAL, beam_angle_deviation_degrees=5.0),
+        ]
+        particle_set = build_particle_set(filter_beam_angle(picks, 20.0), 'union', ['p'], half_set_seed=0)
+        assert [p.particle_id for p in particle_set.particles] == ['t_p0000']

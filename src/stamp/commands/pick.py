@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.picking.consensus import build_particle_set, reconcile_picks_for_tomograms
-from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks, resolve_priors
+from stamp.picking.importers import filter_beam_angle, infer_orientations, map_tomogram_ids, read_picks, resolve_priors
 from stamp.picking.manifests import cache_tomogram_picks, load_cached_picks, load_tomogram_manifests, manifest_paths
 from stamp.picking.vesicles import resolve_vesicle_labels, write_vesicle_summary
 from stamp.schemas.manifest import TomogramManifest
@@ -125,23 +125,19 @@ def run_pick(
     if not all_reconciled:
         raise StampPipelineError('No particles survived reconciliation. With --consensus-rule intersection, every picks file must have a pick within --distance-threshold voxels of each particle.')
 
+    kept_reconciled = filter_beam_angle(all_reconciled, max_beam_angle_deviation)
+    if max_beam_angle_deviation is not None:
+        log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {len(all_reconciled) - len(kept_reconciled)} of {len(all_reconciled)} particles')
+        if not kept_reconciled:
+            raise StampPipelineError('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
+
     log.progress(f'Building particle set and determining beam angle distribution')
     particle_set = build_particle_set(
-        reconciled_picks=all_reconciled,
+        reconciled_picks=kept_reconciled,
         consensus_rule=consensus_rule,  # type: ignore[arg-type]
         contributing_pickers=names,
         half_set_seed=half_set_seed,
     )
-    if max_beam_angle_deviation is not None:
-        before = len(particle_set.particles)
-        particle_set.particles = [
-            p for p in particle_set.particles
-            if p.beam_angle_deviation_degrees is None or p.beam_angle_deviation_degrees <= max_beam_angle_deviation
-        ]
-        dropped = before - len(particle_set.particles)
-        log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {dropped} of {before} particles')
-        if not particle_set.particles:
-            raise StampPipelineError('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
     normal_particles = [particle for particle in particle_set.particles if particle.prior is OrientationPrior.NORMAL]
     if normal_particles:
         report_beam_angle_distribution(normal_particles)
