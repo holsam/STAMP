@@ -15,9 +15,21 @@ from stamp.refine.relion_export import write_half_readme, write_particle_star
 from stamp.schemas.particles import load_class_assignments, load_particle_set
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.log import log
-from stamp.utils.mrc import read_mrc, read_voxel_size_angstrom, require_voxel_size
+from stamp.utils.mrc import open_mrc, paths_by_stem, read_mrc, read_voxel_size_angstrom, require_voxel_size
 from stamp.utils.plotting.refine import plot_fsc
 from stamp.utils.provenance import write_sidecar
+
+# _tomogram_shapes: (nx, ny, nz) per tomogram id from the raw MRC headers, for tomograms that have a raw file in the directory
+def _tomogram_shapes(raw_tomogram_dir: Path, tomogram_ids: set[str]) -> dict[str, tuple[int, int, int]]:
+    paths = paths_by_stem(raw_tomogram_dir)
+    shapes: dict[str, tuple[int, int, int]] = {}
+    for tomogram_id in tomogram_ids:
+        path = paths.get(tomogram_id)
+        if path is None:
+            continue
+        with open_mrc(path, header_only=True) as mrc:
+            shapes[tomogram_id] = (int(mrc.header.nx), int(mrc.header.ny), int(mrc.header.nz))
+    return shapes
 
 # run_refine_prepare: write independent half-set inputs for an external RELION refinement
 def run_refine_prepare(
@@ -28,9 +40,12 @@ def run_refine_prepare(
     raw_tomogram_dir: Path,
     output_dir: Path,
     voxel_size_angstrom: float | None,
+    coordinate_system: str = 'centred',
 ) -> None:
     voxel_size_angstrom = require_voxel_size(voxel_size_angstrom, raw_tomogram_dir)
     particle_set = load_particle_set(particles)
+    # pixel coordinates don't need tomogram size
+    shape_by_tomogram = _tomogram_shapes(raw_tomogram_dir, {particle.tomogram_id for particle in particle_set.particles}) if coordinate_system == 'centred' else None
     assignments = load_class_assignments(class_assignments)
     poses = full_poses(assignments)
     angle_by_particle = {row.particle_id: row.inplane_angle_degrees for row in assignments if row.inplane_angle_degrees is not None and row.particle_id not in poses}    # a full pose already contains the in-plane angle
@@ -55,7 +70,7 @@ def run_refine_prepare(
             continue
         tree = refine_output_tree(output_dir, target)
         for half, members, reference in (('A', half_a, reference_a), ('B', half_b, reference_b)):
-            write_particle_star(members, tree[half] / 'particles.star', poses=poses, voxel_size_angstrom=voxel_size_angstrom)
+            write_particle_star(members, tree[half] / 'particles.star', shape_by_tomogram=shape_by_tomogram, voxel_size_angstrom=voxel_size_angstrom, coordinate_system=coordinate_system, poses=poses)
             shutil.copyfile(reference, tree[half] / 'reference.mrc')
             write_half_readme(tree[half] / 'README.md', half, len(members), voxel_size_angstrom)
         (tree['combined'] / 'prepare.json').write_text(json.dumps({'class_id': target, 'voxel_size_angstrom': voxel_size_angstrom, 'n_half_a': len(half_a), 'n_half_b': len(half_b)}, indent=2))

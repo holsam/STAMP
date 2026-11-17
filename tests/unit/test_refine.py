@@ -193,7 +193,70 @@ class TestRelionPoses:
         from stamp.refine.relion_export import write_particle_star
         from stamp.schemas.particles import HalfSet, Particle
         make = lambda i: Particle(prior=OrientationPrior.NORMAL, particle_id=f'p{i}', tomogram_id='t', position=(1.0, 2.0, 3.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='x', half_set=HalfSet.A)
-        write_particle_star([make(0), make(1)], tmp_path / 'p.star', poses={'p0': (np.eye(3), np.zeros(3))}, voxel_size_angstrom=4.0)
+        write_particle_star([make(0), make(1)], tmp_path / 'p.star', shape_by_tomogram={'t': (20, 20, 20)}, voxel_size_angstrom=4.0, poses={'p0': (np.eye(3), np.zeros(3))})
         table = starfile.read(tmp_path / 'p.star').set_index('rlnTomoParticleName')
         assert 'rlnOriginXAngst' in table.columns and table.loc['p0', 'rlnOriginXAngst'] == 0.0
         assert table.loc['p1', 'rlnAngleTiltPrior'] == 0.0     # no pose for p1, so the old normal-derived prior path
+
+# TestCentredCoordinates: class checking RELION-5 centred Angstrom coordinates and their writer columns
+class TestPriorAngles:
+    def test_prior_tilt_psi_reproduce_the_membrane_normal_in_relion_convention(self) -> None:
+        from scipy.spatial.transform import Rotation
+        from stamp.refine.relion_export import normal_to_tilt_psi
+        rng_orientations = [Rotation.random(random_state=seed).as_matrix() for seed in range(50)]
+        for matrix in rng_orientations:
+            quaternion = Rotation.from_matrix(matrix).as_quat()
+            tilt, psi = normal_to_tilt_psi((quaternion[3], quaternion[0], quaternion[1], quaternion[2]))
+            # RELION matrix for rot = 0: the particle z axis (the normal) must map to the STAMP normal
+            relion = _relion_matrix(0.0, tilt, psi)   # helper takes degrees
+            assert np.allclose(relion @ np.array([0.0, 0.0, 1.0]), matrix @ np.array([0.0, 0.0, 1.0]), atol=1e-6)
+
+# TestCentredCoordinates: class checking RELION-5 centred Angstrom coordinates and their writer columns
+class TestCentredCoordinates:
+    def test_known_positions_match_hand_computed_angstrom(self) -> None:
+        from stamp.refine.relion_export import centred_coordinates_angstrom
+        assert centred_coordinates_angstrom((50.0, 40.0, 30.0), (100, 80, 60), 5.0) == (0.0, 0.0, 0.0)
+        assert centred_coordinates_angstrom((60.0, 40.0, 30.0), (100, 80, 60), 5.0) == (50.0, 0.0, 0.0)
+        assert centred_coordinates_angstrom((0.0, 0.0, 0.0), (100, 80, 60), 5.0) == (-250.0, -200.0, -150.0)
+
+    def test_odd_size_centre_is_integer_division(self) -> None:
+        from stamp.refine.relion_export import centred_coordinates_angstrom
+        # RELION centre of an odd size 5 is int(5/2) = 2, so position 0 is -2 voxels, not -2.5
+        assert centred_coordinates_angstrom((0.0, 2.0, 4.0), (5, 5, 5), 10.0) == (-20.0, 0.0, 20.0)
+
+    def test_binning_invariant(self) -> None:
+        from stamp.refine.relion_export import centred_coordinates_angstrom
+        full = centred_coordinates_angstrom((60.0, 40.0, 30.0), (100, 80, 60), 5.0)
+        binned = centred_coordinates_angstrom((30.0, 20.0, 15.0), (50, 40, 30), 10.0)     # 2x binned position and shape, doubled voxel size
+        assert all(abs(a - b) < 1e-9 for a, b in zip(full, binned))
+
+    def test_star_has_centred_columns_and_no_pixel_columns_in_both_row_shapes(self, tmp_path: Path) -> None:
+        import numpy as np, starfile
+        from stamp.refine.relion_export import write_particle_star
+        from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
+        make = lambda i: Particle(prior=OrientationPrior.NORMAL, particle_id=f'p{i}', tomogram_id='t', position=(50.0, 40.0, 30.0 + i), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='x', half_set=HalfSet.A)
+        write_particle_star([make(0), make(1)], tmp_path / 'p.star', shape_by_tomogram={'t': (100, 80, 60)}, voxel_size_angstrom=5.0, poses={'p0': (np.eye(3), np.zeros(3))})
+        table = starfile.read(tmp_path / 'p.star').set_index('rlnTomoParticleName')
+        assert not [c for c in table.columns if c.startswith('rlnCoordinate')]
+        for column in ('rlnCenteredCoordinateXAngst', 'rlnCenteredCoordinateYAngst', 'rlnCenteredCoordinateZAngst'):
+            assert column in table.columns
+        assert table.loc['p0', 'rlnCenteredCoordinateZAngst'] == 0.0 and table.loc['p1', 'rlnCenteredCoordinateZAngst'] == 5.0
+        assert 'rlnAngleTiltPrior' in table.columns and table.loc['p1', 'rlnAngleTiltPrior'] == 0.0
+
+    def test_pixel_mode_writes_voxel_positions_without_tomogram_sizes(self, tmp_path: Path) -> None:
+        import starfile
+        from stamp.refine.relion_export import write_particle_star
+        from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
+        particle = Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='lost', position=(1.0, 2.0, 3.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='x', half_set=HalfSet.A)
+        write_particle_star([particle], tmp_path / 'p.star', voxel_size_angstrom=5.0, coordinate_system='pixel')
+        table = starfile.read(tmp_path / 'p.star')
+        assert list(table[['rlnCoordinateX', 'rlnCoordinateY', 'rlnCoordinateZ']].iloc[0]) == [1.0, 2.0, 3.0]
+        assert not [c for c in table.columns if c.startswith('rlnCenteredCoordinate')]
+
+    def test_missing_tomogram_shape_raises_naming_it(self, tmp_path: Path) -> None:
+        from stamp.refine.relion_export import write_particle_star
+        from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
+        from stamp.utils.errors import StampValidationError
+        particle = Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='lost', position=(1.0, 2.0, 3.0), source_picker='x', half_set=HalfSet.A)
+        with pytest.raises(StampValidationError, match='lost'):
+            write_particle_star([particle], tmp_path / 'p.star', shape_by_tomogram={'t': (10, 10, 10)}, voxel_size_angstrom=5.0)

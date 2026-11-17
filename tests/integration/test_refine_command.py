@@ -60,9 +60,13 @@ def _fixture(tmp_path, mixed=False):
         ]
     ))
     (tmp_path / 'tomo').mkdir()
+    # raw tomogram header gives the size for centred coordinates: nx=40, ny=30, nz=20
+    with mrcfile.new(tmp_path / 'tomo' / 't0.mrc', overwrite=True) as mrc:
+        mrc.set_data(np.zeros((20, 30, 40), dtype=np.float32))
+        mrc.voxel_size = 3.0
     return stage_d
 
-def _prepare(tmp_path, stage_d):
+def _prepare(tmp_path, stage_d, *extra):
     return runner.invoke(stamp_app, [
         '-d', str(tmp_path),
         'refine', 'prepare',
@@ -73,6 +77,7 @@ def _prepare(tmp_path, stage_d):
         '--raw-dir', str(tmp_path / 'tomo'),
         '--out-dir', str(tmp_path),
         '--voxel-size-a', '3.0',
+        *extra,
     ])
 
 def _assess(tmp_path, half_a, half_b, *extra):
@@ -107,6 +112,23 @@ class TestRefinePrepare:
         rows_a = starfile.read(combined / 'halfA' / 'particles.star')
         rows_b = starfile.read(combined / 'halfB' / 'particles.star')
         assert list(rows_a['rlnTomoParticleName']) == ['p0'] and list(rows_b['rlnTomoParticleName']) == ['p1']
+
+    def test_prepare_pixel_coordinates_flag_writes_voxel_positions(self, tmp_path):
+        stage_d = _fixture(tmp_path)
+        assert _prepare(tmp_path, stage_d, '--coordinate-system', 'pixel').exit_code == 0
+        rows = starfile.read(tmp_path / 'stamp' / 'refine' / 'c00' / 'halfA' / 'particles.star')
+        assert not [c for c in rows.columns if c.startswith('rlnCenteredCoordinate')]
+        assert list(rows[['rlnCoordinateX', 'rlnCoordinateY', 'rlnCoordinateZ']].iloc[0]) == [8.0, 8.0, 8.0]
+
+    def test_prepare_writes_centred_angstrom_coordinates_from_raw_header(self, tmp_path):
+        stage_d = _fixture(tmp_path)
+        assert _prepare(tmp_path, stage_d).exit_code == 0
+        rows = starfile.read(tmp_path / 'stamp' / 'refine' / 'c00' / 'halfA' / 'particles.star')
+        assert not [c for c in rows.columns if c.startswith('rlnCoordinate')]
+        # position (8, 8, 8) in a 40 x 30 x 20 tomogram at 3 A per voxel
+        expected = [(8.0 - 20.0) * 3.0, (8.0 - 15.0) * 3.0, (8.0 - 10.0) * 3.0]
+        actual = [rows.iloc[0][c] for c in ('rlnCenteredCoordinateXAngst', 'rlnCenteredCoordinateYAngst', 'rlnCenteredCoordinateZAngst')]
+        assert np.allclose(actual, expected)
 
     def test_prepare_rejects_half_set_mixed_class(self, tmp_path):
         stage_d = _fixture(tmp_path, mixed=True)

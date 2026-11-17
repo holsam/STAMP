@@ -5,7 +5,7 @@ STAMP: refinement CLI
 # Import external dependencies
 import typer
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 # Import refine command functions/variables
 from stamp.utils.options.cli import OutDirOption, PlotFormatOption, PlotsOption, RawDirOption, VoxelSizeOption
@@ -38,6 +38,10 @@ def prepare(
     raw_tomogram_dir: RawDirOption,
     output_dir: OutDirOption = Path('.'),
     voxel_size_angstrom: VoxelSizeOption = None,
+    coordinate_system: Annotated[
+        Literal['centred', 'pixel'],
+        typer.Option('--coordinate-system', help='Particle position columns: centred (RELION 5 rlnCenteredCoordinate*Angst) or pixel (rlnCoordinate*).', rich_help_panel = 'Coordinates'),
+    ] = 'centred',
 ) -> None:
     '''Write RELION half-set inputs for an external refinement.'''
     log_started('refinement preparation')
@@ -49,6 +53,7 @@ def prepare(
         raw_tomogram_dir=raw_tomogram_dir,
         output_dir=resolve_output_dir(output_dir, 'refine'),
         voxel_size_angstrom=voxel_size_angstrom,
+        coordinate_system=coordinate_system,
     )
 
 # assess: FSC of two externally refined half-maps for one class
