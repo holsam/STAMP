@@ -7,6 +7,7 @@ import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from scipy.spatial import cKDTree
+import zlib
 
 # Import internal STAMP objects
 from stamp.utils.halfset import assign_half_sets
@@ -82,6 +83,10 @@ def _load_cached_surface(surfaces_dir: Path | None, tomogram_id: str) -> tuple[t
     except (OSError, ValueError, KeyError):
         return None
 
+# tomogram_rng: generator seeded from the run seed and the tomogram id, so one tomogram's decoys do not depend on which others were processed before it
+def tomogram_rng(seed: int, tomogram_id: str) -> np.random.Generator:
+    return np.random.default_rng([seed, zlib.crc32(tomogram_id.encode())])
+
 # generate_shifted_decoys: displace each real pick by a large random vector away from surface and picks
 def generate_shifted_decoys(
     real_particle_set: ParticleSet,
@@ -98,7 +103,6 @@ def generate_shifted_decoys(
     output_dir: Path | None = None,
 ) -> ParticleSet | None:
     log.progress('Generating shifted decoys')
-    rng = np.random.default_rng(seed)
     surfaces_dir = output_dir / 'raw' / METHOD_SHIFTED / 'surfaces' if output_dir is not None else None
     shape_by_tomogram = {}
     surface_by_tomogram: dict[str, tuple[cKDTree, np.ndarray]] = {}
@@ -148,6 +152,7 @@ def generate_shifted_decoys(
     cache_dir = output_dir / 'raw' / METHOD_SHIFTED if output_dir is not None else None
     tomogram_ids: list[str] = []
     for tomogram_id, positions in real_by_tomogram.items():
+        rng = tomogram_rng(seed, tomogram_id)
         shape = shape_by_tomogram.get(tomogram_id)
         surface = surface_by_tomogram.get(tomogram_id)
         if shape is None or surface is None:
@@ -213,7 +218,6 @@ def generate_random_volume_decoys(
     if not supported:
         raise StampValidationError('random-volume decoys have no membrane normal to orient by, use the shifted method for normal-prior particles')
     log.progress('Generating random-volume decoys')
-    rng = np.random.default_rng(seed)
     raw_path_by_tomogram = {manifest.tomogram_id: manifest.raw_tomogram_path for manifest in manifests}
     positions_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
     for particle in real_particle_set.particles:
@@ -227,6 +231,7 @@ def generate_random_volume_decoys(
     for tomogram_id, positions in positions_by_tomogram.items():
         if tomogram_id not in raw_path_by_tomogram:
             continue
+        rng = tomogram_rng(seed, tomogram_id)
         with open_mrc(raw_path_by_tomogram[tomogram_id], header_only=True) as mrc:
             extent_xyz = np.array([int(mrc.header.nx), int(mrc.header.ny), int(mrc.header.nz)]) - 1
         low, high = np.full(3, border), extent_xyz - border

@@ -348,3 +348,29 @@ class TestAutoMethod:
         assert len(set(ids)) == len(ids) == len(shifted.particles) + len(volume.particles)
         assert {p.source_picker for p in merged.particles} == {'decoy-shifted', 'decoy-random-volume'}
         assert {p.prior for p in merged.particles} == {OrientationPrior.NORMAL, OrientationPrior.NONE}
+
+
+# TestPerTomogramSeeding: class checking that one tomogram's decoy placement does not depend on the other tomograms in the run
+class TestPerTomogramSeeding:
+    def _positions(self, decoys: ParticleSet | None, tomogram_id: str) -> list[tuple[float, float, float]]:
+        assert decoys is not None
+        return [p.position for p in decoys.particles if p.tomogram_id == tomogram_id]
+
+    def test_shifted_placement_independent_of_other_tomograms(self, tmp_path: Path) -> None:
+        manifest_a = _write_vesicle_pair(tmp_path, 'tomoA')
+        manifest_b = _write_vesicle_pair(tmp_path, 'tomoB')
+        config = DecoyGeometry(voxel_size_angstrom=10.0)
+        kwargs = dict(config=config, min_shift_angstrom=100.0, max_shift_angstrom=200.0, min_distance_from_surface_angstrom=50.0, min_pick_distance=60.0, seed=5)
+        alone = generate_shifted_decoys(real_particle_set=_real_set('tomoB'), manifests=[manifest_b], **kwargs)
+        both = generate_shifted_decoys(real_particle_set=_real_set('tomoA').model_copy(update={'particles': _real_set('tomoA').particles + _real_set('tomoB').particles}), manifests=[manifest_a, manifest_b], **kwargs)
+        assert self._positions(alone, 'tomoB') and self._positions(alone, 'tomoB') == self._positions(both, 'tomoB')
+
+    def test_random_volume_placement_independent_of_other_tomograms(self, tmp_path: Path) -> None:
+        manifest_a = _write_vesicle_pair(tmp_path, 'tomoA')
+        manifest_b = _write_vesicle_pair(tmp_path, 'tomoB')
+        config = DecoyGeometry(voxel_size_angstrom=10.0)
+        real_b = _real_set_for(OrientationPrior.AXIS).model_copy(update={'particles': [p.model_copy(update={'tomogram_id': 'tomoB'}) for p in _real_set_for(OrientationPrior.AXIS).particles]})
+        real_a = _real_set_for(OrientationPrior.AXIS).model_copy(update={'particles': [p.model_copy(update={'tomogram_id': 'tomoA'}) for p in _real_set_for(OrientationPrior.AXIS).particles]})
+        alone = generate_random_volume_decoys(real_b, [manifest_b], config, 60.0, 100.0, seed=5)
+        both = generate_random_volume_decoys(real_a.model_copy(update={'particles': real_a.particles + real_b.particles}), [manifest_a, manifest_b], config, 60.0, 100.0, seed=5)
+        assert self._positions(alone, 'tomoB') and self._positions(alone, 'tomoB') == self._positions(both, 'tomoB')
