@@ -17,6 +17,7 @@ from stamp.schemas.particles import (
     OrientationPrior,
     Particle,
     ParticleSet,
+    particle_ids,
 )
 from stamp.schemas.provenance import ProvenanceSidecar
 from stamp.classify.subvolumes import Subvolumes
@@ -224,3 +225,18 @@ def test_particle_set_round_trips_prior() -> None:
     loaded = ParticleSet.model_validate(legacy)
     assert loaded.particles[0].prior is OrientationPrior.NORMAL
     assert ParticleSet.model_validate(loaded.model_dump(mode='json')) == loaded
+
+# test_particle_ids_count_within_each_tomogram: ids restart at 0000 per tomogram, in input order
+def test_particle_ids_count_within_each_tomogram() -> None:
+    assert particle_ids(['t1', 't1', 't2', 't1'], 'p') == ['t1_p0000', 't1_p0001', 't2_p0000', 't1_p0002']
+
+# test_particle_ids_stable_when_other_tomograms_added: a tomogram's ids do not change when another tomogram is added
+def test_particle_ids_stable_when_other_tomograms_added() -> None:
+    alone = particle_ids(['t2', 't2'], 'decoy')
+    with_other = particle_ids(['t1', 't2', 't1', 't2'], 'decoy')
+    assert [i for i, t in zip(with_other, ['t1', 't2', 't1', 't2']) if t == 't2'] == alone
+
+# test_particle_ids_unique_across_tomograms: no id collides, even when counters restart per tomogram
+def test_particle_ids_unique_across_tomograms() -> None:
+    ids = particle_ids(['t1'] * 3 + ['t2'] * 3, 'p')
+    assert len(set(ids)) == len(ids)

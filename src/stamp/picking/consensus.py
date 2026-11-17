@@ -10,7 +10,7 @@ from typing import Literal
 
 # Import internal STAMP objects
 from stamp.utils.halfset import assign_half_sets
-from stamp.schemas.particles import Particle, ParticleSet
+from stamp.schemas.particles import Particle, ParticleSet, particle_ids
 from stamp.schemas.picks import RawPick
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel_ordered
@@ -132,11 +132,11 @@ def build_particle_set(
     contributing_pickers: list[str],
     half_set_seed: int,
 ) -> ParticleSet:
-    particle_ids = [f'p{index:06d}' for index in range(len(reconciled_picks))]
-    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, reconciled_picks)}
+    ids = particle_ids([pick.tomogram_id for pick in reconciled_picks], 'p')
+    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(ids, reconciled_picks)}
     if len(set(group_of.values())) < 2:
         log.warning('One tomogram only; half-sets are not independent (all particles in half A)')
-    half_set_by_id = assign_half_sets(particle_ids, seed=half_set_seed, group_of=group_of)
+    half_set_by_id = assign_half_sets(ids, seed=half_set_seed, group_of=group_of)
     particles = [
         Particle(
             particle_id=particle_id,
@@ -149,7 +149,7 @@ def build_particle_set(
             half_set=half_set_by_id[particle_id],
             beam_angle_deviation_degrees=pick.beam_angle_deviation_degrees,
             vesicle_id=pick.vesicle_id,
-        ) for particle_id, pick in zip(particle_ids, reconciled_picks)
+        ) for particle_id, pick in zip(ids, reconciled_picks)
     ]
     return ParticleSet(
         particles=particles,

@@ -13,7 +13,7 @@ from stamp.utils.halfset import assign_half_sets
 from stamp.picking.geometry import extract_surface
 from stamp.picking.manifests import cache_tomogram_picks, load_cached_picks
 from stamp.schemas.manifest import TomogramManifest
-from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet
+from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet, particle_ids
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.errors import StampValidationError
@@ -355,11 +355,11 @@ def generate_synthetic_noise_decoys(
 
 # _finalise: assign decoy particle IDs and half-sets, returning a decoy ParticleSet or None if no decoys were generated
 def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet | None:
-    particle_ids = [f'decoy-{index:06d}' for index in range(len(raw_picks))]
-    if not particle_ids:
+    ids = particle_ids([pick.tomogram_id for pick in raw_picks], 'decoy')
+    if not ids:
         return None
-    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, raw_picks)}
-    half_set_by_id = assign_half_sets(particle_ids, seed=seed, group_of=group_of)
+    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(ids, raw_picks)}
+    half_set_by_id = assign_half_sets(ids, seed=seed, group_of=group_of)
     particles = [
         Particle(
             particle_id=particle_id,
@@ -371,7 +371,7 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet |
             confidence=pick.confidence,
             half_set=half_set_by_id[particle_id],
         )
-        for particle_id, pick in zip(particle_ids, raw_picks)
+        for particle_id, pick in zip(ids, raw_picks)
     ]
     return ParticleSet(
         particles=particles,
