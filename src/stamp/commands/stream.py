@@ -26,6 +26,7 @@ from stamp.utils.checkpoint import atomic_write_json
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.log import log
 from stamp.utils.mrc import open_mrc
+from stamp.utils.plotting.picks import plot_positions
 
 # _particles_from_picks: real particles for one tomogram
 def _particles_from_picks(picks: list[RawPick]) -> list[Particle]:
@@ -118,6 +119,11 @@ def run_stream_append(
     vesicle_labels_mrc: Path | None,
     requested: StreamSettings,
     n_workers: int = 1,
+    make_plots: bool = False,
+    plot_format: str = 'tiff',
+    pick_plot_style: str = 'segmented',
+    pick_zstack_movie: bool = True,
+    pick_plot_3d: bool = False,
 ) -> None:
     if requested.decoy_method == METHOD_SYNTHETIC_NOISE:
         raise StampPipelineError('stream append does not support --decoy-method synthetic-noise (it makes its own volumes, not tomogram decoys), use `stamp decoy --method synthetic-noise` instead')
@@ -165,6 +171,15 @@ def run_stream_append(
     tomogram_dir.mkdir(parents=True, exist_ok=True)
     labels = resolve_vesicle_labels(vesicle_labels_mrc, [manifest])
     write_vesicle_summary(picks, [manifest], labels, tomogram_dir, n_workers=n_workers)
+
+    # plots are written while the tomogram is still on disk
+    if make_plots:
+        segmentation_map = {tomogram_id: segmentation_path} if segmentation_path is not None else {}
+        raw_map = {tomogram_id: tomogram_path}
+        if real_particles:
+            plot_positions(real_particles, tomogram_dir, pick_plot_style, plot_format, segmentation_map, raw_map, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)
+        if decoy_particles:
+            plot_positions(decoy_particles, tomogram_dir / 'decoy', pick_plot_style, plot_format, segmentation_map, raw_map, zstack_movie=pick_zstack_movie, plot_3d_view=pick_plot_3d, max_workers=n_workers)
 
     atomic_write_json(tomogram_dir / 'particles.json', _set_payload(real_particles, settings.consensus_rule, picker_names))
     atomic_write_json(tomogram_dir / 'decoy_particles.json', _set_payload(decoy_particles, 'union', decoy_set.contributing_pickers if decoy_set is not None else []))

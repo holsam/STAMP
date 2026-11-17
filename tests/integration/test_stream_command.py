@@ -113,6 +113,19 @@ class TestStreamAppend:
         assert stream.is_done('empty')
         assert json.loads((stream.tomogram_dir('empty') / 'particles.json').read_text())['particles'] == []
 
+    def test_plots_written_on_append_then_tomogram_deleted(self, tmp_path: Path) -> None:
+        '''With --plots, the tomogram's plots exist after append, and the tomogram can then be deleted.'''
+        picks = _write_picks(tmp_path / 'picks.csv', ['t0'])
+        seg, raw = _write_pair(tmp_path / 'seg', tmp_path / 'raw', 't0')
+        result = runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw, '--plots', '--no-pick-zstack-movie'))
+        assert result.exit_code == 0, result.output
+        tomogram_dir = _stream(tmp_path).tomogram_dir('t0')
+        assert any((tomogram_dir / 'plots').glob('*'))
+        assert any((tomogram_dir / 'decoy' / 'plots').glob('*'))
+        seg.unlink()
+        raw.unlink()
+        assert _stream(tmp_path).is_done('t0')
+
     def test_synthetic_noise_is_rejected_with_pointer(self, tmp_path: Path) -> None:
         '''--decoy-method synthetic-noise is refused, pointing at stamp decoy.'''
         picks = _write_picks(tmp_path / 'picks.csv', ['t0'])

@@ -13,7 +13,7 @@ from stamp.schemas.particles import OrientationPrior
 from stamp.stream.state import StreamSettings
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
-from stamp.utils.options.cli import NProcessesOption, OutDirOption
+from stamp.utils.options.cli import NProcessesOption, OutDirOption, PickPlot3dOption, PickPlotStyleOption, PickZstackMovieOption, PlotFormatOption, PlotsOption
 
 # Initialise Typer app
 streamCli = typer.Typer(
@@ -110,6 +110,11 @@ def append(
         typer.Option('--decoy-seed', help='Seed for decoy placement.', rich_help_panel = 'Decoy'),
     ] = 0,
     n_workers: NProcessesOption = 1,
+    make_plots: PlotsOption = False,
+    pick_plot_style: PickPlotStyleOption = 'segmented',
+    plot_format: PlotFormatOption = 'tiff',
+    pick_zstack_movie: PickZstackMovieOption = True,
+    pick_plot_3d: PickPlot3dOption = False,
 ) -> None:
     '''Pick, decoy and extract one tomogram into a stream directory at <out>/stamp/stream.'''
     log_started('stream append')
@@ -150,4 +155,9 @@ def append(
             half_set_seed=half_set_seed,
         ),
         n_workers=n_workers,
+        make_plots=make_plots,
+        plot_format=plot_format,
+        pick_plot_style=pick_plot_style,
+        pick_zstack_movie=pick_zstack_movie,
+        pick_plot_3d=pick_plot_3d,
     )
