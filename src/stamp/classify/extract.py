@@ -12,7 +12,7 @@ from scipy.ndimage import map_coordinates
 from stamp.utils.rotation import quaternion_to_matrix
 from stamp.schemas.particles import OrientationPrior, Particle
 from stamp.classify.subvolumes import Subvolumes
-from stamp.utils.errors import StampValidationError
+from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.mrc import new_mrc, open_mrc, read_mrc
 from stamp.utils.log import log
 from stamp.utils.parallel import run_parallel
@@ -153,6 +153,7 @@ def extract_particle_set(
     *,
     cache_dir: Path,
     prior: OrientationPrior = OrientationPrior.NORMAL,
+    cache_only: bool = False,   # if true: don't read tomograms
 ) -> tuple[Subvolumes, list[Particle], list[Particle]]:
     by_tomogram: dict[str, list[Particle]] = {}
     for particle in particles:
@@ -171,17 +172,20 @@ def extract_particle_set(
     subtract_jobs: list[_SubtractTomogramJob] = []
     jobs: list[_ExtractTomogramJob] = []
     for tomogram_id, group in by_tomogram.items():
-        path = tomogram_paths.get(tomogram_id)
-        if path is None:
-            log.warning(f'{tomogram_id}: no matching raw tomogram path, skipping {len(group)} particle(s)')
-            skipped.extend(group)
-            continue
+        # a valid marker is reused before the tomogram is looked up, so its raw file need not be on disk
         resumed = _read_marker(cache_dir, tomogram_id, group, box_voxels)
         if resumed is not None:
             result_by_tomogram[tomogram_id] = (resumed[0], resumed[1])
             if resumed[2]:
                 subtracted_ids.add(tomogram_id)
             n_resumed += 1
+            continue
+        if cache_only:
+            raise StampPipelineError(f'{tomogram_id}: no extraction cache for these particles at box {box_voxels} and cache-only extraction cannot read a tomogram')
+        path = tomogram_paths.get(tomogram_id)
+        if path is None:
+            log.warning(f'{tomogram_id}: no matching raw tomogram path, skipping {len(group)} particle(s)')
+            skipped.extend(group)
             continue
         segmentation_path = segmentation_paths.get(tomogram_id)
         if segmentation_path is not None:

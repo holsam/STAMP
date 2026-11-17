@@ -1007,3 +1007,37 @@ class TestWedge:
         wedge = box_wedge(11, None, 60.0, 90.0)
         once = apply_wedge(rng.normal(size=(11, 11, 11)), wedge)
         assert np.allclose(apply_wedge(once, wedge), once, atol=1e-5)
+
+# TestCacheOnlyExtraction: class checking that cache-only extraction reuses markers and doesn't read tomograms
+class TestCacheOnlyExtraction:
+    def _setup(self, tmp_path: Path):
+        tomogram = np.random.default_rng(1).normal(size=(40, 40, 40)).astype(np.float32)
+        path = tmp_path / 't.mrc'
+        with mrcfile.new(path, overwrite=True) as mrc:
+            mrc.set_data(tomogram)
+            mrc.voxel_size = 1.0
+        particle = Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        return path, particle
+
+    def test_cache_only_returns_cached_subvolumes_after_tomogram_deleted(self, tmp_path: Path) -> None:
+        path, particle = self._setup(tmp_path)
+        cache = tmp_path / 'cache'
+        full, kept_full, _ = extract_particle_set([particle], {'t': str(path)}, 11, cache_dir=cache)
+        path.unlink()
+        cached, kept_cached, skipped_cached = extract_particle_set([particle], {}, 11, cache_dir=cache, cache_only=True)
+        assert [p.particle_id for p in kept_cached] == [p.particle_id for p in kept_full] and skipped_cached == []
+        assert np.array_equal(cached[0], full[0])
+
+    def test_missing_marker_raises_in_cache_only(self, tmp_path: Path) -> None:
+        from stamp.utils.errors import StampPipelineError
+        _, particle = self._setup(tmp_path)
+        with pytest.raises(StampPipelineError, match='t'):
+            extract_particle_set([particle], {}, 11, cache_dir=tmp_path / 'empty', cache_only=True)
+
+    def test_stale_marker_raises_in_cache_only(self, tmp_path: Path) -> None:
+        from stamp.utils.errors import StampPipelineError
+        path, particle = self._setup(tmp_path)
+        cache = tmp_path / 'cache'
+        extract_particle_set([particle], {'t': str(path)}, 11, cache_dir=cache)
+        with pytest.raises(StampPipelineError):
+            extract_particle_set([particle], {}, 13, cache_dir=cache, cache_only=True)
