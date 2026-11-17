@@ -118,6 +118,11 @@ def infer_orientations(
         log.warning(f'{n_missing} of {len(result)} picks have no orientation (further than {max_surface_distance_angstrom} Å from any surface, or no usable segmentation); classify will skip them')
     return result
 
+# select_tomogram_picks: picks belonging to one tomogram, with ids rewritten onto tomogram id
+def select_tomogram_picks(picks: list[RawPick], manifest: TomogramManifest) -> list[RawPick]:
+    key = _id_key(manifest.tomogram_id)
+    return [pick.model_copy(update={'tomogram_id': manifest.tomogram_id}) for pick in picks if _id_key(pick.tomogram_id) == key]
+
 # filter_beam_angle: drop picks whose normal deviates from the beam-orthogonal plane by more than the maximum; picks with no deviation recorded are kept
 def filter_beam_angle(picks: list[RawPick], max_deviation_degrees: float | None) -> list[RawPick]:
     if max_deviation_degrees is None:
