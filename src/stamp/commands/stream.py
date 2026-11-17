@@ -4,10 +4,12 @@ STAMP: stream logic
 
 # Import external dependencies
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.classify.extract import extract_particle_set
+from stamp.commands.classify import build_group_settings, classify_particle_set
 from stamp.commands.pick import pick_tomogram
 from stamp.decoy.validate import assert_comparable
 from stamp.utils.halfset import assign_half_sets
@@ -23,10 +25,10 @@ from stamp.decoy.generate import (
 )
 from stamp.picking.vesicles import resolve_vesicle_labels, write_vesicle_summary
 from stamp.schemas.manifest import TomogramManifest
-from stamp.schemas.particles import HalfSet, OrientationPrior, Particle, ParticleSet, particle_ids
+from stamp.schemas.particles import HalfSet, OrientationPrior, Particle, ParticleSet, load_particle_set, particle_ids
 from stamp.schemas.picks import RawPick
 from stamp.stream.state import StreamDir, StreamSettings, load_or_init_settings
-from stamp.utils.checkpoint import atomic_write_json
+from stamp.utils.checkpoint import atomic_write_json, file_signature
 from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.log import log
 from stamp.utils.mrc import open_mrc
@@ -274,3 +276,48 @@ def run_stream_finalise(*, stream_dir: Path) -> None:
     settings.finalised = True
     atomic_write_json(stream.settings_path, settings.model_dump())
     log.info(f'Wrote {len(real)} particles and {len(decoy)} decoys to {stream.root}')
+
+# _membrane_subtracted: True when any appended tomogram's subvolumes of this kind were membrane-subtracted at append time (recorded in the markers)
+def _membrane_subtracted(stream: StreamDir, kind: str) -> bool:
+    return any(json.loads(marker.read_text()).get('subtracted') for marker in (stream.root / 'subvolumes' / kind).glob('*/*.json'))
+
+# run_stream_classify: classify finalised real and decoy sets from append-time subvolume cache, with no tomogram on disk
+def run_stream_classify(
+    *,
+    stream_dir: Path,
+    classify_options: dict,
+    make_plots: bool,
+    plot_format: str,
+    keep_raw: bool,
+) -> None:
+    stream = StreamDir(stream_dir)
+    if not stream.settings_path.is_file():
+        raise StampValidationError(f'{stream_dir} is not a stream directory (no stream.json)')
+    settings = StreamSettings.model_validate(json.loads(stream.settings_path.read_text()))
+    if not settings.finalised:
+        raise StampPipelineError(f'{stream_dir} is not finalised, run `stamp stream finalise` first')
+    group_settings = build_group_settings(settings.box_voxels, settings.voxel_size_angstrom, **classify_options)
+    box_angstrom = settings.box_voxels * settings.voxel_size_angstrom
+
+    for kind, filename in (('real', 'particle_set.json'), ('decoy', 'decoy_particle_set.json')):
+        path = stream_dir / filename
+        if not path.is_file():
+            raise StampValidationError(f'{path} is missing, run `stamp stream finalise` first')
+        particle_set = load_particle_set(path)
+        # everything that changes results, from the finalised sets and the stream settings
+        fingerprint = {
+            'particles': file_signature(path, content=True),
+            'stream': settings.model_dump(),
+            **{key: value for key, value in asdict(group_settings).items() if key != 'n_workers'},
+        }
+        classify_particle_set(
+            particle_set, group_settings, stream.root / 'classify' / kind,
+            tomogram_paths={}, segmentation_paths={},
+            fingerprint=fingerprint,
+            sidecar_inputs=[('particle_set', path)],
+            extra_parameters={'box_angstrom': box_angstrom},
+            keep_raw=keep_raw, make_plots=make_plots, plot_format=plot_format,
+            cache_only=True,
+            subvolume_cache_dir=lambda prior, kind=kind: stream.subvolume_dir(kind, prior.value),
+            membrane_subtracted=_membrane_subtracted(stream, kind),
+        )

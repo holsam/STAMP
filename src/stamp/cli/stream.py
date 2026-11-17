@@ -13,7 +13,13 @@ from stamp.schemas.particles import OrientationPrior
 from stamp.stream.state import StreamSettings
 from stamp.utils.io import resolve_output_dir
 from stamp.utils.log import log_started
-from stamp.utils.options.cli import NProcessesOption, OutDirOption, PickPlot3dOption, PickPlotStyleOption, PickZstackMovieOption, PlotFormatOption, PlotsOption
+from stamp.utils.options.cli import (
+    AzimuthalModesOption, BinFactorOption, FeatureNormalisationOption, InplaneAngularStepDegreesOption, KeepRawOption, MergeFractionOption,
+    MethodOption, MinClusterSizeOption, MinRadiusFractionOption, NAzimuthalSamplesOption, NClustersOption, NComponentsOption, NProcessesOption,
+    NRadialBinsOption, NRotationsOption, NullSigmasOption, OutDirOption, PickPlot3dOption, PickPlotStyleOption, PickZstackMovieOption,
+    PlotFormatOption, PlotsOption, PolishRoundsOption, RandomStateOption, RejectQuantileOption, ShiftRangeVoxelsOption,
+    StrictHalfsetIndependenceOption, TiltAxisDegreesOption, TiltMaxDegreesOption,
+)
 
 # Initialise Typer app
 streamCli = typer.Typer(
@@ -170,3 +176,51 @@ def finalise(
     '''Merge appended tomograms into one real and one decoy particle set with global half-sets, then mark stream finalised.'''
     log_started('stream finalise')
     streamfuncs.run_stream_finalise(stream_dir=resolve_output_dir(output_dir, 'stream'))
+
+# Define classify command
+@streamCli.command()
+def classify(
+    output_dir: OutDirOption = Path('.'),
+    n_radial_bins: NRadialBinsOption = 12,
+    method: MethodOption = 'leiden',
+    min_cluster_size: MinClusterSizeOption = 20,
+    n_clusters: NClustersOption = 5,
+    n_components: NComponentsOption = 20,
+    strict_halfset_independence: StrictHalfsetIndependenceOption = True,
+    random_state: RandomStateOption = 0,
+    inplane_angular_step_degrees: InplaneAngularStepDegreesOption = 10.0,
+    azimuthal_modes: AzimuthalModesOption = 4,
+    min_radius_fraction: MinRadiusFractionOption = 0.25,
+    n_azimuthal_samples: NAzimuthalSamplesOption = 64,
+    feature_normalisation: FeatureNormalisationOption = 'both',
+    tilt_max_degrees: TiltMaxDegreesOption = None,
+    tilt_axis_degrees: TiltAxisDegreesOption = 90.0,
+    bin_factor: BinFactorOption = 2,
+    n_rotations: NRotationsOption = 3000,
+    shift_range_voxels: ShiftRangeVoxelsOption = 3,
+    polish_rounds: PolishRoundsOption = 2,
+    null_sigmas: NullSigmasOption = 3.0,
+    reject_quantile: RejectQuantileOption = 0.95,
+    merge_fraction: MergeFractionOption = 1.0,
+    n_workers: NProcessesOption = 1,
+    make_plots: PlotsOption = True,
+    plot_format: PlotFormatOption = 'tiff',
+    keep_raw: KeepRawOption = False,
+) -> None:
+    '''Classify finalised real and decoy sets from stream cache.'''
+    log_started('stream classify')
+    streamfuncs.run_stream_classify(
+        stream_dir=resolve_output_dir(output_dir, 'stream'),
+        classify_options=dict(
+            n_radial_bins=n_radial_bins, method=method, min_cluster_size=min_cluster_size, n_clusters=n_clusters,
+            n_components=n_components, strict_halfset_independence=strict_halfset_independence, random_state=random_state,
+            inplane_angular_step_degrees=inplane_angular_step_degrees, azimuthal_modes=azimuthal_modes,
+            min_radius_fraction=min_radius_fraction, n_azimuthal_samples=n_azimuthal_samples,
+            feature_normalisation=feature_normalisation, tilt_max_degrees=tilt_max_degrees, tilt_axis_degrees=tilt_axis_degrees,
+            bin_factor=bin_factor, n_rotations=n_rotations, shift_range_voxels=shift_range_voxels, polish_rounds=polish_rounds,
+            null_sigmas=null_sigmas, reject_quantile=reject_quantile, merge_fraction=merge_fraction, n_workers=n_workers,
+        ),
+        make_plots=make_plots,
+        plot_format=plot_format,
+        keep_raw=keep_raw,
+    )

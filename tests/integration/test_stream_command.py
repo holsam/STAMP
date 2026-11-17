@@ -3,14 +3,14 @@ STAMP: integration tests for `stamp stream append`
 '''
 
 # Import external dependencies
-import json, mrcfile, numpy as np
+import json, mrcfile, numpy as np, zlib
 from pathlib import Path
 from typer.testing import CliRunner
 
 # Import internal STAMP objects
 from stamp.cli.cli import stamp_app
 from stamp.stream.state import StreamDir
-from stamp.utils.errors import StampError, StampValidationError
+from stamp.utils.errors import StampError, StampPipelineError, StampValidationError
 
 # Initialise runner
 runner = CliRunner()
@@ -25,8 +25,11 @@ def _write_pair(seg_dir: Path, raw_dir: Path, tomogram_id: str) -> tuple[Path, P
     grid = np.stack(np.meshgrid(*[np.arange(s) for s in shape], indexing='ij'), axis=-1)
     distance = np.linalg.norm(grid - centre, axis=-1)
     segmentation = ((distance > 16.0) & (distance < 20.0)).astype(np.float32)
-    tomogram = np.zeros(shape, dtype=np.float32)
-    tomogram[segmentation > 0] = -1.0
+    # seeded noise per tomogram, a density blob at each particle (array index is z, y, x), so subvolumes are not constant after membrane subtraction
+    tomogram = np.random.default_rng(zlib.crc32(tomogram_id.encode())).normal(0.0, 1.0, shape).astype(np.float32)
+    tomogram[segmentation > 0] -= 1.0
+    for x, y, z in PARTICLES_XYZ:
+        tomogram[z - 2:z + 3, y - 2:y + 3, x - 2:x + 3] -= 6.0
     seg_dir.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
     seg_path, raw_path = seg_dir / f'{tomogram_id}.mrc', raw_dir / f'{tomogram_id}.mrc'
@@ -203,3 +206,62 @@ class TestStreamFinalise:
         assert runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'finalise', '--out-dir', str(tmp_path)]).exit_code == 0
         result = runner.invoke(stamp_app, _append_args(tmp_path, picks, seg_dir / 't1.mrc', raw_dir / 't1.mrc'))
         assert isinstance(result.exception, StampValidationError) and 'finalised' in str(result.exception)
+
+# _partition: particle ids grouped by class, as a set of frozensets so cluster label permutation does not matter
+def _partition(path: Path) -> set[frozenset[str]]:
+    groups: dict[str, set[str]] = {}
+    for row in json.loads(path.read_text()):
+        groups.setdefault(row['cluster_id'], set()).add(row['particle_id'])
+    return {frozenset(members) for members in groups.values()}
+
+# _finalised_stream: append all three tomograms, deleting each tomogram and segmentation afterwards, then finalise
+def _finalised_stream(tmp_path: Path, *, delete: bool = True) -> None:
+    picks, seg_dir, raw_dir = _dataset(tmp_path)
+    # decoy geometry scaled to the 60-voxel test volume, so shifted decoys fit inside it and can be extracted
+    small_decoys = ['--min-shift-a', '30', '--max-shift-a', '60', '--min-distance-from-real-a', '20', '--min-distance-from-picks-a', '25']
+    for tomogram_id in ['t0', 't1', 't2']:
+        seg, raw = seg_dir / f'{tomogram_id}.mrc', raw_dir / f'{tomogram_id}.mrc'
+        assert runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw, *small_decoys)).exit_code == 0
+        if delete:
+            seg.unlink()
+            raw.unlink()
+    assert runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'finalise', '--out-dir', str(tmp_path)]).exit_code == 0
+
+# CLASSIFY_ARGS: deterministic, small-data classify settings shared by stamp classify and stream classify (stream classify takes its box from stream.json)
+CLASSIFY_ARGS = ['--method', 'kmeans', '--n-clusters', '2', '--min-cluster-size', '2', '--seed', '0', '--no-plots']
+
+# TestStreamClassify: class checking that stream classify runs from the cache and matches stamp classify
+class TestStreamClassify:
+    def test_unfinalised_stream_is_rejected(self, tmp_path: Path) -> None:
+        '''stream classify refuses a stream that has not been finalised.'''
+        picks = _write_picks(tmp_path / 'picks.csv', ['t0'])
+        seg, raw = _write_pair(tmp_path / 'seg', tmp_path / 'raw', 't0')
+        assert runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw)).exit_code == 0
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), *CLASSIFY_ARGS])
+        assert isinstance(result.exception, StampError) and 'finalise' in str(result.exception)
+
+    def test_classify_runs_with_all_tomograms_deleted(self, tmp_path: Path) -> None:
+        '''Tomograms and segmentations are deleted at append time; stream classify still succeeds from the cache.'''
+        _finalised_stream(tmp_path)
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), *CLASSIFY_ARGS])
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / 'stamp' / 'stream' / 'classify' / 'real' / 'class_assignments.json').is_file()
+        assert (tmp_path / 'stamp' / 'stream' / 'classify' / 'decoy' / 'class_assignments.json').is_file()
+
+    def test_missing_marker_raises(self, tmp_path: Path) -> None:
+        '''A missing subvolume marker is a hard error, since the tomogram is gone.'''
+        _finalised_stream(tmp_path)
+        (tmp_path / 'stamp' / 'stream' / 'subvolumes' / 'real' / 'normal' / 't1.json').unlink()
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), *CLASSIFY_ARGS])
+        assert isinstance(result.exception, StampPipelineError) and 't1' in str(result.exception)
+
+    def test_matches_stamp_classify_on_the_same_inputs(self, tmp_path: Path) -> None:
+        '''Stream classify partitions the real particles exactly as stamp classify does on the finalised set.'''
+        _finalised_stream(tmp_path, delete=False)
+        stream_dir = tmp_path / 'stamp' / 'stream'
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), *CLASSIFY_ARGS])
+        assert result.exit_code == 0, result.output
+        classify_out = tmp_path / 'classify_out'
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', '-p', str(stream_dir / 'particle_set.json'), '-r', str(tmp_path / 'raw'), '-s', str(tmp_path / 'seg'), '-o', str(classify_out), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
+        assert result.exit_code == 0, result.output
+        assert _partition(stream_dir / 'classify' / 'real' / 'class_assignments.json') == _partition(classify_out / 'stamp' / 'classify' / 'class_assignments.json')

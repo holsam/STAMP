@@ -89,6 +89,7 @@ def classify_particle_set(
     plot_format: str,
     cache_only: bool = False,   # stream: subvolumes come from the append-time cache, no tomogram is read
     subvolume_cache_dir: Callable[[OrientationPrior], Path] | None = None,   # stream: cache location per prior
+    membrane_subtracted: bool | None = None,   # stream: recorded at append time, not from segmentation_paths
 ) -> None:
     # set environment variable NUMBA_NUM_THREADS so fast_hdbscan doesn't try to use all CPUs on compute clusters
     os.environ['NUMBA_NUM_THREADS'] = str(settings.n_workers)
@@ -131,7 +132,7 @@ def classify_particle_set(
             'orientation_priors': {prior.value: len(group) for prior, group in groups.items()},
             'skipped_priors': {prior.value: reason for prior, reason in failures.items()},
             'is_decoy': is_decoy,
-            'membrane_subtracted': bool(segmentation_paths),
+            'membrane_subtracted': bool(segmentation_paths) if membrane_subtracted is None else membrane_subtracted,
             'n_extracted': sum(len(result.kept) for result in results.values()),
             'n_skipped': sum(len(result.skipped) for result in results.values()),
         },
