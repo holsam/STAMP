@@ -82,12 +82,6 @@ PickPlot3dOption = Annotated[
     typer.Option('--pick-plot-3d/--no-pick-plot-3d', help='Create a static 3D pick visualisation per tomogram.', rich_help_panel='Plotting')
 ]
 
-# ParticlesOption: path to particle set
-ParticlesOption = Annotated[
-    Path,
-    typer.Option('-p', '--particles', help='particle_set.json or decoy_particle_set.json', exists=True)
-]
-
 # BoxAngstromOption: extraction box size
 BoxAngstromOption = Annotated[
     float,

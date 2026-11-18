@@ -263,7 +263,7 @@ class TestStreamClassify:
         result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), *CLASSIFY_ARGS])
         assert result.exit_code == 0, result.output
         classify_out = tmp_path / 'classify_out'
-        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', '-p', str(stream_dir / 'particle_set.json'), '-r', str(tmp_path / 'raw'), '-s', str(tmp_path / 'seg'), '-o', str(classify_out), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(stream_dir / 'particle_set.json'), '-r', str(tmp_path / 'raw'), '-s', str(tmp_path / 'seg'), '-o', str(classify_out), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
         assert result.exit_code == 0, result.output
         assert _partition(stream_dir / 'classify' / 'real' / 'class_assignments.json') == _partition(classify_out / 'stamp' / 'classify' / 'class_assignments.json')
 
@@ -338,7 +338,7 @@ class TestStreamEquivalence:
         assert result.exit_code == 0, result.output
         decoy_set = normal / 'stamp' / 'decoy' / 'decoy_particle_set.json'
         for particles in (pick_set, decoy_set):
-            result = runner.invoke(stamp_app, ['-d', str(normal), 'classify', '-p', str(particles), '-r', str(raw_dir), '-s', str(seg_dir), '-o', str(normal), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
+            result = runner.invoke(stamp_app, ['-d', str(normal), 'classify', str(particles), '-r', str(raw_dir), '-s', str(seg_dir), '-o', str(normal), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
             assert result.exit_code == 0, result.output
 
         # stream path, deleting each tomogram after its append

@@ -5,9 +5,10 @@ STAMP: unsupervised classification CLI
 # Import external dependencies
 import typer
 from pathlib import Path
+from typing import Annotated
 
 # Import classify command functions/variables
-from stamp.utils.options.cli import AzimuthalModesOption, BinFactorOption, BoxAngstromOption, FeatureNormalisationOption, InplaneAngularStepDegreesOption, KeepRawOption, MergeFractionOption, MethodOption, MinClusterSizeOption, MinRadiusFractionOption, NAzimuthalSamplesOption, NClustersOption, NComponentsOption, NProcessesOption, NRadialBinsOption, NRotationsOption, NullSigmasOption, OutDirOption, ParticlesOption, PlotFormatOption, PlotsOption, PolishRoundsOption, RandomStateOption, RawDirOption, RejectQuantileOption, SegDirOption, ShiftRangeVoxelsOption, StrictHalfsetIndependenceOption, TiltAxisDegreesOption, TiltMaxDegreesOption, VoxelSizeOption
+from stamp.utils.options.cli import AzimuthalModesOption, BinFactorOption, BoxAngstromOption, FeatureNormalisationOption, InplaneAngularStepDegreesOption, KeepRawOption, MergeFractionOption, MethodOption, MinClusterSizeOption, MinRadiusFractionOption, NAzimuthalSamplesOption, NClustersOption, NComponentsOption, NProcessesOption, NRadialBinsOption, NRotationsOption, NullSigmasOption, OutDirOption, PlotFormatOption, PlotsOption, PolishRoundsOption, RandomStateOption, RawDirOption, RejectQuantileOption, SegDirOption, ShiftRangeVoxelsOption, StrictHalfsetIndependenceOption, TiltAxisDegreesOption, TiltMaxDegreesOption, VoxelSizeOption
 import stamp.commands.classify as classifyfuncs
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.schemas.particles import load_particle_set
@@ -24,7 +25,10 @@ classifyCli = typer.Typer(
 # Define classify command
 @classifyCli.command()
 def classify(
-    particles: ParticlesOption,
+    inputs: Annotated[
+        list[Path],
+        typer.Argument(exists=True, help='particle_set.json and/or decoy_particle_set.json, classified in turn.'),
+    ],
     raw_tomogram_dir: RawDirOption,
     voxel_size_angstrom: VoxelSizeOption = None,
     segmentation_dir: SegDirOption = None,
@@ -57,38 +61,40 @@ def classify(
     keep_raw: KeepRawOption = False,
 ) -> None:
     '''Cluster picked particles by structural similarity.'''
+    resolved = classifyfuncs.resolve_inputs(inputs)
     log_started('classification')
-    is_decoy = is_decoy_particle_set(load_particle_set(particles))
-    classifyfuncs.run_classify(
-        particles=particles,
-        raw_tomogram_dir=raw_tomogram_dir,
-        segmentation_dir=segmentation_dir,
-        output_dir=resolve_output_dir(output_dir, 'classify', 'decoy' if is_decoy else None),
-        voxel_size_angstrom=voxel_size_angstrom,
-        box_angstrom=box_angstrom,
-        n_radial_bins=n_radial_bins,
-        method=method,
-        min_cluster_size=min_cluster_size,
-        n_clusters=n_clusters,
-        n_components=n_components,
-        strict_halfset_independence=strict_halfset_independence,
-        random_state=random_state,
-        inplane_angular_step_degrees=inplane_angular_step_degrees,
-        n_workers=n_workers,
-        azimuthal_modes=azimuthal_modes,
-        min_radius_fraction=min_radius_fraction,
-        n_azimuthal_samples=n_azimuthal_samples,
-        feature_normalisation=feature_normalisation,
-        make_plots=make_plots,
-        plot_format=plot_format,
-        keep_raw=keep_raw,
-        tilt_max_degrees=tilt_max_degrees,
-        tilt_axis_degrees=tilt_axis_degrees,
-        bin_factor=bin_factor,
-        n_rotations=n_rotations,
-        shift_range_voxels=shift_range_voxels,
-        polish_rounds=polish_rounds,
-        null_sigmas=null_sigmas,
-        reject_quantile=reject_quantile,
-        merge_fraction=merge_fraction,
-    )
+    for particles in resolved.particle_sets:
+        is_decoy = is_decoy_particle_set(load_particle_set(particles))
+        classifyfuncs.run_classify(
+            particles=particles,
+            raw_tomogram_dir=raw_tomogram_dir,
+            segmentation_dir=segmentation_dir,
+            output_dir=resolve_output_dir(output_dir, 'classify', 'decoy' if is_decoy else None),
+            voxel_size_angstrom=voxel_size_angstrom,
+            box_angstrom=box_angstrom,
+            n_radial_bins=n_radial_bins,
+            method=method,
+            min_cluster_size=min_cluster_size,
+            n_clusters=n_clusters,
+            n_components=n_components,
+            strict_halfset_independence=strict_halfset_independence,
+            random_state=random_state,
+            inplane_angular_step_degrees=inplane_angular_step_degrees,
+            n_workers=n_workers,
+            azimuthal_modes=azimuthal_modes,
+            min_radius_fraction=min_radius_fraction,
+            n_azimuthal_samples=n_azimuthal_samples,
+            feature_normalisation=feature_normalisation,
+            make_plots=make_plots,
+            plot_format=plot_format,
+            keep_raw=keep_raw,
+            tilt_max_degrees=tilt_max_degrees,
+            tilt_axis_degrees=tilt_axis_degrees,
+            bin_factor=bin_factor,
+            n_rotations=n_rotations,
+            shift_range_voxels=shift_range_voxels,
+            polish_rounds=polish_rounds,
+            null_sigmas=null_sigmas,
+            reject_quantile=reject_quantile,
+            merge_fraction=merge_fraction,
+        )

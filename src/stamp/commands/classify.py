@@ -18,7 +18,7 @@ from stamp.classify.features import build_feature_matrix
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.picking.manifests import match_by_stem
 from stamp.schemas.particles import ClassAssignment, OrientationPrior, Particle, ParticleSet, load_particle_set
-from stamp.utils.errors import StampPipelineError
+from stamp.utils.errors import StampPipelineError, StampValidationError
 from stamp.utils.io import cleanup_raw
 from stamp.utils.log import log, log_config
 from stamp.utils.mrc import glob_mrc, paths_by_stem, require_voxel_size
@@ -26,6 +26,21 @@ from stamp.utils.provenance import write_sidecar
 from stamp.utils.plotting.classify import plot_classify
 from stamp.classify.settings import GroupSettings
 from stamp.classify.strategies import classify_combined, classify_strict
+
+# ClassifyInputs: resolved classify inputs, particle set files in the order given
+@dataclass(frozen=True)
+class ClassifyInputs:
+    particle_sets: tuple[Path, ...]
+
+# resolve_inputs: classify positional arguments to particle set files, rejecting duplicate kinds before any work starts
+def resolve_inputs(inputs: list[Path]) -> ClassifyInputs:
+    for path in inputs:
+        if not path.is_file():
+            raise StampValidationError(f'{path!r} is not a particle set file')
+    kinds = [is_decoy_particle_set(load_particle_set(path)) for path in inputs]
+    if kinds.count(True) > 1 or kinds.count(False) > 1:
+        raise StampValidationError('give at most one real and one decoy particle set')
+    return ClassifyInputs(tuple(path for _, path in sorted(zip(kinds, inputs), key=lambda pair: pair[0])))
 
 # build_group_settings: settings from classify options
 def build_group_settings(
