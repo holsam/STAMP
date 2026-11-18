@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 # Import internal commands
-from stamp.cli import classify, decoy, filter, identify, pick, plot, refine, tools
+from stamp.cli import classify, decoy, filter, identify, pick, plot, refine, stream, tools
 from stamp.utils.errors import StampError
 from stamp.utils.log import configure_logging, log
 
@@ -28,6 +28,7 @@ stamp_app.add_typer(classify.classifyCli)
 stamp_app.add_typer(identify.identifyCli)
 stamp_app.add_typer(refine.refineCli, name='refine', help='Prepare RELION half-set refinements and assess the results.')
 stamp_app.add_typer(filter.filterCli)
+stamp_app.add_typer(stream.streamCli, name='stream', help='Process a dataset with streamed tomograms.')
 stamp_app.add_typer(
     plot.plotCli,
     name='plot',

@@ -9,10 +9,12 @@ from scipy.ndimage import gaussian_filter, rotate
 from scipy.spatial.transform import Rotation
 
 # Import internal STAMP objects
+import stamp.commands.classify as classify_commands
 from stamp.classify.align import roll_about_normal
 from stamp.classify.average import weighted_average
 from stamp.classify.cluster import ClusteringConfig, label_to_cluster_id, reduce_and_cluster, reduce_features
 from stamp.classify.extract import box_fits_inside, canonical_grid, extract_particle_set, extract_subvolume
+from stamp.utils.errors import StampValidationError
 from stamp.utils.rotation import quaternion_from_reference_to, quaternion_to_matrix
 from stamp.classify.features import azimuthal_magnitudes, build_feature_matrix, cylindrical_bins, rotational_average
 from stamp.classify.frames import azimuth_degrees, azimuth_matrix, flip_matrix, rotate_density, rotation_to_quaternion
@@ -1007,3 +1009,93 @@ class TestWedge:
         wedge = box_wedge(11, None, 60.0, 90.0)
         once = apply_wedge(rng.normal(size=(11, 11, 11)), wedge)
         assert np.allclose(apply_wedge(once, wedge), once, atol=1e-5)
+
+# TestCacheOnlyExtraction: class checking that cache-only extraction reuses markers and doesn't read tomograms
+class TestCacheOnlyExtraction:
+    def _setup(self, tmp_path: Path):
+        tomogram = np.random.default_rng(1).normal(size=(40, 40, 40)).astype(np.float32)
+        path = tmp_path / 't.mrc'
+        with mrcfile.new(path, overwrite=True) as mrc:
+            mrc.set_data(tomogram)
+            mrc.voxel_size = 1.0
+        particle = Particle(prior=OrientationPrior.NORMAL, particle_id='p0', tomogram_id='t', position=(20.0, 20.0, 20.0), orientation=(1.0, 0.0, 0.0, 0.0), source_picker='test', confidence=1.0, half_set=HalfSet.A)
+        return path, particle
+
+    def test_cache_only_returns_cached_subvolumes_after_tomogram_deleted(self, tmp_path: Path) -> None:
+        path, particle = self._setup(tmp_path)
+        cache = tmp_path / 'cache'
+        full, kept_full, _ = extract_particle_set([particle], {'t': str(path)}, 11, cache_dir=cache)
+        path.unlink()
+        cached, kept_cached, skipped_cached = extract_particle_set([particle], {}, 11, cache_dir=cache, cache_only=True)
+        assert [p.particle_id for p in kept_cached] == [p.particle_id for p in kept_full] and skipped_cached == []
+        assert np.array_equal(cached[0], full[0])
+
+    def test_missing_marker_raises_in_cache_only(self, tmp_path: Path) -> None:
+        from stamp.utils.errors import StampPipelineError
+        _, particle = self._setup(tmp_path)
+        with pytest.raises(StampPipelineError, match='t'):
+            extract_particle_set([particle], {}, 11, cache_dir=tmp_path / 'empty', cache_only=True)
+
+    def test_stale_marker_raises_in_cache_only(self, tmp_path: Path) -> None:
+        from stamp.utils.errors import StampPipelineError
+        path, particle = self._setup(tmp_path)
+        cache = tmp_path / 'cache'
+        extract_particle_set([particle], {'t': str(path)}, 11, cache_dir=cache)
+        with pytest.raises(StampPipelineError):
+            extract_particle_set([particle], {}, 13, cache_dir=cache, cache_only=True)
+
+# TestResolveInputs: positional particle set resolution, kind checks and ordering
+class TestResolveInputs:
+    def _patch(self, monkeypatch, decoy_names: set[str]) -> None:
+        monkeypatch.setattr(classify_commands, 'load_particle_set', lambda path: path)
+        monkeypatch.setattr(classify_commands, 'is_decoy_particle_set', lambda path: path.name in decoy_names)
+
+    def test_real_before_decoy_whatever_the_order(self, tmp_path: Path, monkeypatch) -> None:
+        self._patch(monkeypatch, {'decoy.json'})
+        real, decoy = tmp_path / 'real.json', tmp_path / 'decoy.json'
+        real.touch(); decoy.touch()
+        assert classify_commands.resolve_inputs([decoy, real]).particle_sets == (real, decoy)
+        assert classify_commands.resolve_inputs([real, decoy]).particle_sets == (real, decoy)
+
+    def test_rejects_two_real_or_two_decoy_sets(self, tmp_path: Path, monkeypatch) -> None:
+        self._patch(monkeypatch, {'d1.json', 'd2.json'})
+        paths = {name: tmp_path / name for name in ('r1.json', 'r2.json', 'd1.json', 'd2.json')}
+        for path in paths.values():
+            path.touch()
+        with pytest.raises(StampValidationError):
+            classify_commands.resolve_inputs([paths['r1.json'], paths['r2.json']])
+        with pytest.raises(StampValidationError):
+            classify_commands.resolve_inputs([paths['d1.json'], paths['d2.json']])
+
+    def test_rejects_missing_file(self, tmp_path: Path, monkeypatch) -> None:
+        self._patch(monkeypatch, set())
+        with pytest.raises(StampValidationError):
+            classify_commands.resolve_inputs([tmp_path / 'absent.json'])
+
+# TestResolveStreamDir: stream directory resolution and mixed-input rejection
+class TestResolveStreamDir:
+    def test_resolves_stream_dir_and_output_dir_containing_it(self, tmp_path: Path) -> None:
+        stream = tmp_path / 'stamp' / 'stream'
+        stream.mkdir(parents=True)
+        (stream / 'stream.json').write_text('{}')
+        assert classify_commands.resolve_inputs([stream]).stream_dir == stream
+        assert classify_commands.resolve_inputs([tmp_path]).stream_dir == stream
+
+    def test_error_names_both_paths_when_neither_has_stream_json(self, tmp_path: Path) -> None:
+        with pytest.raises(StampValidationError) as error:
+            classify_commands.resolve_inputs([tmp_path])
+        assert str(tmp_path) in str(error.value) and str(tmp_path / 'stamp' / 'stream') in str(error.value)
+
+    def test_rejects_mixed_dir_and_file_and_two_dirs(self, tmp_path: Path, monkeypatch) -> None:
+        stream = tmp_path / 'stream'
+        stream.mkdir()
+        (stream / 'stream.json').write_text('{}')
+        other = tmp_path / 'other'
+        other.mkdir()
+        (other / 'stream.json').write_text('{}')
+        particle_set = tmp_path / 'particle_set.json'
+        particle_set.touch()
+        with pytest.raises(StampValidationError):
+            classify_commands.resolve_inputs([stream, particle_set])
+        with pytest.raises(StampValidationError):
+            classify_commands.resolve_inputs([stream, other])

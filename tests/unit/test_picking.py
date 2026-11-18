@@ -8,6 +8,9 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.picking.consensus import build_particle_set, reconcile_picks
+from stamp.commands.pick import pick_tomogram
+from stamp.picking.importers import filter_beam_angle, select_tomogram_picks
+from stamp.schemas.manifest import TomogramManifest
 from stamp.utils.errors import StampValidationError
 from stamp.picking.geometry import (
     beam_angle_deviation_degrees,
@@ -301,3 +304,81 @@ class TestVesicle:
             half_set_seed=0,
         )
         assert particle_set.particles[0].vesicle_id == 'tomo000:v0002'
+
+# TestBeamAngleFilter: class checking that the beam angle filter acts on raw picks before ids are assigned
+class TestBeamAngleFilter:
+    def test_drops_picks_over_the_maximum(self):
+        picks = [
+            RawPick(tomogram_id='t', position=(0.0, 0.0, 0.0), source_picker='p', beam_angle_deviation_degrees=5.0),
+            RawPick(tomogram_id='t', position=(9.0, 0.0, 0.0), source_picker='p', beam_angle_deviation_degrees=40.0),
+        ]
+        assert [p.position for p in filter_beam_angle(picks, 20.0)] == [(0.0, 0.0, 0.0)]
+
+    def test_keeps_picks_without_a_recorded_deviation(self):
+        picks = [RawPick(tomogram_id='t', position=(0.0, 0.0, 0.0), source_picker='p')]
+        assert filter_beam_angle(picks, 20.0) == picks
+
+    def test_none_maximum_keeps_everything(self):
+        picks = [RawPick(tomogram_id='t', position=(0.0, 0.0, 0.0), source_picker='p', beam_angle_deviation_degrees=89.0)]
+        assert filter_beam_angle(picks, None) == picks
+
+    def test_ids_are_contiguous_after_filtering(self):
+        picks = [
+            RawPick(tomogram_id='t', position=(0.0, 0.0, 0.0), source_picker='p', prior=OrientationPrior.NORMAL, beam_angle_deviation_degrees=80.0),
+            RawPick(tomogram_id='t', position=(30.0, 0.0, 0.0), source_picker='p', prior=OrientationPrior.NORMAL, beam_angle_deviation_degrees=5.0),
+        ]
+        particle_set = build_particle_set(filter_beam_angle(picks, 20.0), 'union', ['p'], half_set_seed=0)
+        assert [p.particle_id for p in particle_set.particles] == ['t_p0000']
+
+# TestSelectTomogramPicks: class checking per-tomogram selection from a multi-tomogram picks list
+class TestSelectTomogramPicks:
+    def test_keeps_only_the_manifest_tomogram_with_id_rewritten(self, tmp_path: Path):
+        manifest = TomogramManifest(tomogram_id='tomoA', raw_tomogram_path=tmp_path / 'a.mrc', voxel_size_angstrom=10.0)
+        picks = [
+            RawPick(tomogram_id='tomoA_segmented', position=(1.0, 1.0, 1.0), source_picker='x'),
+            RawPick(tomogram_id='tomoB', position=(2.0, 2.0, 2.0), source_picker='x'),
+        ]
+        selected = select_tomogram_picks(picks, manifest)
+        assert [(p.tomogram_id, p.position) for p in selected] == [('tomoA', (1.0, 1.0, 1.0))]
+
+    def test_unknown_ids_are_ignored_not_raised(self, tmp_path: Path):
+        manifest = TomogramManifest(tomogram_id='tomoA', raw_tomogram_path=tmp_path / 'a.mrc', voxel_size_angstrom=10.0)
+        assert select_tomogram_picks([RawPick(tomogram_id='nope', position=(0.0, 0.0, 0.0), source_picker='x')], manifest) == []
+
+
+# TestPickTomogram: class checking the single-tomogram pick helper against a multi-tomogram picks file
+class TestPickTomogram:
+    def _manifest(self, tmp_path: Path, tomogram_id: str) -> TomogramManifest:
+        return TomogramManifest(tomogram_id=tomogram_id, raw_tomogram_path=tmp_path / f'{tomogram_id}.mrc', voxel_size_angstrom=10.0)
+
+    def _csv(self, path: Path, rows: list[str]) -> Path:
+        path.write_text('tomogram_id,x,y,z,confidence\n' + '\n'.join(rows) + '\n')
+        return path
+
+    def test_multi_tomogram_csv_yields_only_requested_tomogram(self, tmp_path: Path):
+        csv_path = self._csv(tmp_path / 'picks.csv', ['tomoA,1,1,1,0.9', 'tomoB,5,5,5,0.9', 'tomoA,9,9,9,0.9'])
+        picks = pick_tomogram([csv_path], ['mine'], self._manifest(tmp_path, 'tomoA'), None,
+                              consensus_rule='union', distance_threshold=5.0, max_surface_distance_angstrom=300.0,
+                              max_beam_angle_deviation=None, orientation_prior=OrientationPrior.NONE)
+        assert sorted(p.position for p in picks) == [(1.0, 1.0, 1.0), (9.0, 9.0, 9.0)]
+        assert {p.tomogram_id for p in picks} == {'tomoA'}
+
+    def test_two_pickers_reconcile_to_one_pick(self, tmp_path: Path):
+        a = self._csv(tmp_path / 'a.csv', ['tomoA,10,10,10,0.9'])
+        b = self._csv(tmp_path / 'b.csv', ['tomoA,11,10,10,0.8'])
+        picks = pick_tomogram([a, b], ['a', 'b'], self._manifest(tmp_path, 'tomoA'), None,
+                              consensus_rule='union', distance_threshold=5.0, max_surface_distance_angstrom=300.0,
+                              max_beam_angle_deviation=None, orientation_prior=OrientationPrior.NONE)
+        assert len(picks) == 1 and set(picks[0].source_picker.split('+')) == {'a', 'b'}
+
+    def test_picker_without_rows_warns_and_union_keeps_the_other(self, tmp_path: Path, monkeypatch):
+        from stamp.commands import pick as pick_module
+        warnings: list[str] = []
+        monkeypatch.setattr(pick_module.log, 'warning', lambda message, *args, **kwargs: warnings.append(message))
+        a = self._csv(tmp_path / 'a.csv', ['tomoA,3,3,3,0.9'])
+        b = self._csv(tmp_path / 'b.csv', ['tomoB,7,7,7,0.9'])
+        picks = pick_tomogram([a, b], ['a', 'b'], self._manifest(tmp_path, 'tomoA'), None,
+                              consensus_rule='union', distance_threshold=5.0, max_surface_distance_angstrom=300.0,
+                              max_beam_angle_deviation=None, orientation_prior=OrientationPrior.NONE)
+        assert [p.position for p in picks] == [(3.0, 3.0, 3.0)]
+        assert warnings == ['tomoA: b has no picks for this tomogram']

@@ -12,6 +12,7 @@ from stamp.classify.extract import extract_particle_set
 from stamp.classify.features import build_feature_matrix
 from stamp.cli.cli import stamp_app
 from stamp.schemas.particles import HalfSet, OrientationPrior, Particle
+from stamp.decoy.generate import DECOY_SOURCE_PREFIX
 
 # Initialise runner
 runner = CliRunner()
@@ -78,7 +79,7 @@ class TestClassifyChunking:
         particle_set_path, raw_dir = _build_dataset(tmp_path)
         argv = [
             '-vv', '-d', str(tmp_path), 'classify',
-            '--particles', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path),
+            str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path),
             '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'kmeans',
             '--n-clusters', '2', '--n-components', '10', '--keep-raw', '--no-strict-halfset-independence',
         ]
@@ -148,7 +149,7 @@ class TestClassifyCommand:
             edit(payload)
             particle_set_path.write_text(json.dumps(payload))
         return runner.invoke(stamp_app, [
-            '-vv', '-d', str(tmp_path), 'classify', '--particles', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path),
+            '-vv', '-d', str(tmp_path), 'classify', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path),
             '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'kmeans', '--n-clusters', '2', '--n-components', '10',
             '--min-cluster-size', '10', '--tilt-max', '60', *extra,
         ])
@@ -166,6 +167,35 @@ class TestClassifyCommand:
         averages = [path.name for path in (output_dir / 'class_averages').glob('*.mrc')]
         assert any('halfA' in name for name in averages) and any('halfB' in name for name in averages)
         assert (output_dir / 'params.toml').exists()
+
+    def test_two_positional_sets_classify_real_and_decoy(self, tmp_path: Path) -> None:
+        '''Real and decoy sets passed together each classify into their own output dir.'''
+        particle_set_path, raw_dir = _build_dataset(tmp_path)
+        payload = json.loads(particle_set_path.read_text())
+        for particle in payload['particles']:
+            particle['source_picker'] = DECOY_SOURCE_PREFIX + 'test'
+        decoy_path = tmp_path / 'decoy_particle_set.json'
+        decoy_path.write_text(json.dumps(payload))
+        result = runner.invoke(stamp_app, [
+            '-d', str(tmp_path), 'classify', str(decoy_path), str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path),
+            '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'kmeans', '--n-clusters', '2', '--n-components', '10',
+            '--min-cluster-size', '10', '--tilt-max', '60', '--no-strict-halfset-independence',
+        ])
+        assert result.exit_code == 0, result.output
+        assert (tmp_path / 'stamp' / 'classify' / 'class_assignments.json').exists()
+        assert (tmp_path / 'stamp' / 'classify_decoy' / 'class_assignments.json').exists()
+
+    def test_duplicate_kind_exits_before_writing(self, tmp_path: Path) -> None:
+        '''Two real sets are rejected up front, with no classify output written.'''
+        particle_set_path, raw_dir = _build_dataset(tmp_path)
+        second = tmp_path / 'second.json'
+        second.write_text(particle_set_path.read_text())
+        result = runner.invoke(stamp_app, [
+            '-d', str(tmp_path), 'classify', str(particle_set_path), str(second), '--raw-dir', str(raw_dir), '--out-dir', str(tmp_path),
+            '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'kmeans', '--n-clusters', '2',
+        ])
+        assert result.exit_code != 0
+        assert not (tmp_path / 'stamp' / 'classify').exists()
 
     def test_class_assignment_carries_vesicle_id(self, tmp_path: Path) -> None:
         '''vesicle_id on a Particle survives unchanged into its ClassAssignment, and stays None when unset.'''
@@ -205,7 +235,7 @@ class TestClassifyCommand:
                     del particle['orientation']
             particle_set_path.write_text(json.dumps(payload))
             result = runner.invoke(stamp_app, [
-                '-d', str(root), 'classify', '--particles', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(root),
+                '-d', str(root), 'classify', str(particle_set_path), '--raw-dir', str(raw_dir), '--out-dir', str(root),
                 '--voxel-size-a', '10.0', '--box-length-a', '200.0', '--method', 'leiden', '--min-cluster-size', '10', '--n-components', '10',
                 '--tilt-max', '60', '--bin-factor', '1', '--null-sigmas', '0.5', '--n-rots', '150', '--no-strict-halfset-independence',
             ])
@@ -257,3 +287,19 @@ class TestClassifyCommand:
         monkeypatch.setattr(classify_module, '_classify_prior', fail_prior(OrientationPrior.NORMAL))
         single = self._invoke(single_root, '--no-strict-halfset-independence')
         assert single.exit_code != 0 and isinstance(single.exception, StampPipelineError) and str(single.exception) == 'boom'
+
+# TestClassifyInputModes: option checks per input mode
+class TestClassifyInputModes:
+    def test_raw_dir_with_stream_dir_is_rejected(self, tmp_path: Path) -> None:
+        '''-r with a stream directory exits non-zero and names -r.'''
+        stream = tmp_path / 'stream'
+        stream.mkdir()
+        (stream / 'stream.json').write_text('{}')
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(stream), '-r', str(tmp_path)])
+        assert result.exit_code != 0 and '-r not allowed' in result.output
+
+    def test_particle_set_without_raw_dir_is_rejected(self, tmp_path: Path) -> None:
+        '''A particle set without -r exits non-zero.'''
+        particle_set_path, _ = _build_dataset(tmp_path)
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(particle_set_path)])
+        assert result.exit_code != 0 and '-r is required' in result.output

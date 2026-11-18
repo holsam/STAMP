@@ -7,13 +7,14 @@ import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from scipy.spatial import cKDTree
+import zlib
 
 # Import internal STAMP objects
 from stamp.utils.halfset import assign_half_sets
 from stamp.picking.geometry import extract_surface
 from stamp.picking.manifests import cache_tomogram_picks, load_cached_picks
 from stamp.schemas.manifest import TomogramManifest
-from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet
+from stamp.schemas.particles import OrientationPrior, Particle, ParticleSet, particle_ids
 from stamp.schemas.picks import RawPick
 from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.errors import StampValidationError
@@ -82,6 +83,10 @@ def _load_cached_surface(surfaces_dir: Path | None, tomogram_id: str) -> tuple[t
     except (OSError, ValueError, KeyError):
         return None
 
+# tomogram_rng: generator seeded from the run seed and the tomogram id, so one tomogram's decoys do not depend on which others were processed before it
+def tomogram_rng(seed: int, tomogram_id: str) -> np.random.Generator:
+    return np.random.default_rng([seed, zlib.crc32(tomogram_id.encode())])
+
 # generate_shifted_decoys: displace each real pick by a large random vector away from surface and picks
 def generate_shifted_decoys(
     real_particle_set: ParticleSet,
@@ -98,7 +103,6 @@ def generate_shifted_decoys(
     output_dir: Path | None = None,
 ) -> ParticleSet | None:
     log.progress('Generating shifted decoys')
-    rng = np.random.default_rng(seed)
     surfaces_dir = output_dir / 'raw' / METHOD_SHIFTED / 'surfaces' if output_dir is not None else None
     shape_by_tomogram = {}
     surface_by_tomogram: dict[str, tuple[cKDTree, np.ndarray]] = {}
@@ -148,6 +152,7 @@ def generate_shifted_decoys(
     cache_dir = output_dir / 'raw' / METHOD_SHIFTED if output_dir is not None else None
     tomogram_ids: list[str] = []
     for tomogram_id, positions in real_by_tomogram.items():
+        rng = tomogram_rng(seed, tomogram_id)
         shape = shape_by_tomogram.get(tomogram_id)
         surface = surface_by_tomogram.get(tomogram_id)
         if shape is None or surface is None:
@@ -213,7 +218,6 @@ def generate_random_volume_decoys(
     if not supported:
         raise StampValidationError('random-volume decoys have no membrane normal to orient by, use the shifted method for normal-prior particles')
     log.progress('Generating random-volume decoys')
-    rng = np.random.default_rng(seed)
     raw_path_by_tomogram = {manifest.tomogram_id: manifest.raw_tomogram_path for manifest in manifests}
     positions_by_tomogram: dict[str, list[tuple[float, float, float]]] = {}
     for particle in real_particle_set.particles:
@@ -227,6 +231,7 @@ def generate_random_volume_decoys(
     for tomogram_id, positions in positions_by_tomogram.items():
         if tomogram_id not in raw_path_by_tomogram:
             continue
+        rng = tomogram_rng(seed, tomogram_id)
         with open_mrc(raw_path_by_tomogram[tomogram_id], header_only=True) as mrc:
             extent_xyz = np.array([int(mrc.header.nx), int(mrc.header.ny), int(mrc.header.nz)]) - 1
         low, high = np.full(3, border), extent_xyz - border
@@ -355,11 +360,11 @@ def generate_synthetic_noise_decoys(
 
 # _finalise: assign decoy particle IDs and half-sets, returning a decoy ParticleSet or None if no decoys were generated
 def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet | None:
-    particle_ids = [f'decoy-{index:06d}' for index in range(len(raw_picks))]
-    if not particle_ids:
+    ids = particle_ids([pick.tomogram_id for pick in raw_picks], 'decoy')
+    if not ids:
         return None
-    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(particle_ids, raw_picks)}
-    half_set_by_id = assign_half_sets(particle_ids, seed=seed, group_of=group_of)
+    group_of = {particle_id: pick.tomogram_id for particle_id, pick in zip(ids, raw_picks)}
+    half_set_by_id = assign_half_sets(ids, seed=seed, group_of=group_of)
     particles = [
         Particle(
             particle_id=particle_id,
@@ -371,7 +376,7 @@ def _finalise(raw_picks: list[RawPick], seed: int, method: str) -> ParticleSet |
             confidence=pick.confidence,
             half_set=half_set_by_id[particle_id],
         )
-        for particle_id, pick in zip(particle_ids, raw_picks)
+        for particle_id, pick in zip(ids, raw_picks)
     ]
     return ParticleSet(
         particles=particles,

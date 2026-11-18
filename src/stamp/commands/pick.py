@@ -6,8 +6,8 @@ STAMP: consensus picking logic
 from pathlib import Path
 
 # Import internal STAMP objects
-from stamp.picking.consensus import build_particle_set, reconcile_picks_for_tomograms
-from stamp.picking.importers import infer_orientations, map_tomogram_ids, read_picks, resolve_priors
+from stamp.picking.consensus import build_particle_set, reconcile_picks, reconcile_picks_for_tomograms
+from stamp.picking.importers import filter_beam_angle, infer_orientations, map_tomogram_ids, read_picks, resolve_priors, select_tomogram_picks
 from stamp.picking.manifests import cache_tomogram_picks, load_cached_picks, load_tomogram_manifests, manifest_paths
 from stamp.picking.vesicles import resolve_vesicle_labels, write_vesicle_summary
 from stamp.schemas.manifest import TomogramManifest
@@ -54,6 +54,33 @@ def _import_picker(
         ) if normal else [])
         cache_tomogram_picks(cache_dir, tomogram_id, [next(oriented_normal) if pick.prior is OrientationPrior.NORMAL else pick for pick in picks])
     return load_cached_picks(cache_dir, list(picks_by_tomogram))
+
+# pick_tomogram: reconciled, oriented, beam-filtered picks for one tomogram from one or more picks files, rows for other tomograms ignored
+def pick_tomogram(
+    picks_files: list[Path],
+    names: list[str],
+    manifest: TomogramManifest,
+    vesicle_labels_mrc: Path | None,
+    *,
+    consensus_rule: str,
+    distance_threshold: float,
+    max_surface_distance_angstrom: float,
+    max_beam_angle_deviation: float | None,
+    orientation_prior: OrientationPrior,
+) -> list[RawPick]:
+    labels = resolve_vesicle_labels(vesicle_labels_mrc, [manifest])
+    picks_by_picker: dict[str, list[RawPick]] = {}
+    for name, path in zip(names, picks_files):
+        mine = select_tomogram_picks(resolve_priors(read_picks(path, source_picker=name), orientation_prior), manifest)
+        if not mine:
+            log.warning(f'{manifest.tomogram_id}: {name} has no picks for this tomogram')
+        normal = [pick for pick in mine if pick.prior is OrientationPrior.NORMAL]
+        if normal and manifest.segmentation_path is None:
+            raise StampValidationError(f'{name}: {len(normal)} pick(s) have the normal orientation prior, which needs a segmentation')
+        oriented = iter(infer_orientations(normal, [manifest], vesicle_labels_by_tomogram=labels, max_surface_distance_angstrom=max_surface_distance_angstrom) if normal else [])
+        picks_by_picker[name] = [next(oriented) if pick.prior is OrientationPrior.NORMAL else pick for pick in mine]
+    reconciled = reconcile_picks(picks_by_picker, consensus_rule, distance_threshold, manifest.tomogram_id)  # type: ignore[arg-type]
+    return filter_beam_angle(reconciled, max_beam_angle_deviation)
 
 # run_pick: pick command orchestration
 def run_pick(
@@ -125,23 +152,19 @@ def run_pick(
     if not all_reconciled:
         raise StampPipelineError('No particles survived reconciliation. With --consensus-rule intersection, every picks file must have a pick within --distance-threshold voxels of each particle.')
 
+    kept_reconciled = filter_beam_angle(all_reconciled, max_beam_angle_deviation)
+    if max_beam_angle_deviation is not None:
+        log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {len(all_reconciled) - len(kept_reconciled)} of {len(all_reconciled)} particles')
+        if not kept_reconciled:
+            raise StampPipelineError('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
+
     log.progress(f'Building particle set and determining beam angle distribution')
     particle_set = build_particle_set(
-        reconciled_picks=all_reconciled,
+        reconciled_picks=kept_reconciled,
         consensus_rule=consensus_rule,  # type: ignore[arg-type]
         contributing_pickers=names,
         half_set_seed=half_set_seed,
     )
-    if max_beam_angle_deviation is not None:
-        before = len(particle_set.particles)
-        particle_set.particles = [
-            p for p in particle_set.particles
-            if p.beam_angle_deviation_degrees is None or p.beam_angle_deviation_degrees <= max_beam_angle_deviation
-        ]
-        dropped = before - len(particle_set.particles)
-        log.info(f'--max-beam-angle-deviation {max_beam_angle_deviation}: dropped {dropped} of {before} particles')
-        if not particle_set.particles:
-            raise StampPipelineError('No particles survived the beam angle deviation filter. Try raising --max-beam-angle-deviation.')
     normal_particles = [particle for particle in particle_set.particles if particle.prior is OrientationPrior.NORMAL]
     if normal_particles:
         report_beam_angle_distribution(normal_particles)

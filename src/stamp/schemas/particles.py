@@ -78,6 +78,16 @@ class IdentificationResult(BaseModel):
     method: str
     score_gap_to_runner_up: float | None = None
 
+# particle_ids: ids '<tomogram_id>_<tag><n:04d>', counting within each tomogram in input order
+def particle_ids(tomogram_ids: list[str], tag: str) -> list[str]:
+    counts: dict[str, int] = {}
+    ids: list[str] = []
+    for tomogram_id in tomogram_ids:
+        n = counts.get(tomogram_id, 0)
+        counts[tomogram_id] = n + 1
+        ids.append(f'{tomogram_id}_{tag}{n:04d}')
+    return ids
+
 # load_particle_set: validate a ParticleSet JSON file
 def load_particle_set(path: Path) -> ParticleSet:
     return ParticleSet.model_validate(json.loads(path.read_text()))
