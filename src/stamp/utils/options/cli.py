@@ -82,10 +82,10 @@ PickPlot3dOption = Annotated[
     typer.Option('--pick-plot-3d/--no-pick-plot-3d', help='Create a static 3D pick visualisation per tomogram.', rich_help_panel='Plotting')
 ]
 
-# BoxAngstromOption: extraction box size
+# BoxAngstromOption: extraction box size, None when omitted so stream mode can reject it
 BoxAngstromOption = Annotated[
-    float,
-    typer.Option('--box-length-a', help='Extraction box edge length, in Å.', rich_help_panel = 'Subvolume extraction')
+    float | None,
+    typer.Option('--box-length-a', help='Extraction box edge length, in Å. Default 300.', rich_help_panel = 'Subvolume extraction')
 ]
 
 # NRadialBinsOption: number of radial bins in rotationsal average

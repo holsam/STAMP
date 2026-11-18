@@ -27,20 +27,38 @@ from stamp.utils.plotting.classify import plot_classify
 from stamp.classify.settings import GroupSettings
 from stamp.classify.strategies import classify_combined, classify_strict
 
-# ClassifyInputs: resolved classify inputs, particle set files in the order given
+# ClassifyInputs: resolved classify inputs, either particle set files in the order given or one stream directory
 @dataclass(frozen=True)
 class ClassifyInputs:
-    particle_sets: tuple[Path, ...]
+    particle_sets: tuple[Path, ...] = ()
+    stream_dir: Path | None = None
 
-# resolve_inputs: classify positional arguments to particle set files, rejecting duplicate kinds before any work starts
+# resolve_inputs: classify positional arguments to particle set files or one stream directory, rejecting mixes and duplicate kinds before any work starts
 def resolve_inputs(inputs: list[Path]) -> ClassifyInputs:
-    for path in inputs:
+    dirs = [path for path in inputs if path.is_dir()]
+    files = [path for path in inputs if not path.is_dir()]
+    if dirs and files:
+        raise StampValidationError('give either particle set files or one stream directory, not both')
+    if len(dirs) > 1:
+        raise StampValidationError('give at most one stream directory')
+    if dirs:
+        return ClassifyInputs(stream_dir=_resolve_stream_dir(dirs[0]))
+    for path in files:
         if not path.is_file():
             raise StampValidationError(f'{path!r} is not a particle set file')
-    kinds = [is_decoy_particle_set(load_particle_set(path)) for path in inputs]
+    kinds = [is_decoy_particle_set(load_particle_set(path)) for path in files]
     if kinds.count(True) > 1 or kinds.count(False) > 1:
         raise StampValidationError('give at most one real and one decoy particle set')
-    return ClassifyInputs(tuple(path for _, path in sorted(zip(kinds, inputs), key=lambda pair: pair[0])))
+    return ClassifyInputs(particle_sets=tuple(path for _, path in sorted(zip(kinds, files), key=lambda pair: pair[0])))
+
+# _resolve_stream_dir: the stream directory itself, or the stamp/stream directory under an output dir
+def _resolve_stream_dir(path: Path) -> Path:
+    if (path / 'stream.json').is_file():
+        return path
+    nested = path / 'stamp' / 'stream'
+    if (nested / 'stream.json').is_file():
+        return nested
+    raise StampValidationError(f'no stream.json in {path!r} or {nested!r}')
 
 # build_group_settings: settings from classify options
 def build_group_settings(

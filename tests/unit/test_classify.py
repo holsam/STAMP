@@ -1071,3 +1071,31 @@ class TestResolveInputs:
         self._patch(monkeypatch, set())
         with pytest.raises(StampValidationError):
             classify_commands.resolve_inputs([tmp_path / 'absent.json'])
+
+# TestResolveStreamDir: stream directory resolution and mixed-input rejection
+class TestResolveStreamDir:
+    def test_resolves_stream_dir_and_output_dir_containing_it(self, tmp_path: Path) -> None:
+        stream = tmp_path / 'stamp' / 'stream'
+        stream.mkdir(parents=True)
+        (stream / 'stream.json').write_text('{}')
+        assert classify_commands.resolve_inputs([stream]).stream_dir == stream
+        assert classify_commands.resolve_inputs([tmp_path]).stream_dir == stream
+
+    def test_error_names_both_paths_when_neither_has_stream_json(self, tmp_path: Path) -> None:
+        with pytest.raises(StampValidationError) as error:
+            classify_commands.resolve_inputs([tmp_path])
+        assert str(tmp_path) in str(error.value) and str(tmp_path / 'stamp' / 'stream') in str(error.value)
+
+    def test_rejects_mixed_dir_and_file_and_two_dirs(self, tmp_path: Path, monkeypatch) -> None:
+        stream = tmp_path / 'stream'
+        stream.mkdir()
+        (stream / 'stream.json').write_text('{}')
+        other = tmp_path / 'other'
+        other.mkdir()
+        (other / 'stream.json').write_text('{}')
+        particle_set = tmp_path / 'particle_set.json'
+        particle_set.touch()
+        with pytest.raises(StampValidationError):
+            classify_commands.resolve_inputs([stream, particle_set])
+        with pytest.raises(StampValidationError):
+            classify_commands.resolve_inputs([stream, other])

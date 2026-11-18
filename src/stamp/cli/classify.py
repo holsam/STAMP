@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Annotated
 
 # Import classify command functions/variables
-from stamp.utils.options.cli import AzimuthalModesOption, BinFactorOption, BoxAngstromOption, FeatureNormalisationOption, InplaneAngularStepDegreesOption, KeepRawOption, MergeFractionOption, MethodOption, MinClusterSizeOption, MinRadiusFractionOption, NAzimuthalSamplesOption, NClustersOption, NComponentsOption, NProcessesOption, NRadialBinsOption, NRotationsOption, NullSigmasOption, OutDirOption, PlotFormatOption, PlotsOption, PolishRoundsOption, RandomStateOption, RawDirOption, RejectQuantileOption, SegDirOption, ShiftRangeVoxelsOption, StrictHalfsetIndependenceOption, TiltAxisDegreesOption, TiltMaxDegreesOption, VoxelSizeOption
+from stamp.utils.options.cli import AzimuthalModesOption, BinFactorOption, BoxAngstromOption, FeatureNormalisationOption, InplaneAngularStepDegreesOption, KeepRawOption, MergeFractionOption, MethodOption, MinClusterSizeOption, MinRadiusFractionOption, NAzimuthalSamplesOption, NClustersOption, NComponentsOption, NProcessesOption, NRadialBinsOption, NRotationsOption, NullSigmasOption, OptionalRawDirOption, OutDirOption, PlotFormatOption, PlotsOption, PolishRoundsOption, RandomStateOption, RejectQuantileOption, SegDirOption, ShiftRangeVoxelsOption, StrictHalfsetIndependenceOption, TiltAxisDegreesOption, TiltMaxDegreesOption, VoxelSizeOption
 import stamp.commands.classify as classifyfuncs
+import stamp.commands.stream as streamfuncs
 from stamp.decoy.validate import is_decoy_particle_set
 from stamp.schemas.particles import load_particle_set
 from stamp.utils.io import resolve_output_dir
@@ -29,11 +30,11 @@ def classify(
         list[Path],
         typer.Argument(exists=True, help='particle_set.json and/or decoy_particle_set.json, classified in turn.'),
     ],
-    raw_tomogram_dir: RawDirOption,
+    raw_tomogram_dir: OptionalRawDirOption = None,
     voxel_size_angstrom: VoxelSizeOption = None,
     segmentation_dir: SegDirOption = None,
     output_dir: OutDirOption = Path('.'),
-    box_angstrom: BoxAngstromOption = 300.0,
+    box_angstrom: BoxAngstromOption = None,
     n_radial_bins: NRadialBinsOption = 12,
     method: MethodOption = 'leiden',
     min_cluster_size: MinClusterSizeOption = 20,
@@ -60,8 +61,26 @@ def classify(
     plot_format: PlotFormatOption = 'tiff',
     keep_raw: KeepRawOption = False,
 ) -> None:
-    '''Cluster picked particles by structural similarity.'''
+    '''Cluster picked particles by structural similarity, from particle set files or a stream directory.'''
     resolved = classifyfuncs.resolve_inputs(inputs)
+    classify_options = dict(
+        n_radial_bins=n_radial_bins, method=method, min_cluster_size=min_cluster_size, n_clusters=n_clusters,
+        n_components=n_components, strict_halfset_independence=strict_halfset_independence, random_state=random_state,
+        inplane_angular_step_degrees=inplane_angular_step_degrees, azimuthal_modes=azimuthal_modes,
+        min_radius_fraction=min_radius_fraction, n_azimuthal_samples=n_azimuthal_samples,
+        feature_normalisation=feature_normalisation, tilt_max_degrees=tilt_max_degrees, tilt_axis_degrees=tilt_axis_degrees,
+        bin_factor=bin_factor, n_rotations=n_rotations, shift_range_voxels=shift_range_voxels, polish_rounds=polish_rounds,
+        null_sigmas=null_sigmas, reject_quantile=reject_quantile, merge_fraction=merge_fraction, n_workers=n_workers,
+    )
+    if resolved.stream_dir is not None:
+        given = {'-r': raw_tomogram_dir, '-s': segmentation_dir, '--voxel-size-a': voxel_size_angstrom, '--box-length-a': box_angstrom, '-o': None if output_dir == Path('.') else output_dir}
+        if bad := [flag for flag, value in given.items() if value is not None]:
+            raise typer.BadParameter(f'{", ".join(bad)} not allowed with a stream directory')
+        log_started('classification')
+        streamfuncs.run_stream_classify(stream_dir=resolved.stream_dir, classify_options=classify_options, make_plots=make_plots, plot_format=plot_format, keep_raw=keep_raw)
+        return
+    if raw_tomogram_dir is None:
+        raise typer.BadParameter('-r is required with particle set files')
     log_started('classification')
     for particles in resolved.particle_sets:
         is_decoy = is_decoy_particle_set(load_particle_set(particles))
@@ -71,30 +90,9 @@ def classify(
             segmentation_dir=segmentation_dir,
             output_dir=resolve_output_dir(output_dir, 'classify', 'decoy' if is_decoy else None),
             voxel_size_angstrom=voxel_size_angstrom,
-            box_angstrom=box_angstrom,
-            n_radial_bins=n_radial_bins,
-            method=method,
-            min_cluster_size=min_cluster_size,
-            n_clusters=n_clusters,
-            n_components=n_components,
-            strict_halfset_independence=strict_halfset_independence,
-            random_state=random_state,
-            inplane_angular_step_degrees=inplane_angular_step_degrees,
-            n_workers=n_workers,
-            azimuthal_modes=azimuthal_modes,
-            min_radius_fraction=min_radius_fraction,
-            n_azimuthal_samples=n_azimuthal_samples,
-            feature_normalisation=feature_normalisation,
+            box_angstrom=300.0 if box_angstrom is None else box_angstrom,
             make_plots=make_plots,
             plot_format=plot_format,
             keep_raw=keep_raw,
-            tilt_max_degrees=tilt_max_degrees,
-            tilt_axis_degrees=tilt_axis_degrees,
-            bin_factor=bin_factor,
-            n_rotations=n_rotations,
-            shift_range_voxels=shift_range_voxels,
-            polish_rounds=polish_rounds,
-            null_sigmas=null_sigmas,
-            reject_quantile=reject_quantile,
-            merge_fraction=merge_fraction,
+            **classify_options,
         )

@@ -287,3 +287,19 @@ class TestClassifyCommand:
         monkeypatch.setattr(classify_module, '_classify_prior', fail_prior(OrientationPrior.NORMAL))
         single = self._invoke(single_root, '--no-strict-halfset-independence')
         assert single.exit_code != 0 and isinstance(single.exception, StampPipelineError) and str(single.exception) == 'boom'
+
+# TestClassifyInputModes: option checks per input mode
+class TestClassifyInputModes:
+    def test_raw_dir_with_stream_dir_is_rejected(self, tmp_path: Path) -> None:
+        '''-r with a stream directory exits non-zero and names -r.'''
+        stream = tmp_path / 'stream'
+        stream.mkdir()
+        (stream / 'stream.json').write_text('{}')
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(stream), '-r', str(tmp_path)])
+        assert result.exit_code != 0 and '-r not allowed' in result.output
+
+    def test_particle_set_without_raw_dir_is_rejected(self, tmp_path: Path) -> None:
+        '''A particle set without -r exits non-zero.'''
+        particle_set_path, _ = _build_dataset(tmp_path)
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(particle_set_path)])
+        assert result.exit_code != 0 and '-r is required' in result.output
