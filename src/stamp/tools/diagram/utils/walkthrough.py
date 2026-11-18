@@ -10,13 +10,14 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
 # Import internal STAMP objects
+from stamp.tools.diagram.utils.carriers import carrier_of, make_carriers, place_on
 from stamp.tools.diagram.utils.classify import add_averaging_noise, feature_matrix, iterative_average, standardise_columns
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.identify import best_fit, fit_score, project_density, read_atom_coordinates, synthetic_truth
 from stamp.tools.diagram.utils.geometry import non_max_suppression
-from stamp.tools.diagram.utils.pick import reconcile, sample_membrane_surface, score_surface
+from stamp.tools.diagram.utils.pick import reconcile, sample_carrier_surface, score_surface
 from stamp.tools.diagram.utils.refine import fourier_ring_correlation, resolution_at_threshold
-from stamp.tools.diagram.utils.scene import make_vesicles, render_scene
+from stamp.tools.diagram.utils.scene import render_scene
 
 # Walkthrough: mocked pipeline over mixture of N species; classes 0 and 1 are the identify search panel, any further classes are 'unknown' species that cluster but should not be identified
 class Walkthrough:
@@ -59,24 +60,21 @@ class Walkthrough:
         counts += [self.args.n_extra] * (self.n_classes - 2)
         return counts
 
-    # -- stage 1: scene = vesicles + raw tomogram + segmentation ------
+    # -- stage 1: scene = carriers (vesicles or filaments) + raw tomogram + segmentation ------
     def build_scene(self):
-        self.vesicles = make_vesicles(self.field_px, self.args.n_vesicles, self.rng)
+        self.prior = self.args.orientation_prior
+        self.carriers = make_carriers(self.prior, self.field_px, self.args.n_vesicles, self.args.n_filaments, self.rng)
         counts = self._class_counts()
         capture_px = 0.42 * self.box
 
         true_particles = []
         for class_id, count in enumerate(counts):
             for _ in range(count):
-                v = self.vesicles[self.rng.integers(len(self.vesicles))]
-                theta = self.rng.uniform(0, 2 * np.pi)
-                radius = v['r'] + self.rng.normal(0.0, 1.5)
-                true_particles.append({
-                    'x': v['cx'] + radius * np.cos(theta),
-                    'y': v['cy'] + radius * np.sin(theta),
-                    'class': class_id,
-                    'image': self.truths[class_id],
-                })
+                if self.carriers:
+                    x, y, angle = place_on(self.carriers[self.rng.integers(len(self.carriers))], self.rng)
+                else:   # none prior: particles sit anywhere in the volume, no orientation is known
+                    (x, y), angle = self.rng.uniform(0.1 * self.field_px, 0.9 * self.field_px, size=2), np.nan
+                true_particles.append({'x': x, 'y': y, 'class': class_id, 'angle': angle, 'image': self.truths[class_id]})
         self.rng.shuffle(true_particles)
         # drop particles that fall too close together on the same membrane
         kept = []
@@ -87,10 +85,10 @@ class Walkthrough:
         self.true_xy = np.array([[p['x'], p['y']] for p in kept])
         self.true_class = np.array([p['class'] for p in kept])
 
-        self.raw_tomogram, self.segmentation = render_scene(self.field_px, self.vesicles, self.true_particles, self.render_rng)
+        self.raw_tomogram, self.segmentation = render_scene(self.field_px, self.carriers, self.true_particles, self.render_rng)
 
         # --- surface sampling + two pickers ---
-        self.surface_points, self.surface_owner = sample_membrane_surface(self.vesicles, self.rng)
+        self.surface_points, self.surface_owner = sample_carrier_surface(self.carriers, self.rng)
         score_a, self.surface_nearest = score_surface(self.surface_points, self.true_xy, capture_px, self.rng, noise=0.28)
         score_b, _ = score_surface(self.surface_points, self.true_xy, capture_px, self.rng, noise=0.31)
         self.surface_score = 0.5 * (score_a + score_b)
@@ -136,11 +134,11 @@ class Walkthrough:
         else:
             self.decoy_points = np.empty((0, 2))
 
-        # half-set assignment: whole vesicle to one half
-        vesicle_half = {i: int(self.decoy_rng.integers(2)) for i in range(len(self.vesicles))}
+        # half-set assignment: whole carrier to one half
+        carrier_half = {i: int(self.decoy_rng.integers(2)) for i in range(len(self.carriers))}
         if len(self.consensus):
-            owners = np.array([int(np.argmin([np.hypot(cx - v['cx'], cy - v['cy']) for v in self.vesicles])) for cx, cy in self.consensus])
-            self.consensus_half = np.array([vesicle_half[o] for o in owners])
+            owners = carrier_of(self.carriers, self.consensus)
+            self.consensus_half = np.array([carrier_half[o] for o in owners])
         else:
             self.consensus_half = np.array([], dtype=int)
 

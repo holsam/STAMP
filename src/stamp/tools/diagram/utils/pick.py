@@ -6,18 +6,17 @@ STAMP: 2D mocked functions for pick
 import numpy as np
 
 # Import internal STAMP objects
+from stamp.tools.diagram.utils.carriers import surface_points
 from stamp.tools.diagram.utils.geometry import UnionFind
 
-# sample_membrane_surface: points walked around each vesicle membrane, as a picker would score surface positions
-def sample_membrane_surface(vesicles, rng, spacing_deg=5.0, jitter_px=1.5):
+# sample_carrier_surface: points walked along every carrier, as a picker would score surface positions
+def sample_carrier_surface(carriers, rng, spacing_px=8.0, jitter_px=1.5):
     points, owner = [], []
-    for index, v in enumerate(vesicles):
-        for angle in np.arange(0.0, 360.0, spacing_deg):
-            theta = np.deg2rad(angle)
-            radius = v['r'] + rng.normal(0.0, jitter_px)
-            points.append((v['cx'] + radius * np.cos(theta), v['cy'] + radius * np.sin(theta)))
-            owner.append(index)
-    return np.array(points), np.array(owner)
+    for index, carrier in enumerate(carriers):
+        samples, _angles = surface_points(carrier, spacing_px)
+        points.append(samples + rng.normal(0.0, jitter_px, size=samples.shape))
+        owner.append(np.full(len(samples), index))
+    return np.vstack(points), np.concatenate(owner)
 
 # score_surface: high where a surface point sits on a real particle, low elsewhere, plus per-evaluation noise (a stand-in for a density / template score)
 def score_surface(points, true_xy, capture_px, rng, noise=0.28):

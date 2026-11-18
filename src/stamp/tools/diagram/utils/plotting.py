@@ -21,7 +21,10 @@ def structure_projection_scatter(ax, pdb_path, box, pixel_size, cmap='viridis'):
     ax.set_facecolor('black')
     bare(ax)
 
-# draw_vesicles: outline each vesicle as an unfilled circle
-def draw_vesicles(ax, vesicles, colour='w', lw=0.8):
-    for v in vesicles:
-        ax.add_patch(plt.Circle((v['cx'], v['cy']), v['r'], fill=False, edgecolor=colour, lw=lw, alpha=0.5))
+# draw_carriers: outline each vesicle as an unfilled circle and each filament as a line
+def draw_carriers(ax, carriers, colour='w', lw=0.8):
+    for c in carriers:
+        if c['kind'] == 'circle':
+            ax.add_patch(plt.Circle((c['cx'], c['cy']), c['r'], fill=False, edgecolor=colour, lw=lw, alpha=0.5))
+        else:
+            ax.plot([c['x0'], c['x1']], [c['y0'], c['y1']], color=colour, lw=lw, alpha=0.5)

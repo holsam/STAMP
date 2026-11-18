@@ -9,7 +9,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
-from stamp.tools.diagram.utils.plotting import draw_vesicles
+from stamp.tools.diagram.utils.plotting import draw_carriers
 from stamp.utils.plotting.core import BLUE, GREEN, GREY, ORANGE, RED, finish, frame, show_segmentation
 
 # PickRun: only the scene is needed for the pick walkthrough (DiagramRun default)
@@ -33,14 +33,14 @@ def plot_segmentation(run, ax):
 def plot_surface_score(run, ax):
     w = run.w
     sc = ax.scatter(w.surface_points[:, 0], w.surface_points[:, 1], c=w.surface_score, cmap='viridis', s=12, vmin=0, vmax=1.2)
-    draw_vesicles(ax, w.vesicles, colour='k', lw=0.6)
+    draw_carriers(ax, w.carriers, colour='k', lw=0.6)
     frame(ax, w.field_px, 'surface points scored along each membrane')
     sc.figure.colorbar(sc, ax=ax, fraction=0.046, pad=0.04, label='score')
 
 # plot_pickers: the two independent pickers' points above threshold
 def plot_pickers(run, ax):
     w = run.w
-    draw_vesicles(ax, w.vesicles, colour='0.7', lw=0.6)
+    draw_carriers(ax, w.carriers, colour='0.7', lw=0.6)
     ax.scatter(w.picker_a[:, 0], w.picker_a[:, 1], s=55, facecolors='none', edgecolors=BLUE, linewidths=1.1, label=f'picker A (n={len(w.picker_a)})')
     ax.scatter(w.picker_b[:, 0], w.picker_b[:, 1], s=95, facecolors='none', edgecolors=ORANGE, linewidths=1.1, label=f'picker B (n={len(w.picker_b)})')
     frame(ax, w.field_px, 'two independent pickers above threshold')
@@ -49,7 +49,7 @@ def plot_pickers(run, ax):
 # plot_consensus: points both pickers agree on, plus the one-picker-only rejects
 def plot_consensus(run, ax):
     w = run.w
-    draw_vesicles(ax, w.vesicles, colour='0.7', lw=0.6)
+    draw_carriers(ax, w.carriers, colour='0.7', lw=0.6)
     if len(w.rejected_picks):
         ax.scatter(w.rejected_picks[:, 0], w.rejected_picks[:, 1], s=40, c=RED, marker='x', label=f'one picker only (n={len(w.rejected_picks)})')
     if len(w.consensus):
@@ -57,17 +57,17 @@ def plot_consensus(run, ax):
     frame(ax, w.field_px, 'reconcile: keep points both pickers agree on')
     ax.legend(fontsize=6, loc='upper right', framealpha=0.4)
 
-# plot_halfsets: half-set split (whole vesicle to one half) with decoys
+# plot_halfsets: half-set split (whole carrier to one half) with decoys
 def plot_halfsets(run, ax):
     w = run.w
-    draw_vesicles(ax, w.vesicles, colour='0.7', lw=0.6)
+    draw_carriers(ax, w.carriers, colour='0.7', lw=0.6)
     for half, colour in ((0, BLUE), (1, ORANGE)):
         sel = w.consensus_half == half
         if sel.any():
             ax.scatter(w.consensus[sel, 0], w.consensus[sel, 1], s=24, c=colour, label=f'half {half + 1} (n={int(sel.sum())})')
     if len(w.decoy_points):
         ax.scatter(w.decoy_points[:, 0], w.decoy_points[:, 1], s=30, c='0.5', marker='x', label=f'decoys (n={len(w.decoy_points)})')
-    frame(ax, w.field_px, 'half-set split (whole vesicle -> one half) + decoys')
+    frame(ax, w.field_px, 'half-set split (whole carrier -> one half) + decoys')
     ax.legend(fontsize=6, loc='upper right', framealpha=0.4)
 
 # plot_final: the final consensus particle set on the tomogram

@@ -12,6 +12,7 @@ from stamp.tools.diagram import classify as classify_diagram
 from stamp.tools.diagram import identify as identify_diagram
 from stamp.tools.diagram import overview as overview_diagram
 from stamp.tools.diagram import pick as pick_diagram
+from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.config import DiagramConfig
 
 # Initialise Typer app
@@ -48,6 +49,10 @@ BoxOpt = Annotated[
 PixelOpt = Annotated[
     float,
     typer.Option('--pixel-size-a', help='Angstroms per pixel.'),
+]
+PriorOpt = Annotated[
+    OrientationPrior,
+    typer.Option('--orientation-prior', help='What is known about particle orientation: normal (membrane proteins), axis (filaments) or none.'),
 ]
 SeedOpt = Annotated[
     int,
@@ -110,6 +115,7 @@ def overview_subcommand(
     identify_min_cc: IdentifyMinCcOpt = 0.72,
     identify_min_gap: IdentifyMinGapOpt = 0.06,
     seed: SeedOpt = 0,
+    orientation_prior: PriorOpt = OrientationPrior.NORMAL,
 ) -> None:
     '''Generate a diagram of the overall STAMP workflow.'''
     _run(
@@ -124,6 +130,7 @@ def overview_subcommand(
         identify_min_cc=identify_min_cc,
         identify_min_gap=identify_min_gap,
         seed=seed,
+        orientation_prior=orientation_prior,
     )
 
 # Define pick diagram command
@@ -139,6 +146,7 @@ def pick_subcommand(
     field_px: FieldPxOpt = 760,
     n_vesicles: NVesiclesOpt = 10,
     seed: SeedOpt = 0,
+    orientation_prior: PriorOpt = OrientationPrior.NORMAL,
 ) -> None:
     '''Generate a diagram of the pick command workflow.'''
     _run(
@@ -153,6 +161,7 @@ def pick_subcommand(
         field_px=field_px,
         n_vesicles=n_vesicles,
         seed=seed,
+        orientation_prior=orientation_prior,
     )
 
 # Define classify diagram command
@@ -174,6 +183,7 @@ def classify_subcommand(
         typer.Option('--hdbscan-min-cluster-size', help='HDBSCAN min cluster size.'),
     ] = 15,
     seed: SeedOpt = 0,
+    orientation_prior: PriorOpt = OrientationPrior.NORMAL,
 ) -> None:
     '''Generate a diagram of the classify command workflow.'''
     _run(
@@ -187,6 +197,7 @@ def classify_subcommand(
         kmeans_k=kmeans_k,
         hdbscan_min_cluster_size=hdbscan_min_cluster_size,
         seed=seed,
+        orientation_prior=orientation_prior,
     )
 
 # Define identify diagram command
@@ -205,6 +216,7 @@ def identify_subcommand(
         float, typer.Option('--decoy-margin', help='Minimum CC margin over the decoy model.'),
     ] = 0.05,
     seed: SeedOpt = 0,
+    orientation_prior: PriorOpt = OrientationPrior.NORMAL,
 ) -> None:
     '''Generate a diagram of the identify command workflow.'''
     _run(
@@ -220,4 +232,5 @@ def identify_subcommand(
         identify_min_gap=identify_min_gap,
         decoy_margin=decoy_margin,
         seed=seed,
+        orientation_prior=orientation_prior,
     )
