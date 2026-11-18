@@ -308,3 +308,66 @@ class TestStreamExport:
         seg, raw = _write_pair(tmp_path / 'seg', tmp_path / 'raw', 't0')
         assert runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw)).exit_code == 0
         assert not (_stream(tmp_path).root / 'particles').exists()
+
+# DECOY_SMALL_STREAM / DECOY_SMALL_CLI: the same scaled-down decoy geometry for both paths (stream and decoy spell the picks separation flag differently)
+DECOY_SMALL_STREAM = ['--min-shift-a', '30', '--max-shift-a', '60', '--min-distance-from-real-a', '20', '--min-distance-from-picks-a', '25']
+DECOY_SMALL_CLI = ['--min-shift-a', '30', '--max-shift-a', '60', '--min-distance-from-real-a', '20', '--min-pick-distance-a', '25']
+
+# _write_candidates: two tiny structures and a candidates YAML for identify
+def _write_candidates(root: Path) -> Path:
+    (root / 'small.pdb').write_text('ATOM      1  CA  ALA A   1      0.000   0.000   0.000  1.00  0.00           C\n')
+    (root / 'large.pdb').write_text('\n'.join(f'ATOM  {i:>5}  CA  ALA A{i:>4}    {i * 2.0:8.3f}   0.000   0.000  1.00  0.00           C' for i in range(1, 40)) + '\n')
+    path = root / 'candidates.yaml'
+    path.write_text('candidates:\n  - name: small\n    structure_path: small.pdb\n  - name: large\n    structure_path: large.pdb\n')
+    return path
+
+# TestStreamEquivalence: class checking that the stream path and the normal path agree on sets, classes and identification over the same data
+class TestStreamEquivalence:
+    def test_stream_and_normal_paths_agree(self, tmp_path: Path) -> None:
+        '''Normal pick, decoy, classify and identify agree with the appended, finalised and streamed-classified path.'''
+        picks, seg_dir, raw_dir = _dataset(tmp_path)
+        candidates = _write_candidates(tmp_path)
+        normal, streamed = tmp_path / 'normal', tmp_path / 'streamed'
+        ids = ['t0', 't1', 't2']
+
+        # normal path, while every tomogram is still on disk (classify reads them)
+        result = runner.invoke(stamp_app, ['-d', str(normal), 'pick', str(picks), '--seg-dir', str(seg_dir), '--raw-dir', str(raw_dir), '--out-dir', str(normal), '--voxel-size-a', '10.0'])
+        assert result.exit_code == 0, result.output
+        pick_set = normal / 'stamp' / 'pick' / 'particle_set.json'
+        result = runner.invoke(stamp_app, ['-d', str(normal), 'decoy', '--method', 'auto', '--real-particle-set', str(pick_set), '--seg-dir', str(seg_dir), '--raw-dir', str(raw_dir), '--out-dir', str(normal), '--voxel-size-a', '10.0', *DECOY_SMALL_CLI])
+        assert result.exit_code == 0, result.output
+        decoy_set = normal / 'stamp' / 'decoy' / 'decoy_particle_set.json'
+        for particles in (pick_set, decoy_set):
+            result = runner.invoke(stamp_app, ['-d', str(normal), 'classify', '-p', str(particles), '-r', str(raw_dir), '-s', str(seg_dir), '-o', str(normal), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
+            assert result.exit_code == 0, result.output
+
+        # stream path, deleting each tomogram after its append
+        picks_stream_root = streamed
+        for tomogram_id in ids:
+            seg, raw = seg_dir / f'{tomogram_id}.mrc', raw_dir / f'{tomogram_id}.mrc'
+            assert runner.invoke(stamp_app, _append_args(picks_stream_root, picks, seg, raw, *DECOY_SMALL_STREAM)).exit_code == 0
+            seg.unlink()
+            raw.unlink()
+        assert runner.invoke(stamp_app, ['-d', str(streamed), 'stream', 'finalise', '--out-dir', str(streamed)]).exit_code == 0
+        assert runner.invoke(stamp_app, ['-d', str(streamed), 'stream', 'classify', '--out-dir', str(streamed), *CLASSIFY_ARGS]).exit_code == 0
+        stream = streamed / 'stamp' / 'stream'
+
+        # particle sets: ids, positions, orientations, priors, pickers and half-sets
+        assert _rows(stream / 'particle_set.json') == _rows(pick_set)
+        assert _rows(stream / 'decoy_particle_set.json') == _rows(decoy_set)
+        assert json.loads((stream / 'particle_set.json').read_text())['contributing_pickers'] == json.loads(pick_set.read_text())['contributing_pickers']
+        assert json.loads((stream / 'decoy_particle_set.json').read_text())['contributing_pickers'] == json.loads(decoy_set.read_text())['contributing_pickers']
+
+        # classes: same partitions for real and decoy
+        assert _partition(stream / 'classify' / 'real' / 'class_assignments.json') == _partition(normal / 'stamp' / 'classify' / 'class_assignments.json')
+        assert _partition(stream / 'classify' / 'decoy' / 'class_assignments.json') == _partition(normal / 'stamp' / 'classify_decoy' / 'class_assignments.json')
+
+        # identification: same identified classes and candidates on both paths
+        for root, classes, decoys in (
+            (normal, normal / 'stamp' / 'classify' / 'class_averages', normal / 'stamp' / 'classify_decoy' / 'class_averages'),
+            (streamed, stream / 'classify' / 'real' / 'class_averages', stream / 'classify' / 'decoy' / 'class_averages'),
+        ):
+            result = runner.invoke(stamp_app, ['-d', str(root), 'identify', '--classes', str(classes), '--decoy-classes', str(decoys), '--candidates', str(candidates), '--out-dir', str(root / 'identify'), '--resolution', '30.0', '-n', '1', '--no-plots'])
+            assert result.exit_code == 0, result.output
+        identified = lambda root: {(row['cluster_id'], row['candidate_protein']) for row in json.loads((root / 'identify' / 'stamp' / 'identify' / 'identification.json').read_text())}
+        assert identified(normal) == identified(streamed) and identified(normal)
