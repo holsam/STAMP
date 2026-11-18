@@ -1,6 +1,6 @@
 [project]
 name = "stamp"
-version = "1.0.0rc1"
+version = "1.0.0rc2"
 description = "A workflow for Sub-Tomogram Averaging Membrane Proteins"
 readme = "README.md"
 authors = [
