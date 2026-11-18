@@ -312,7 +312,7 @@ def run_stream_finalise(*, stream_dir: Path) -> None:
 def _membrane_subtracted(stream: StreamDir, kind: str) -> bool:
     return any(json.loads(marker.read_text()).get('subtracted') for marker in (stream.root / 'subvolumes' / kind).glob('*/*.json'))
 
-# run_stream_classify: classify finalised real and decoy sets from append-time subvolume cache, with no tomogram on disk
+# run_stream_classify: called by `stamp classify` in stream mode, classifies finalised real and decoy sets from append-time subvolume cache, with no tomogram on disk
 def run_stream_classify(
     *,
     stream_dir: Path,

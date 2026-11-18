@@ -228,23 +228,23 @@ def _finalised_stream(tmp_path: Path, *, delete: bool = True) -> None:
             raw.unlink()
     assert runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'finalise', '--out-dir', str(tmp_path)]).exit_code == 0
 
-# CLASSIFY_ARGS: deterministic, small-data classify settings shared by stamp classify and stream classify (stream classify takes its box from stream.json)
+# CLASSIFY_ARGS: deterministic, small-data classify settings shared by stamp classify on particle sets and on a stream dir (stream mode takes its box from stream.json)
 CLASSIFY_ARGS = ['--method', 'kmeans', '--n-clusters', '2', '--min-cluster-size', '2', '--seed', '0', '--no-plots']
 
-# TestStreamClassify: class checking that stream classify runs from the cache and matches stamp classify
+# TestStreamClassify: class checking that stamp classify on a stream dir runs from the cache and matches stamp classify on particle sets
 class TestStreamClassify:
     def test_unfinalised_stream_is_rejected(self, tmp_path: Path) -> None:
-        '''stream classify refuses a stream that has not been finalised.'''
+        '''classify on a stream dir refuses a stream that has not been finalised.'''
         picks = _write_picks(tmp_path / 'picks.csv', ['t0'])
         seg, raw = _write_pair(tmp_path / 'seg', tmp_path / 'raw', 't0')
         assert runner.invoke(stamp_app, _append_args(tmp_path, picks, seg, raw)).exit_code == 0
-        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), *CLASSIFY_ARGS])
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(tmp_path), *CLASSIFY_ARGS])
         assert isinstance(result.exception, StampError) and 'finalise' in str(result.exception)
 
     def test_classify_runs_with_all_tomograms_deleted(self, tmp_path: Path) -> None:
-        '''Tomograms and segmentations are deleted at append time; stream classify still succeeds from the cache.'''
+        '''Tomograms and segmentations are deleted at append time; classify on the stream dir still succeeds from the cache.'''
         _finalised_stream(tmp_path)
-        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), *CLASSIFY_ARGS])
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(tmp_path), *CLASSIFY_ARGS])
         assert result.exit_code == 0, result.output
         assert (tmp_path / 'stamp' / 'stream' / 'classify' / 'real' / 'class_assignments.json').is_file()
         assert (tmp_path / 'stamp' / 'stream' / 'classify' / 'decoy' / 'class_assignments.json').is_file()
@@ -253,14 +253,14 @@ class TestStreamClassify:
         '''A missing subvolume marker is a hard error, since the tomogram is gone.'''
         _finalised_stream(tmp_path)
         (tmp_path / 'stamp' / 'stream' / 'subvolumes' / 'real' / 'normal' / 't1.json').unlink()
-        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), *CLASSIFY_ARGS])
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(tmp_path), *CLASSIFY_ARGS])
         assert isinstance(result.exception, StampPipelineError) and 't1' in str(result.exception)
 
     def test_matches_stamp_classify_on_the_same_inputs(self, tmp_path: Path) -> None:
         '''Stream classify partitions the real particles exactly as stamp classify does on the finalised set.'''
         _finalised_stream(tmp_path, delete=False)
         stream_dir = tmp_path / 'stamp' / 'stream'
-        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'stream', 'classify', '--out-dir', str(tmp_path), *CLASSIFY_ARGS])
+        result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(tmp_path), *CLASSIFY_ARGS])
         assert result.exit_code == 0, result.output
         classify_out = tmp_path / 'classify_out'
         result = runner.invoke(stamp_app, ['-d', str(tmp_path), 'classify', str(stream_dir / 'particle_set.json'), '-r', str(tmp_path / 'raw'), '-s', str(tmp_path / 'seg'), '-o', str(classify_out), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
@@ -337,9 +337,8 @@ class TestStreamEquivalence:
         result = runner.invoke(stamp_app, ['-d', str(normal), 'decoy', '--method', 'auto', '--real-particle-set', str(pick_set), '--seg-dir', str(seg_dir), '--raw-dir', str(raw_dir), '--out-dir', str(normal), '--voxel-size-a', '10.0', *DECOY_SMALL_CLI])
         assert result.exit_code == 0, result.output
         decoy_set = normal / 'stamp' / 'decoy' / 'decoy_particle_set.json'
-        for particles in (pick_set, decoy_set):
-            result = runner.invoke(stamp_app, ['-d', str(normal), 'classify', str(particles), '-r', str(raw_dir), '-s', str(seg_dir), '-o', str(normal), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
-            assert result.exit_code == 0, result.output
+        result = runner.invoke(stamp_app, ['-d', str(normal), 'classify', str(pick_set), str(decoy_set), '-r', str(raw_dir), '-s', str(seg_dir), '-o', str(normal), '--voxel-size-a', '10.0', '--box-length-a', '150', *CLASSIFY_ARGS])
+        assert result.exit_code == 0, result.output
 
         # stream path, deleting each tomogram after its append
         picks_stream_root = streamed
@@ -349,7 +348,7 @@ class TestStreamEquivalence:
             seg.unlink()
             raw.unlink()
         assert runner.invoke(stamp_app, ['-d', str(streamed), 'stream', 'finalise', '--out-dir', str(streamed)]).exit_code == 0
-        assert runner.invoke(stamp_app, ['-d', str(streamed), 'stream', 'classify', '--out-dir', str(streamed), *CLASSIFY_ARGS]).exit_code == 0
+        assert runner.invoke(stamp_app, ['-d', str(streamed), 'classify', str(streamed), *CLASSIFY_ARGS]).exit_code == 0
         stream = streamed / 'stamp' / 'stream'
 
         # particle sets: ids, positions, orientations, priors, pickers and half-sets
