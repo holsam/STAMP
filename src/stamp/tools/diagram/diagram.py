@@ -143,8 +143,8 @@ def pick_subcommand(
     n_synthetic_unknowns: UnknownsOpt = 2,
     box_size: BoxOpt = 64,
     pixel_size: PixelOpt = 3.0,
-    field_px: FieldPxOpt = 760,
-    n_vesicles: NVesiclesOpt = 10,
+    field_px: FieldPxOpt = 900,
+    n_vesicles: NVesiclesOpt = 14,
     seed: SeedOpt = 0,
     orientation_prior: PriorOpt = OrientationPrior.NORMAL,
 ) -> None:
@@ -174,14 +174,18 @@ def classify_subcommand(
     n_synthetic_unknowns: UnknownsOpt = 2,
     box_size: BoxOpt = 64,
     pixel_size: PixelOpt = 3.0,
-    kmeans_k: Annotated[
-        int | None,
-        typer.Option('--kmeans-k', help='KMeans clusters (default: n species + 1).'),
-    ] = None,
-    hdbscan_min_cluster_size: Annotated[
+    cluster_method: Annotated[
+        str,
+        typer.Option('--cluster-method', help='Seed clustering method: leiden, kmeans or hdbscan.'),
+    ] = 'leiden',
+    min_cluster_size: Annotated[
         int,
-        typer.Option('--hdbscan-min-cluster-size', help='HDBSCAN min cluster size.'),
-    ] = 15,
+        typer.Option('--min-cluster-size', help='Smallest seed cluster that gets a reference.'),
+    ] = 10,
+    n_polish_rounds: Annotated[
+        int,
+        typer.Option('--polish-rounds', help='Polish rounds.'),
+    ] = 2,
     seed: SeedOpt = 0,
     orientation_prior: PriorOpt = OrientationPrior.NORMAL,
 ) -> None:
@@ -194,8 +198,9 @@ def classify_subcommand(
         n_synthetic_unknowns=n_synthetic_unknowns,
         box_size=box_size,
         pixel_size=pixel_size,
-        kmeans_k=kmeans_k,
-        hdbscan_min_cluster_size=hdbscan_min_cluster_size,
+        cluster_method=cluster_method,
+        min_cluster_size=min_cluster_size,
+        n_polish_rounds=n_polish_rounds,
         seed=seed,
         orientation_prior=orientation_prior,
     )

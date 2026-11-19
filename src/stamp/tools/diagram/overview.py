@@ -47,7 +47,7 @@ def plot_extract(w, ax):
 # plot_classify: PCA embedding scatter coloured by KMeans cluster
 def plot_classify(w, ax):
     groups = [(w.cluster_labels == cluster_id, cluster_colour(cluster_id), f'cluster {cluster_id}') for cluster_id in w.cluster_ids]
-    scatter_groups(ax, w.embedding, groups, f'features -> PCA -> KMeans (k={len(w.cluster_ids)})')
+    scatter_groups(ax, w.embedding, groups, f'features -> PCA -> {w.args.cluster_method} (k={len(w.cluster_ids)})')
 
 # plot_class_averages: row of class-average thumbnails
 def plot_class_averages(w, axes):

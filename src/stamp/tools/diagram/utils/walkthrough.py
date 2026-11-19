@@ -6,10 +6,9 @@ STAMP: mocked pipeline
 import numpy as np
 from pathlib import Path
 from scipy.ndimage import gaussian_filter, rotate
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
 
 # Import internal STAMP objects
+from stamp.classify.cluster import ClusteringConfig, reduce_and_cluster
 from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.carriers import carrier_of, make_carriers, place_on
 from stamp.tools.diagram.utils.classify import add_averaging_noise, feature_matrix, iterative_average, standardise_columns
@@ -79,7 +78,7 @@ class Walkthrough:
         # drop particles that fall too close together on the same membrane
         kept = []
         for p in true_particles:
-            if all(np.hypot(p['x'] - q['x'], p['y'] - q['y']) > 0.5 * self.box for q in kept):
+            if all(np.hypot(p['x'] - q['x'], p['y'] - q['y']) > 0.4 * self.box for q in kept):
                 kept.append(p)
         self.true_particles = kept
         self.true_xy = np.array([[p['x'], p['y']] for p in kept])
@@ -92,13 +91,13 @@ class Walkthrough:
         args, box = self.args, self.box
         capture_px = 0.42 * box
         # contaminants (ice, gold) that both pickers fire on, so some false picks survive the intersection
-        n_confounders = max(3, len(self.true_xy) // 8)
+        n_confounders = max(3, len(self.true_xy) // 6)
         if self.carriers:
-            confounders = np.array([place_on(self.carriers[self.rng.integers(len(self.carriers))], self.rng, jitter_px=9.0)[:2] for _ in range(n_confounders)])
+            confounders = np.array([place_on(self.carriers[self.rng.integers(len(self.carriers))], self.rng, jitter_px=14.0)[:2] for _ in range(n_confounders)])
         else:
             confounders = self.rng.uniform(0.1 * self.field_px, 0.9 * self.field_px, size=(n_confounders, 2))
-        self.picks_a = simulate_picks_file(self.true_xy, confounders, self.field_px, self.rng, recall=0.9, jitter_px=3.0, n_false=12)
-        self.picks_b = simulate_picks_file(self.true_xy, confounders, self.field_px, self.rng, recall=0.85, jitter_px=4.0, n_false=12)
+        self.picks_a = simulate_picks_file(self.true_xy, confounders, self.field_px, self.rng, recall=0.95, jitter_px=3.0, n_false=12)
+        self.picks_b = simulate_picks_file(self.true_xy, confounders, self.field_px, self.rng, recall=0.9, jitter_px=4.0, n_false=12)
 
         # orientation per pick, inferred per file as `stamp pick` does before reconciling
         self.angle_a, self.oriented_a = infer_orientations(self.prior, self.carriers, self.picks_a, self.rng, args.max_surface_distance_a / args.pixel_size)
@@ -108,7 +107,7 @@ class Walkthrough:
         beam_all = beam_deviation(len(angle_all), self.rng) if self.prior is OrientationPrior.NORMAL else np.full(len(angle_all), np.nan)
 
         # consensus: intersection of the two files, position and orientation averaged over the group
-        centres, self.rejected_picks, members = reconcile(self.picks_a, self.picks_b, distance_px=0.5 * box)
+        centres, self.rejected_picks, members = reconcile(self.picks_a, self.picks_b, distance_px=0.3 * box)
         self.reconciled = centres
         self.reconciled_oriented = np.array([oriented_all[m].all() for m in members], dtype=bool)
         self.reconciled_beam = np.array([beam_all[m].mean() for m in members])
@@ -159,22 +158,24 @@ class Walkthrough:
         self.particles = np.array(self.particles)
         self.particle_angles = np.array(self.particle_angles)
 
-    # -- stage 3: features + clustering ---------------------------
-    def classify(self, n_clusters: int | None = None):
-        default_k = self.n_classes + 1
-        self.features = feature_matrix(self.particles)
+    # -- stage 3: features per prior, whitened PCA, Leiden seed clusters ---------------
+    def classify(self):
+        args = self.args
+        self.features = feature_matrix(self.particles, self.prior)
         self.standardised = standardise_columns(self.features)
-        n_components = min(self.args.cluster_components, self.standardised.shape[0] - 1, self.standardised.shape[1])
-        self.pca = PCA(n_components=n_components, random_state=self.args.seed)
-        self.pca_embedding = self.pca.fit_transform(self.standardised)
-        self.embedding = self.pca_embedding[:, :2]
+        config = ClusteringConfig(method=args.cluster_method, n_components=args.cluster_components, min_cluster_size=args.min_cluster_size, n_clusters=self.n_classes + 1, random_state=args.seed)
+        result = reduce_and_cluster(self.standardised, config)
+        self.pca_embedding = result.embedding
+        self.embedding = result.embedding[:, :2]
+        self.explained = result.explained_variance_ratio
+        self.seed_labels = self._order_clusters(result.labels)
+        self.cluster_labels = self.seed_labels
+        self._summarise_clusters()
 
-        k = n_clusters or default_k
-        raw = KMeans(n_clusters=k, random_state=self.args.seed, n_init=20).fit_predict(self.pca_embedding)
-        self.cluster_labels = self._order_clusters(raw)
-        self.cluster_ids = sorted(set(self.cluster_labels))
+    # _summarise_clusters: cluster ids, dominant species and cluster that best represents target
+    def _summarise_clusters(self):
+        self.cluster_ids = sorted(set(self.cluster_labels) - {-1})
         self.cluster_dominant = {c: self._dominant(self.cluster_labels == c) for c in self.cluster_ids}
-        # the cluster that best represents the target species
         target_counts = {c: int(np.sum((self.cluster_labels == c) & (self.particle_class == 0))) for c in self.cluster_ids}
         self.target_cluster = max(target_counts, key=target_counts.get)
 
@@ -187,13 +188,13 @@ class Walkthrough:
     def _order_clusters(self, labels):
         labels = np.asarray(labels)
         info = []
-        for c in sorted(set(labels)):
+        for c in sorted(set(labels) - {-1}):
             members = labels == c
             dominant = self._dominant(members)
             info.append((c, dominant, -int(members.sum())))
         order = [c for c, _, _ in sorted(info, key=lambda t: (t[1], t[2]))]
         remap = {old: new for new, old in enumerate(order)}
-        return np.array([remap[l] for l in labels])
+        return np.array([remap.get(l, -1) for l in labels])
 
     # -- stage 4: class averages -------------------------------
     def class_averages(self):

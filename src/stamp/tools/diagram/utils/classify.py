@@ -4,9 +4,10 @@ STAMP: 2D mocked functions for classify
 
 # Import external dependencies
 import numpy as np
-from scipy.ndimage import rotate
+from scipy.ndimage import map_coordinates, rotate
 
 # Import internal STAMP objects
+from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.identify import standardise
 
 # --- in-plane alignment before averaging ---
@@ -66,9 +67,24 @@ def annular_fourier_features(image: np.ndarray, n_bins: int = 16) -> np.ndarray:
 def particle_features(image: np.ndarray) -> np.ndarray:
     return np.concatenate([radial_profile(image), annular_fourier_features(image)])
 
-# feature_matrix: stack particle_features over a particle array
-def feature_matrix(particles: np.ndarray) -> np.ndarray:
-    return np.array([particle_features(p) for p in particles])
+# axial_features: low-frequency log amplitude spectrum, invariant to axial shift and to 180 degree polarity flip of axis prior
+def axial_features(image: np.ndarray, half_width: int = 8) -> np.ndarray:
+    spectrum = np.abs(np.fft.fftshift(np.fft.fft2(image)))
+    centre = image.shape[0] // 2
+    return np.log1p(spectrum[centre - half_width:centre + half_width + 1, centre - half_width:centre + half_width + 1]).ravel()
+
+# polar_mode_features: magnitude of each circular-harmonic mode on rings of increasing radius, invariant to any in-plane rotation
+def polar_mode_features(image: np.ndarray, n_radii: int = 10, max_mode: int = 6, n_angles: int = 64) -> np.ndarray:
+    centre = (image.shape[0] - 1) / 2.0
+    radii = np.linspace(0.05, 0.45, n_radii) * image.shape[0]
+    theta = np.linspace(0.0, 2 * np.pi, n_angles, endpoint=False)
+    rings = map_coordinates(image, [centre + radii[:, None] * np.sin(theta), centre + radii[:, None] * np.cos(theta)], order=1)
+    return np.abs(np.fft.rfft(rings, axis=1))[:, :max_mode + 1].ravel()
+
+# feature_matrix: per-particle features that are invariant to what prior leaves unknown
+def feature_matrix(particles: np.ndarray, prior: OrientationPrior = OrientationPrior.NORMAL) -> np.ndarray:
+    extract = {OrientationPrior.NORMAL: particle_features, OrientationPrior.AXIS: axial_features, OrientationPrior.NONE: polar_mode_features}[prior]
+    return np.array([extract(p) for p in particles])
 
 # standardise_columns: zero-mean, unit-variance each feature column
 def standardise_columns(features: np.ndarray) -> np.ndarray:

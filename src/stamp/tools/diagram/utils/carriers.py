@@ -26,10 +26,10 @@ def make_vesicles(field_px: int, n_vesicles: int, rng: np.random.Generator, radi
     return vesicles
 
 # make_filaments: straight filaments with random direction, kept clear of each other
-def make_filaments(field_px: int, n_filaments: int, rng: np.random.Generator, length_px: tuple[float, float] = (260, 460), margin: float = 40, gap: float = 60) -> list[Carrier]:
+def make_filaments(field_px: int, n_filaments: int, rng: np.random.Generator, length_px: tuple[float, float] = (200, 380), margin: float = 40, gap: float = 40) -> list[Carrier]:
     filaments: list[Carrier] = []
     attempts = 0
-    while len(filaments) < n_filaments and attempts < 800:
+    while len(filaments) < n_filaments and attempts < 2000:
         attempts += 1
         length = float(rng.uniform(*length_px))
         angle = float(rng.uniform(0, np.pi))
