@@ -19,6 +19,7 @@ class ClassifyRun(DiagramRun):
     def build(self):
         config = self.config
         self.w.build_scene()
+        self.w.pick()
         self.w.extract_particles()
         self.w.classify(n_clusters=config.kmeans_k)
         self.w.class_averages()

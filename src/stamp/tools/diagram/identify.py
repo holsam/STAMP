@@ -24,6 +24,7 @@ SIM_COLS = len(ORIENTATIONS) + 1
 class IdentifyRun(DiagramRun):
     def build(self):
         self.w.build_scene()
+        self.w.pick()
         self.w.extract_particles()
         self.w.classify()
         self.w.class_averages()

@@ -10,12 +10,12 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
 # Import internal STAMP objects
+from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.carriers import carrier_of, make_carriers, place_on
 from stamp.tools.diagram.utils.classify import add_averaging_noise, feature_matrix, iterative_average, standardise_columns
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.identify import best_fit, fit_score, project_density, read_atom_coordinates, synthetic_truth
-from stamp.tools.diagram.utils.geometry import non_max_suppression
-from stamp.tools.diagram.utils.pick import reconcile, sample_carrier_surface, score_surface
+from stamp.tools.diagram.utils.pick import beam_deviation, circular_mean, infer_orientations, reconcile, simulate_picks_file
 from stamp.tools.diagram.utils.refine import fourier_ring_correlation, resolution_at_threshold
 from stamp.tools.diagram.utils.scene import render_scene
 
@@ -65,7 +65,6 @@ class Walkthrough:
         self.prior = self.args.orientation_prior
         self.carriers = make_carriers(self.prior, self.field_px, self.args.n_vesicles, self.args.n_filaments, self.rng)
         counts = self._class_counts()
-        capture_px = 0.42 * self.box
 
         true_particles = []
         for class_id, count in enumerate(counts):
@@ -87,63 +86,53 @@ class Walkthrough:
 
         self.raw_tomogram, self.segmentation = render_scene(self.field_px, self.carriers, self.true_particles, self.render_rng)
 
-        # --- surface sampling + two pickers ---
-        self.surface_points, self.surface_owner = sample_carrier_surface(self.carriers, self.rng)
-        score_a, self.surface_nearest = score_surface(self.surface_points, self.true_xy, capture_px, self.rng, noise=0.28)
-        score_b, _ = score_surface(self.surface_points, self.true_xy, capture_px, self.rng, noise=0.31)
-        self.surface_score = 0.5 * (score_a + score_b)
-        self.pick_threshold = 0.5
-
-        # each picker: threshold, then non-max suppression -> discrete picks
-        nms_radius = 0.6 * self.box
-        self.picker_a_idx = self.picker_b_idx = np.array([], dtype=int)
-        above_a = np.where(score_a > self.pick_threshold)[0]
-        if len(above_a):
-            self.picker_a_idx = above_a[non_max_suppression(
-                self.surface_points[above_a], score_a[above_a], nms_radius)]
-        above_b = np.where(score_b > self.pick_threshold)[0]
-        if len(above_b):
-            self.picker_b_idx = above_b[non_max_suppression(self.surface_points[above_b], score_b[above_b], nms_radius)]
-        self.picker_a_mask = np.zeros(len(self.surface_points), dtype=bool)
-        self.picker_b_mask = np.zeros(len(self.surface_points), dtype=bool)
-        self.picker_a_mask[self.picker_a_idx] = True
-        self.picker_b_mask[self.picker_b_idx] = True
-        self.picker_a = self.surface_points[self.picker_a_idx]
-        self.picker_b = self.surface_points[self.picker_b_idx]
-
-        self.consensus, self.rejected_picks = reconcile(self.picker_a, self.picker_b, distance_px=0.5 * self.box)
-        # label each consensus pick by its nearest true particle
-        if len(self.consensus):
-            nearest = np.linalg.norm(self.consensus[:, None, :] - self.true_xy[None, :, :], axis=2).argmin(axis=1)
-            self.consensus_class = self.true_class[nearest]
-            self.consensus_nearest = nearest
+    # -- stage 2: picks files -> orientations -> consensus -> filters -> half-sets -----
+    def pick(self):
+        args, box = self.args, self.box
+        capture_px = 0.42 * box
+        # contaminants (ice, gold) that both pickers fire on, so some false picks survive the intersection
+        n_confounders = max(3, len(self.true_xy) // 8)
+        if self.carriers:
+            confounders = np.array([place_on(self.carriers[self.rng.integers(len(self.carriers))], self.rng, jitter_px=9.0)[:2] for _ in range(n_confounders)])
         else:
-            self.consensus_class = np.array([], dtype=int)
-            self.consensus_nearest = np.array([], dtype=int)
+            confounders = self.rng.uniform(0.1 * self.field_px, 0.9 * self.field_px, size=(n_confounders, 2))
+        self.picks_a = simulate_picks_file(self.true_xy, confounders, self.field_px, self.rng, recall=0.9, jitter_px=3.0, n_false=12)
+        self.picks_b = simulate_picks_file(self.true_xy, confounders, self.field_px, self.rng, recall=0.85, jitter_px=4.0, n_false=12)
 
-        # decoys: surface points picked by neither picker
-        idle = ~(self.picker_a_mask | self.picker_b_mask) & \
-            (self.surface_nearest > capture_px)
-        idle_points = self.surface_points[idle]
-        if len(idle_points):
-            spread = non_max_suppression(idle_points, self.decoy_rng.random(len(idle_points)), 0.7 * self.box)
-            idle_points = idle_points[spread]
-            want = max(1, (len(self.consensus) or 2) // 2)
-            take = self.decoy_rng.choice(len(idle_points), size=min(want, len(idle_points)), replace=False)
-            self.decoy_points = idle_points[take]
+        # orientation per pick, inferred per file as `stamp pick` does before reconciling
+        self.angle_a, self.oriented_a = infer_orientations(self.prior, self.carriers, self.picks_a, self.rng, args.max_surface_distance_a / args.pixel_size)
+        self.angle_b, self.oriented_b = infer_orientations(self.prior, self.carriers, self.picks_b, self.rng, args.max_surface_distance_a / args.pixel_size)
+        angle_all = np.concatenate([self.angle_a, self.angle_b])
+        oriented_all = np.concatenate([self.oriented_a, self.oriented_b])
+        beam_all = beam_deviation(len(angle_all), self.rng) if self.prior is OrientationPrior.NORMAL else np.full(len(angle_all), np.nan)
+
+        # consensus: intersection of the two files, position and orientation averaged over the group
+        centres, self.rejected_picks, members = reconcile(self.picks_a, self.picks_b, distance_px=0.5 * box)
+        self.reconciled = centres
+        self.reconciled_oriented = np.array([oriented_all[m].all() for m in members], dtype=bool)
+        self.reconciled_beam = np.array([beam_all[m].mean() for m in members])
+        self.reconciled_angle = np.array([circular_mean(angle_all[m]) for m in members])
+        # label each consensus pick by its nearest true particle, anything further is junk (-1)
+        if len(centres):
+            distance = np.linalg.norm(centres[:, None, :] - self.true_xy[None, :, :], axis=2)
+            self.reconciled_class = np.where(distance.min(axis=1) < capture_px, self.true_class[distance.argmin(axis=1)], -1)
         else:
-            self.decoy_points = np.empty((0, 2))
+            self.reconciled_class = np.array([], dtype=int)
+        # filters: unoriented picks cannot be classified, steeply tilted ones sit in the missing wedge
+        self.beam_dropped = self.reconciled_oriented & (self.reconciled_beam > args.max_beam_angle_deviation)
+        keep = self.reconciled_oriented & ~self.beam_dropped
+        self.consensus = centres[keep]
+        self.consensus_class = self.reconciled_class[keep]
+        self.consensus_angle = self.reconciled_angle[keep]
 
-        # half-set assignment: whole carrier to one half
+        # half-sets: whole carrier to one half; without carriers each particle is assigned alone
         carrier_half = {i: int(self.decoy_rng.integers(2)) for i in range(len(self.carriers))}
-        if len(self.consensus):
-            owners = carrier_of(self.carriers, self.consensus)
-            self.consensus_half = np.array([carrier_half[o] for o in owners])
+        if len(self.consensus) and self.carriers:
+            self.consensus_half = np.array([carrier_half[o] for o in carrier_of(self.carriers, self.consensus)])
         else:
-            self.consensus_half = np.array([], dtype=int)
-
-        # keep normalised positions for scatter-style plots
-        self.consensus_norm = (self.consensus / self.field_px if len(self.consensus) else self.consensus)
+            self.consensus_half = self.decoy_rng.integers(2, size=len(self.consensus))
+        self.decoy_points = np.empty((0, 2))    # decoys arrive in 1.3
+        self.consensus_norm = self.consensus / self.field_px if len(self.consensus) else self.consensus
 
     # -- stage 2: extract noisy subvolumes ---------------------------
     def extract_particles(self):
@@ -152,8 +141,11 @@ class Walkthrough:
         self.particle_class = self.consensus_class.copy()
         for class_id in self.consensus_class:
             angle = self.rng.uniform(0, 360)
-            clean = rotate(self.truths[class_id], angle, reshape=False, order=1, mode='constant')
-            noisy = add_averaging_noise(clean, self.args.per_particle_snr, n_averaged=1, rng=self.rng)
+            if class_id < 0:    # junk pick: nothing but noise at the noise level of a real particle
+                noisy = self.rng.normal(0.0, self.truths[0].std() / self.args.per_particle_snr, size=self.truths[0].shape)
+            else:
+                clean = rotate(self.truths[class_id], angle, reshape=False, order=1, mode='constant')
+                noisy = add_averaging_noise(clean, self.args.per_particle_snr, n_averaged=1, rng=self.rng)
             self.particle_angles.append(angle)
             self.particles.append(noisy)
         self.particles = np.array(self.particles)
@@ -173,10 +165,15 @@ class Walkthrough:
         raw = KMeans(n_clusters=k, random_state=self.args.seed, n_init=20).fit_predict(self.pca_embedding)
         self.cluster_labels = self._order_clusters(raw)
         self.cluster_ids = sorted(set(self.cluster_labels))
-        self.cluster_dominant = {c: int(np.bincount(self.particle_class[self.cluster_labels == c]).argmax()) for c in self.cluster_ids}
+        self.cluster_dominant = {c: self._dominant(self.cluster_labels == c) for c in self.cluster_ids}
         # the cluster that best represents the target species
         target_counts = {c: int(np.sum((self.cluster_labels == c) & (self.particle_class == 0))) for c in self.cluster_ids}
         self.target_cluster = max(target_counts, key=target_counts.get)
+
+    # _dominant: most common true species among a cluster's members, ignoring junk picks
+    def _dominant(self, members):
+        real = self.particle_class[members][self.particle_class[members] >= 0]
+        return int(np.bincount(real).argmax()) if len(real) else 0
 
     # _order_clusters: relabel clusters so their ids follow the dominant true class
     def _order_clusters(self, labels):
@@ -184,7 +181,7 @@ class Walkthrough:
         info = []
         for c in sorted(set(labels)):
             members = labels == c
-            dominant = int(np.bincount(self.particle_class[members]).argmax())
+            dominant = self._dominant(members)
             info.append((c, dominant, -int(members.sum())))
         order = [c for c, _, _ in sorted(info, key=lambda t: (t[1], t[2]))]
         remap = {old: new for new, old in enumerate(order)}
@@ -269,6 +266,7 @@ class Walkthrough:
     # run: execute every stage in order
     def run(self):
         self.build_scene()
+        self.pick()
         self.extract_particles()
         self.classify()
         self.class_averages()

@@ -33,7 +33,7 @@ class DiagramConfig:
     n_extra: int = 32                             # particles per extra / unknown class
     n_filaments: int = 8                          # filaments in the axis scene
     # pick
-    max_surface_distance_px: float = 24.0         # picks further than this from a surface stay unoriented (normal prior)
+    max_surface_distance_a: float = 72.0          # Å; picks further than this from a surface stay unoriented (normal prior)
     max_beam_angle_deviation: float = 60.0        # picks tilted further than this from beam-orthogonal are dropped (normal prior)
     # classify
     per_particle_snr: float = 0.3

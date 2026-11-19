@@ -19,6 +19,7 @@ class DiagramRun:
 
     def build(self) -> None:
         self.w.build_scene()
+        self.w.pick()
 
 # render_diagram: make output directory, render diagram panels and storyboard
 def render_diagram(
