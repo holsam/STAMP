@@ -6,15 +6,19 @@ STAMP: mocked pipeline
 import numpy as np
 from pathlib import Path
 from scipy.ndimage import gaussian_filter, rotate
+from types import SimpleNamespace
 
 # Import internal STAMP objects
 from stamp.classify.cluster import ClusteringConfig, reduce_and_cluster
 from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.carriers import carrier_of, make_carriers, place_on
-from stamp.tools.diagram.utils.classify import add_averaging_noise, feature_matrix, iterative_average, standardise_columns
+from stamp.tools.diagram.utils.align import align_stack, apply_pose, bin_stack, weighted_average
+from stamp.tools.diagram.utils.classify import add_averaging_noise, feature_matrix, standardise_columns
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.decoy import random_volume_decoys, shifted_decoys, synthetic_noise_tile
 from stamp.tools.diagram.utils.identify import best_fit, fit_score, project_density, read_atom_coordinates, synthetic_truth
+from stamp.tools.diagram.utils.polish import PolishConfig, Stacks, match_halves, run_polish
+from stamp.tools.diagram.utils.search import apply_wedge, search_space, wedge_keep
 from stamp.tools.diagram.utils.pick import beam_deviation, circular_mean, infer_orientations, reconcile, simulate_picks_file
 from stamp.tools.diagram.utils.refine import fourier_ring_correlation, resolution_at_threshold
 from stamp.tools.diagram.utils.scene import render_scene
@@ -78,7 +82,7 @@ class Walkthrough:
         # drop particles that fall too close together on the same membrane
         kept = []
         for p in true_particles:
-            if all(np.hypot(p['x'] - q['x'], p['y'] - q['y']) > 0.4 * self.box for q in kept):
+            if all(np.hypot(p['x'] - q['x'], p['y'] - q['y']) > 0.3 * self.box for q in kept):
                 kept.append(p)
         self.true_particles = kept
         self.true_xy = np.array([[p['x'], p['y']] for p in kept])
@@ -107,7 +111,7 @@ class Walkthrough:
         beam_all = beam_deviation(len(angle_all), self.rng) if self.prior is OrientationPrior.NORMAL else np.full(len(angle_all), np.nan)
 
         # consensus: intersection of the two files, position and orientation averaged over the group
-        centres, self.rejected_picks, members = reconcile(self.picks_a, self.picks_b, distance_px=0.3 * box)
+        centres, self.rejected_picks, members = reconcile(self.picks_a, self.picks_b, distance_px=0.2 * box)
         self.reconciled = centres
         self.reconciled_oriented = np.array([oriented_all[m].all() for m in members], dtype=bool)
         self.reconciled_beam = np.array([beam_all[m].mean() for m in members])
@@ -125,12 +129,15 @@ class Walkthrough:
         self.consensus_class = self.reconciled_class[keep]
         self.consensus_angle = self.reconciled_angle[keep]
 
-        # half-sets: whole carrier to one half; without carriers each particle is assigned alone
-        carrier_half = {i: int(self.decoy_rng.integers(2)) for i in range(len(self.carriers))}
-        if len(self.consensus) and self.carriers:
-            self.consensus_half = np.array([carrier_half[o] for o in carrier_of(self.carriers, self.consensus)])
-        else:
-            self.consensus_half = self.decoy_rng.integers(2, size=len(self.consensus))
+        # half-sets: every carrier goes whole to one half, largest first to the smaller half so halves stay balanced; without carriers each particle is its own group
+        groups = carrier_of(self.carriers, self.consensus) if self.carriers and len(self.consensus) else np.arange(len(self.consensus))
+        sizes = np.bincount(groups) if len(groups) else np.array([], dtype=int)
+        load, half_of = [0, 0], {}
+        for group in np.argsort(-sizes):
+            half = int(np.argmin(load))
+            half_of[int(group)], load[half] = half, load[half] + int(sizes[group])
+        self.consensus_half = np.array([half_of[int(g)] for g in groups], dtype=int)
+
         # decoys: the method `auto` resolves per prior (shifted for normal, random-volume for axis and none)
         if self.prior is OrientationPrior.NORMAL:
             self.decoy_method = 'shifted'
@@ -141,35 +148,65 @@ class Walkthrough:
         self.noise_tile, self.noise_points = synthetic_noise_tile(self.decoy_rng, max(4, len(self.consensus) // 2))
         self.consensus_norm = self.consensus / self.field_px if len(self.consensus) else self.consensus
 
-    # -- stage 2: extract noisy subvolumes ---------------------------
+    # -- stage 3: extract subvolumes, each unknown pose drawn as prior allows, each with its missing wedge -----
     def extract_particles(self):
-        self.particle_angles = []
-        self.particles = []
+        args, box, factor = self.args, self.box, self.args.bin_factor
         self.particle_class = self.consensus_class.copy()
-        for class_id in self.consensus_class:
-            angle = self.rng.uniform(0, 360)
+        self.particle_half = self.consensus_half.copy()
+        images, masks, masks_binned, truth_angle, phis = [], [], [], [], []
+        for class_id, prior_angle in zip(self.consensus_class, self.consensus_angle):
+            angle, shift = self._draw_pose()
             if class_id < 0:    # junk pick: nothing but noise at the noise level of a real particle
-                noisy = self.rng.normal(0.0, self.truths[0].std() / self.args.per_particle_snr, size=self.truths[0].shape)
+                noisy = self.rng.normal(0.0, self.truths[0].std() / args.per_particle_snr, size=self.truths[0].shape)
             else:
-                clean = rotate(self.truths[class_id], angle, reshape=False, order=1, mode='constant')
-                noisy = add_averaging_noise(clean, self.args.per_particle_snr, n_averaged=1, rng=self.rng)
-            self.particle_angles.append(angle)
-            self.particles.append(noisy)
-        self.particles = np.array(self.particles)
-        self.particle_angles = np.array(self.particle_angles)
+                clean = np.roll(rotate(self.truths[class_id], angle, reshape=False, order=1, mode='constant'), shift, axis=(0, 1))
+                noisy = add_averaging_noise(clean, args.per_particle_snr, n_averaged=1, rng=self.rng)
+            phi = 0.0 if self.prior is OrientationPrior.NONE or np.isnan(prior_angle) else float(np.degrees(prior_angle))   # wedge follows prior's frame
+            images.append(apply_wedge(noisy, wedge_keep(box, args.tilt_max_degrees, phi)))
+            masks.append(wedge_keep(box, args.tilt_max_degrees, phi))
+            masks_binned.append(wedge_keep(box // factor, args.tilt_max_degrees, phi))
+            truth_angle.append(angle)
+            phis.append(phi)
+        self.particles = np.array(images)
+        self.particle_masks = np.array(masks)
+        self.particle_masks_binned = np.array(masks_binned)
+        self.particle_truth_angle = np.array(truth_angle)
+        self.particle_phi = np.array(phis)
 
-    # -- stage 3: features per prior, whitened PCA, Leiden seed clusters ---------------
+    # _draw_pose: pose prior leaves unknown, normal an azimuth, axis a polarity flip and an axial shift, none a rotation and a small shift
+    def _draw_pose(self):
+        if self.prior is OrientationPrior.AXIS:
+            return float(self.rng.choice([0.0, 180.0])), (0, int(self.rng.integers(-5, 6)))
+        if self.prior is OrientationPrior.NONE:
+            return float(self.rng.uniform(0, 360)), tuple(int(v) for v in self.rng.integers(-2, 3, size=2))
+        return float(self.rng.uniform(0, 360)), (0, 0)
+
+    # -- stage 4: features per prior, whitened PCA and Leiden seeds, then polish, each half on its own -----
     def classify(self):
         args = self.args
         self.features = feature_matrix(self.particles, self.prior)
         self.standardised = standardise_columns(self.features)
-        config = ClusteringConfig(method=args.cluster_method, n_components=args.cluster_components, min_cluster_size=args.min_cluster_size, n_clusters=self.n_classes + 1, random_state=args.seed)
-        result = reduce_and_cluster(self.standardised, config)
-        self.pca_embedding = result.embedding
-        self.embedding = result.embedding[:, :2]
-        self.explained = result.explained_variance_ratio
-        self.seed_labels = self._order_clusters(result.labels)
-        self.cluster_labels = self.seed_labels
+        self.space = search_space(self.prior, max_shift=args.shift_range_px)
+        self.stacks = Stacks(self.particles, self.particle_masks, bin_stack(self.particles, args.bin_factor), self.particle_masks_binned, args.bin_factor)
+        polish_config = PolishConfig(args.n_polish_rounds, args.min_cluster_size, args.merge_fraction, args.reference_quantile, args.reject_quantile, args.seed)
+        self.halves = []
+        for half in (0, 1):
+            index = np.where(self.particle_half == half)[0]
+            clustering = ClusteringConfig(method=args.cluster_method, n_components=args.cluster_components, min_cluster_size=args.min_cluster_size, n_clusters=self.n_classes + 1, random_state=args.seed)
+            reduced = reduce_and_cluster(standardise_columns(self.features[index]), clustering)
+            polish = run_polish(self.stacks.take(index), reduced.embedding, reduced.labels, self.space, polish_config)
+            self.halves.append(SimpleNamespace(index=index, embedding=reduced.embedding, explained=reduced.explained_variance_ratio, seed_labels=reduced.labels, polish=polish))
+        if not all(h.polish.references for h in self.halves):
+            raise ValueError('polish kept no class in one half, raise --n-target or lower --reference-quantile')
+        # half B joins half A: one-to-one match by reference agreement, B poses expressed in the frame of A
+        self.pairs = match_halves(self.halves[0].polish.references, self.halves[1].polish.references, self.space, args.bin_factor)
+        labels = np.full(len(self.particles), -1)
+        labels[self.halves[0].index] = self.halves[0].polish.labels
+        b_to_a = {b: (a, angle, shift) for b, a, angle, shift, _cc in self.pairs}
+        for b_index, label in zip(self.halves[1].index, self.halves[1].polish.labels):
+            labels[b_index] = b_to_a[label][0] if label in b_to_a else -1
+        self.cluster_labels = self._order_clusters(labels)
+        self.cluster_map = {int(old): int(new) for old, new in zip(labels[labels >= 0], self.cluster_labels[labels >= 0])}
         self._summarise_clusters()
 
     # _summarise_clusters: cluster ids, dominant species and cluster that best represents target
@@ -196,17 +233,33 @@ class Walkthrough:
         remap = {old: new for new, old in enumerate(order)}
         return np.array([remap.get(l, -1) for l in labels])
 
-    # -- stage 4: class averages -------------------------------
+    # -- stage 5: class averages, every particle in frame of half A, wedge-weighted -------------
     def class_averages(self):
-        self.averages = {}
-        self.aligned = {}
-        self.class_counts = {}
-        for cluster_id in self.cluster_ids:
-            members = self.particles[self.cluster_labels == cluster_id]
-            aligned, average = iterative_average(members)
-            self.aligned[cluster_id] = aligned
-            self.averages[cluster_id] = average
-            self.class_counts[cluster_id] = len(members)
+        self.averages, self.aligned, self.class_counts, self.half_averages = {}, {}, {}, {}
+        self.polish_angle = np.zeros(len(self.particles))
+        a, b = self.halves
+        a_to_b = {ai: (bi, angle, shift) for bi, ai, angle, shift, _cc in self.pairs}
+        for old, new in self.cluster_map.items():
+            from_a = self._aligned(a, np.where(a.polish.labels == old)[0])
+            if old in a_to_b:
+                b_label, relative_angle, relative_shift = a_to_b[old]
+                from_b = self._aligned(b, np.where(b.polish.labels == b_label)[0], relative_angle, relative_shift)
+            else:
+                from_b = self._aligned(b, np.array([], dtype=int))
+            self.aligned[new] = np.concatenate([from_a[0], from_b[0]])
+            self.averages[new] = weighted_average(self.aligned[new], np.concatenate([from_a[1], from_b[1]]))
+            self.half_averages[new] = tuple(weighted_average(*frames) if len(frames[0]) else np.zeros_like(self.averages[new]) for frames in (from_a, from_b))
+            self.class_counts[new] = len(self.aligned[new])
+
+    # _aligned: selected members of a half in their reference frame, then moved into frame of half A by relative pose when given; records the pose angle per particle
+    def _aligned(self, half, sel, relative_angle: float = 0.0, relative_shift=(0, 0)):
+        polish, index = half.polish, half.index[sel]
+        images, masks = align_stack(self.particles[index], self.particle_masks[index], polish.angle[sel], polish.shift[sel])
+        if len(sel) and (relative_angle or any(relative_shift)):
+            images = np.array([apply_pose(image, relative_angle, tuple(relative_shift)) for image in images])
+            masks = np.fft.ifftshift(np.array([rotate(np.fft.fftshift(m), -relative_angle, reshape=False, order=0) for m in masks]), axes=(-2, -1))
+        self.polish_angle[index] = (polish.angle[sel] + relative_angle) % 360
+        return images, masks
 
     # -- stage 5: identification -----------------------------
     def identify(self):
@@ -263,12 +316,8 @@ class Walkthrough:
 
     # -- stage 7: refinement / FRC ------------------------
     def refine(self):
-        members = self.aligned[self.target_cluster]
-        half = len(members) // 2
-        shuffled = self.rng.permutation(members)
-        self.half_a = shuffled[:half].mean(axis=0)
-        self.half_b = shuffled[half:].mean(axis=0)
-        self.recovered = shuffled.mean(axis=0)
+        self.half_a, self.half_b = self.half_averages[self.target_cluster]
+        self.recovered = self.averages[self.target_cluster]
         self.frc_freq, self.frc_corr = fourier_ring_correlation(self.half_a, self.half_b)
         self.resolution = resolution_at_threshold(self.frc_freq, self.frc_corr, self.pixel_size)
 

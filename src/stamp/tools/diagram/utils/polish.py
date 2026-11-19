@@ -29,7 +29,7 @@ class PolishConfig:
     n_rounds: int = 2
     min_seed_size: int = 12
     merge_fraction: float = 1.0
-    null_sigmas: float = 3.0
+    reference_quantile: float = 0.99
     reject_quantile: float = 0.95
     seed: int = 0
 
@@ -48,7 +48,7 @@ class PolishResult:
     merged: list[tuple[int, int]]
     null_best: np.ndarray   # (n,) best correlation of each particle against phase-randomised references
     particle_bar: float     # null quantile below which a particle is rejected
-    reference_bar: float    # null bar a reference's median correlation must clear
+    reference_bar: float    # null quantile a reference's median correlation must clear
     reference_cc: list[float]
 
 # _ones: wedge masks that observe everything, for comparing two averages
@@ -106,6 +106,8 @@ def _phase_randomise(reference: np.ndarray, rng: np.random.Generator) -> np.ndar
 def run_polish(stacks: Stacks, embedding: np.ndarray, seed_labels: np.ndarray, space: SearchSpace, config: PolishConfig) -> PolishResult:
     rng = np.random.default_rng(config.seed)
     seeds = [k for k in np.unique(seed_labels) if k >= 0 and (seed_labels == k).sum() >= config.min_seed_size]
+    if not seeds:
+        raise ValueError(f'no seed cluster reached min_seed_size={config.min_seed_size}, raise the particle counts or lower --min-cluster-size')
     references = [_seed_reference(stacks.take(np.where(seed_labels == k)[0]), embedding[seed_labels == k], space) for k in seeds]
     seed_references = list(references)
     for _ in range(config.n_rounds):
@@ -134,7 +136,7 @@ def run_polish(stacks: Stacks, embedding: np.ndarray, seed_labels: np.ndarray, s
     null_refs = [_phase_randomise(reference, rng) for reference in references]
     null_best = align_to_references(stacks.binned, stacks.masks_binned, bin_stack(np.array(null_refs), stacks.factor), space).cc.max(axis=1)
     particle_bar = float(np.quantile(null_best, config.reject_quantile))
-    reference_bar = float(null_best.mean() + config.null_sigmas * null_best.std())
+    reference_bar = float(np.quantile(null_best, config.reference_quantile))     # 2D null has a heavy upper tail, so quantile stands in for actual standard-deviation bar
     labels = np.where(cc >= particle_bar, labels, -1)
     reference_cc = [float(np.median(cc[labels == k])) if (labels == k).any() else 0.0 for k in range(len(references))]
     for k, value in enumerate(reference_cc):

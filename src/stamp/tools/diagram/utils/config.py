@@ -28,23 +28,23 @@ class DiagramConfig:
     tilt_max_degrees: float = 60.0                # half-width of the tilt range, sets the missing wedge
     # scene composition
     n_vesicles: int = 14
-    n_target: int = 200
-    n_distractor: int = 160
-    n_extra: int = 70                             # particles per extra / unknown class
-    n_filaments: int = 14                         # filaments in the axis scene
+    n_target: int = 300
+    n_distractor: int = 240
+    n_extra: int = 100                            # particles per extra / unknown class
+    n_filaments: int = 26                         # filaments in the axis scene
     # pick
     max_surface_distance_a: float = 72.0          # Å; picks further than this from a surface stay unoriented (normal prior)
     max_beam_angle_deviation: float = 60.0        # picks tilted further than this from beam-orthogonal are dropped (normal prior)
     # classify
-    per_particle_snr: float = 0.3
+    per_particle_snr: float = 1.0
     cluster_components: int = 5
     cluster_method: str = 'leiden'                # 'leiden', 'kmeans' or 'hdbscan'
-    min_cluster_size: int = 12                    # smallest seed cluster that gets a reference
+    min_cluster_size: int = 10                    # smallest seed cluster that gets a reference
     n_polish_rounds: int = 2
     shift_range_px: int = 3                       # shift search half-width, working pixels
     bin_factor: int = 2                           # alignment runs on boxes binned by this factor
     merge_fraction: float = 1.0                   # fraction of the higher half-split ceiling two references must reach to merge
-    null_sigmas: float = 3.0                      # a reference must beat the phase-randomised null by this many null standard deviations
+    reference_quantile: float = 0.99              # null quantile a reference's median correlation must clear
     reject_quantile: float = 0.95                 # null quantile of the best correlation below which a particle is rejected
     # identify
     identify_min_cc: float = 0.72

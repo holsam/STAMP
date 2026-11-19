@@ -48,7 +48,8 @@ def align_to_references(particles: np.ndarray, masks: np.ndarray, references: np
     shift = np.zeros((n, n_ref, 2), dtype=np.int32)
     for start in range(0, n, chunk):
         batch = slice(start, min(start + chunk, n))
-        mask = masks[batch][:, None]
+        mask = masks[batch][:, None].copy()
+        mask[..., 0, 0] = 0.0   # mean carries no structure and would dominate correlation
         particle_f = (sfft.fft2(particles[batch] * soft)[:, None] * mask).astype(np.complex64)
         bank_f = bank[None] * mask
         norm = np.sqrt((np.abs(particle_f) ** 2).sum(axis=(-2, -1)) * (np.abs(bank_f) ** 2).sum(axis=(-2, -1))) + 1e-12
@@ -76,6 +77,8 @@ def weighted_average(aligned: np.ndarray, aligned_masks: np.ndarray) -> np.ndarr
 
 # align_stack: bring every particle into frame of one reference, returning aligned images and rotated wedge masks
 def align_stack(particles: np.ndarray, masks: np.ndarray, angles: np.ndarray, shifts: np.ndarray, factor: int = 1) -> tuple[np.ndarray, np.ndarray]:
+    if len(particles) == 0:
+        return particles.copy(), masks.copy()
     aligned = np.array([apply_pose(p, a, (dy * factor, dx * factor)) for p, a, (dy, dx) in zip(particles, angles, shifts)])
     shifted_masks = np.array([rotate(np.fft.fftshift(m), -a, reshape=False, order=0, mode='constant') for m, a in zip(masks, angles)])
     return aligned, np.fft.ifftshift(shifted_masks, axes=(-2, -1))

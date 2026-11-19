@@ -4,40 +4,10 @@ STAMP: 2D mocked functions for classify
 
 # Import external dependencies
 import numpy as np
-from scipy.ndimage import map_coordinates, rotate
+from scipy.ndimage import map_coordinates
 
 # Import internal STAMP objects
 from stamp.schemas.particles import OrientationPrior
-from stamp.tools.diagram.utils.identify import standardise
-
-# --- in-plane alignment before averaging ---
-# align_one: rigid rotation / shift search aligning one image onto a reference
-def align_one(image, reference, step: int = 12, max_shift: int = 2):
-    ref = standardise(reference.ravel())
-    shifts = range(-max_shift, max_shift + 1)
-    best_score, best = -np.inf, image
-    for angle in range(0, 360, step):
-        rotated = image if angle == 0 else rotate(image, angle, reshape=False, order=1, mode='constant')
-        for dy in shifts:
-            for dx in shifts:
-                candidate = np.roll(rotated, (dy, dx), axis=(0, 1))
-                score = float(np.dot(ref, standardise(candidate.ravel())) / ref.size)
-                if score > best_score:
-                    best_score, best = score, candidate
-    return best
-
-# align_stack: align every particle in a stack onto one reference
-def align_stack(particles, reference):
-    return np.array([align_one(p, reference) for p in particles])
-
-# iterative_average: alternate align-to-reference and re-average for a few passes
-def iterative_average(particles, passes: int = 3):
-    reference = particles[0]
-    aligned = particles
-    for _ in range(passes):
-        aligned = align_stack(particles, reference)
-        reference = aligned.mean(axis=0)
-    return aligned, reference
 
 # --- rotation-invariant particle features ---
 # radial_profile: mean intensity per radial bin, invariant to in-plane rotation
