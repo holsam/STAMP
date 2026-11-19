@@ -85,9 +85,24 @@ def plot_halfsets(run, ax):
         sel = w.consensus_half == half
         if sel.any():
             ax.scatter(w.consensus[sel, 0], w.consensus[sel, 1], s=24, c=colour, label=f'half {half + 1} (n={int(sel.sum())})')
-    if len(w.decoy_points):
-        ax.scatter(w.decoy_points[:, 0], w.decoy_points[:, 1], s=30, c='0.5', marker='x', label=f'decoys (n={len(w.decoy_points)})')
     frame(ax, w.field_px, 'half-set split (whole carrier -> one half)' if w.carriers else 'half-set split (per particle)')
+    ax.legend(fontsize=6, loc='upper right', framealpha=0.4)
+
+# plot_decoys: decoy positions in real tomogram, away from every real pick
+def plot_decoys(run, ax):
+    w = run.w
+    ax.imshow(w.raw_tomogram, cmap=GREY)
+    ax.scatter(w.consensus[:, 0], w.consensus[:, 1], s=16, c=GREEN, label=f'real picks (n={len(w.consensus)})')
+    ax.scatter(w.decoy_points[:, 0], w.decoy_points[:, 1], s=40, c=RED, marker='x', label=f'decoys (n={len(w.decoy_points)})')
+    frame(ax, w.field_px, f'decoy: {w.decoy_method}')
+    ax.legend(fontsize=6, loc='upper right', framealpha=0.4)
+
+# plot_noise_decoys: synthetic-noise decoys, sampled on shell of a noise-only volume
+def plot_noise_decoys(run, ax):
+    w = run.w
+    ax.imshow(w.noise_tile, cmap=GREY)
+    ax.scatter(w.noise_points[:, 0], w.noise_points[:, 1], s=40, c=RED, marker='x', label=f'decoys (n={len(w.noise_points)})')
+    frame(ax, w.noise_tile.shape[0], 'decoy: synthetic-noise (noise volume + membrane-like shell)')
     ax.legend(fontsize=6, loc='upper right', framealpha=0.4)
 
 # plot_final: the final consensus particle set on the tomogram
@@ -99,10 +114,10 @@ def plot_final(run, ax):
     frame(ax, w.field_px, f'final particle set on the tomogram (n={len(w.consensus)})')
 
 # --- drivers ---
-# _panels: ordered (filename stem, plot function) pairs for the pick walkthrough; the segmentation and filters only exist for the normal prior
+# _panels: ordered (filename stem, plot function) pairs for the pick walkthrough; the segmentation, filters and synthetic-noise decoys only exist for the normal prior (decoy/generate.SUPPORTED_PRIORS)
 def _panels(run) -> list:
     normal = run.w.prior is OrientationPrior.NORMAL
-    return [('raw_tomogram', plot_raw)] + ([('segmentation', plot_segmentation)] if normal else []) + [('picks_files', plot_files), ('orientation', plot_orientation), ('consensus', plot_consensus)] + ([('filters', plot_filters)] if normal else []) + [('halfsets', plot_halfsets), ('final_particles', plot_final)]
+    return [('raw_tomogram', plot_raw)] + ([('segmentation', plot_segmentation)] if normal else []) + [('picks_files', plot_files), ('orientation', plot_orientation), ('consensus', plot_consensus)] + ([('filters', plot_filters)] if normal else []) + [('halfsets', plot_halfsets), ('decoys', plot_decoys)] + ([('noise_decoys', plot_noise_decoys)] if normal else []) + [('final_particles', plot_final)]
 
 # save_panels: write each panel as its own numbered PNG
 def save_panels(run, outdir):
@@ -114,8 +129,9 @@ def save_panels(run, outdir):
 # save_storyboard: lay every pick panel out on one 00_pick_storyboard.png figure
 def save_storyboard(run, outdir):
     panels = _panels(run)
-    fig = plt.figure(figsize=(21, 12))
-    grid = fig.add_gridspec(2, 4, hspace=0.2, wspace=0.2)
+    rows = -(-len(panels) // 4)
+    fig = plt.figure(figsize=(21, 6 * rows))
+    grid = fig.add_gridspec(rows, 4, hspace=0.2, wspace=0.2)
     for index, (_name, fn) in enumerate(panels):
         fn(run, fig.add_subplot(grid[index // 4, index % 4]))
     finish(fig, outdir / '00_pick_storyboard.png')

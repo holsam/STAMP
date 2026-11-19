@@ -14,6 +14,7 @@ from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.carriers import carrier_of, make_carriers, place_on
 from stamp.tools.diagram.utils.classify import add_averaging_noise, feature_matrix, iterative_average, standardise_columns
 from stamp.tools.diagram.utils.config import DiagramConfig
+from stamp.tools.diagram.utils.decoy import random_volume_decoys, shifted_decoys, synthetic_noise_tile
 from stamp.tools.diagram.utils.identify import best_fit, fit_score, project_density, read_atom_coordinates, synthetic_truth
 from stamp.tools.diagram.utils.pick import beam_deviation, circular_mean, infer_orientations, reconcile, simulate_picks_file
 from stamp.tools.diagram.utils.refine import fourier_ring_correlation, resolution_at_threshold
@@ -131,7 +132,14 @@ class Walkthrough:
             self.consensus_half = np.array([carrier_half[o] for o in carrier_of(self.carriers, self.consensus)])
         else:
             self.consensus_half = self.decoy_rng.integers(2, size=len(self.consensus))
-        self.decoy_points = np.empty((0, 2))    # decoys arrive in 1.3
+        # decoys: the method `auto` resolves per prior (shifted for normal, random-volume for axis and none)
+        if self.prior is OrientationPrior.NORMAL:
+            self.decoy_method = 'shifted'
+            self.decoy_points = shifted_decoys(self.consensus, self.carriers, self.true_xy, self.field_px, box, self.decoy_rng)
+        else:
+            self.decoy_method = 'random-volume'
+            self.decoy_points = random_volume_decoys(len(self.consensus), self.true_xy, self.field_px, box, self.decoy_rng)
+        self.noise_tile, self.noise_points = synthetic_noise_tile(self.decoy_rng, max(4, len(self.consensus) // 2))
         self.consensus_norm = self.consensus / self.field_px if len(self.consensus) else self.consensus
 
     # -- stage 2: extract noisy subvolumes ---------------------------
