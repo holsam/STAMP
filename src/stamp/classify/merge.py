@@ -51,6 +51,7 @@ def half_split_ceilings(
     *,
     min_members: int = 8,
     seed: int = 0,
+    threads: int = 1,
 ) -> np.ndarray:
     side = np.random.default_rng(seed).integers(0, 2, len(labels))
     sums = {(k, s): WeightedAverage(box_voxels) for k in range(n_labels) for s in (0, 1)}
@@ -59,7 +60,7 @@ def half_split_ceilings(
         for (k, s), accumulator in sums.items():
             chosen = (labels[indices] == k) & (side[indices] == s)
             if chosen.any():
-                accumulator.add(volumes[chosen], wedges[chosen], rotations[indices[chosen]], shifts[indices[chosen]])
+                accumulator.add(volumes[chosen], wedges[chosen], rotations[indices[chosen]], shifts[indices[chosen]], threads=threads)
     out = np.full(n_labels, np.nan)
     for k in range(n_labels):
         if sums[k, 0].count + sums[k, 1].count >= min_members and sums[k, 0].count and sums[k, 1].count:

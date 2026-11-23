@@ -3,14 +3,16 @@ STAMP: dimensionality reduction and clustering of particle features
 '''
 
 # Import external dependencies
-import igraph, leidenalg, numpy as np
+import hashlib, igraph, leidenalg, numpy as np
 from dataclasses import dataclass
+from pathlib import Path
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.neighbors import kneighbors_graph
 
 # Import internal STAMP objects
 from stamp.schemas.particles import OrientationPrior
+from stamp.utils.checkpoint import atomic_save_npz
 from stamp.utils.log import log, log_config
 
 # NOISE_CLUSTER_ID: id for noise cluster
@@ -41,15 +43,21 @@ class ClusteringResult:
 
 # _leiden_labels: Leiden modularity communities on a symmetric kNN graph of the embedding, communities below min_cluster_size are noise (-1)
 def _leiden_labels(embedding: np.ndarray, config: ClusteringConfig) -> np.ndarray:
+    log.progress(f'Building {config.n_neighbors}-neighbour graph for {embedding.shape[0]} particles')
     adjacency = kneighbors_graph(embedding, min(config.n_neighbors, embedding.shape[0] - 1), mode='connectivity')
     symmetric = adjacency.maximum(adjacency.T).tocoo()
     graph = igraph.Graph(n=embedding.shape[0], edges=list(zip(symmetric.row.tolist(), symmetric.col.tolist())))
+    log.progress('Running Leiden partition')
     membership = np.array(leidenalg.find_partition(graph, leidenalg.RBConfigurationVertexPartition, resolution_parameter=config.resolution, seed=config.random_state).membership)
     membership[np.bincount(membership)[membership] < config.min_cluster_size] = -1
     labels = np.full_like(membership, -1)
     for new, old in enumerate(np.unique(membership[membership >= 0])):   # renumber so labels run 0..K-1
         labels[membership == old] = new
     return labels
+
+# _centroids: mean embedding of each non-noise label
+def _centroids(embedding: np.ndarray, labels: np.ndarray) -> dict[int, np.ndarray]:
+    return {int(label): embedding[labels == label].mean(axis=0) for label in np.unique(labels) if label != -1}
 
 # _cluster_embedding: run the configured clusterer on an embedding, return (labels, centroids)
 def _cluster_embedding(embedding: np.ndarray, config: ClusteringConfig) -> tuple[np.ndarray, dict[int, np.ndarray]]:
@@ -63,8 +71,7 @@ def _cluster_embedding(embedding: np.ndarray, config: ClusteringConfig) -> tuple
     else:
         n_clusters = min(config.n_clusters, embedding.shape[0])
         labels = KMeans(n_clusters=n_clusters, random_state=config.random_state, n_init=10).fit_predict(embedding)
-    centroids = {int(label): embedding[labels == label].mean(axis=0) for label in np.unique(labels) if label != -1}
-    return labels, centroids
+    return labels, _centroids(embedding, labels)
 
 # reduce_features: PCA of a feature matrix, return (embedding, explained variance ratio)
 def reduce_features(features: np.ndarray, config: ClusteringConfig) -> tuple[np.ndarray, np.ndarray]:
@@ -80,13 +87,35 @@ def reduce_features(features: np.ndarray, config: ClusteringConfig) -> tuple[np.
     return embedding, pca.explained_variance_ratio_
 
 
-# reduce_and_cluster: PCA followed by HDBSCAN, KMeans or Leiden
-def reduce_and_cluster(features: np.ndarray, config: ClusteringConfig) -> ClusteringResult:
+# _cache_key: identity of clustering input (feature shape and config plus a strided sample of rows)
+def _cache_key(features: np.ndarray, config: ClusteringConfig) -> str:
+    sample = np.ascontiguousarray(features[::max(1, len(features) // 1000)])
+    return hashlib.sha1(repr((features.shape, config)).encode() + sample.tobytes()).hexdigest()
+
+# _load_cached_clustering: result saved for input
+def _load_cached_clustering(cache: Path, key: str) -> ClusteringResult | None:
+    try:
+        with np.load(cache) as saved:
+            if str(saved['key']) != key:
+                return None
+            labels, embedding = saved['labels'], saved['embedding']
+            return ClusteringResult(labels=labels, embedding=embedding, explained_variance_ratio=saved['explained_variance_ratio'], centroids=_centroids(embedding, labels))
+    except (OSError, ValueError, KeyError):
+        return None
+
+# reduce_and_cluster: PCA followed by HDBSCAN, KMeans or Leiden, loaded from/saved to `cache` when given
+def reduce_and_cluster(features: np.ndarray, config: ClusteringConfig, *, cache: Path | None = None) -> ClusteringResult:
+    key = _cache_key(features, config) if cache is not None else ''
+    if cache is not None and (cached := _load_cached_clustering(cache, key)) is not None:
+        log.info(f'Resuming clustering from {cache.name}: {len(cached.centroids)} cluster(s)')
+        return cached
     embedding, explained_variance_ratio = reduce_features(features, config)
     log.progress(f'Starting {config.method} clustering')
     log_config(config.method, config)
     labels, centroids = _cluster_embedding(embedding, config)
     log.progress(f'Clustering complete: {len(set(labels) - {-1})} cluster(s), {int((labels == -1).sum())} noise')
+    if cache is not None:
+        atomic_save_npz(cache, key=np.array(key), labels=labels, embedding=embedding, explained_variance_ratio=explained_variance_ratio)
     return ClusteringResult(labels=labels, embedding=embedding, explained_variance_ratio=explained_variance_ratio, centroids=centroids)
 
 # label_to_cluster_id: turn a raw cluster label into a stable string id, prefixed by its orientation prior so classes of different priors never collide

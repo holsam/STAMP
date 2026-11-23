@@ -4,6 +4,7 @@ STAMP: polish step, seed references, reassignment, merging and null-based reject
 
 # Import external dependencies
 import numpy as np
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,23 +68,35 @@ def run_polish(store: ParticleStore, embedding: np.ndarray, seed_labels: np.ndar
         _save(checkpoint_dir, 'seeds', seed_labels, references)
     for round_number in range(first_round, config.n_polish_rounds):
         log.progress(f'Polish round {round_number + 1}/{config.n_polish_rounds}: {len(references)} reference(s)')
-        references = _polish_round(store, references, space, config)
+        scores_dir = None if checkpoint_dir is None else checkpoint_dir / f'scores_round{round_number}'
+        references = _polish_round(store, references, space, config, scores_dir)
         if not references:
             log.warning('No reference beat the phase-randomised null, every particle is rejected: the particles share no consistent structure at this resolution')
             return _rejected_everything(store, space)
         _save(checkpoint_dir, f'round{round_number}', seed_labels, references)
-    assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads), space)
+        if scores_dir is not None:
+            shutil.rmtree(scores_dir, ignore_errors=True)     # superseded by the round checkpoint
+    final_dir = None if checkpoint_dir is None else checkpoint_dir / 'scores_final'
+    log.progress('Scoring final assignment')
+    assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads, checkpoint_dir=final_dir, label='final assignment'), space)
+    log.progress('Estimating rejection threshold from the null')
     threshold = null_threshold(store, references, space, quantile=config.reject_quantile, seed=config.seed, threads=config.threads)
     log.debug(f'Rejection threshold from the null: {threshold:.3f}')
-    return _finalise(store, assignment, references, threshold, space, config)
+    result = _finalise(store, assignment, references, threshold, space, config)
+    if final_dir is not None:
+        shutil.rmtree(final_dir, ignore_errors=True)
+    return result
 
 # _polish_round: reassign every particle, rebuild references, drop those that do not beat the null and merge those that are the same structure; empty when none beats the null
-def _polish_round(store: ParticleStore, references: list[np.ndarray], space: SearchSpace, config: PolishConfig) -> list[np.ndarray]:
+def _polish_round(store: ParticleStore, references: list[np.ndarray], space: SearchSpace, config: PolishConfig, scores_dir: Path | None = None) -> list[np.ndarray]:
     box_voxels = store.volumes.box_voxels
-    assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads), space)
-    ceilings = half_split_ceilings(store.batches(), assignment.labels, assignment.rotations, assignment.shifts, space, len(references), box_voxels, seed=config.seed)
-    rebuilt = rebuild_references(store, assignment.labels, assignment.rotations, assignment.shifts, len(references))
+    assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads, checkpoint_dir=scores_dir, label='round scoring'), space)
+    log.progress('Estimating half-split ceilings')
+    ceilings = half_split_ceilings(store.batches(), assignment.labels, assignment.rotations, assignment.shifts, space, len(references), box_voxels, seed=config.seed, threads=config.threads)
+    log.progress(f'Rebuilding {len(references)} reference(s)')
+    rebuilt = rebuild_references(store, assignment.labels, assignment.rotations, assignment.shifts, len(references), threads=config.threads)
     counts = np.bincount(assignment.labels, minlength=len(references))
+    log.progress('Estimating null bar')
     bar = null_bar(store, references[int(counts.argmax())], space, max(int(np.median(counts[counts > 0])), 8), sigmas=config.null_sigmas, seed=config.seed, threads=config.threads)
     keep = [k for k, reference in enumerate(rebuilt) if reference is not None and ceilings[k] >= bar]
     log.debug(f'Null bar {bar:.3f}: kept {len(keep)} of {len(references)} reference(s)')
@@ -92,9 +105,10 @@ def _polish_round(store: ParticleStore, references: list[np.ndarray], space: Sea
     kept = [rebuilt[k] for k in keep]
     if len(kept) == 1:
         return kept
+    log.progress(f'Merging {len(kept)} reference(s)')
     similarity, poses = pairwise_similarity(kept, space, threads=config.threads)
     groups = merge_groups(similarity, pair_thresholds(ceilings[keep], config.merge_fraction))
-    return _merge_references(store, assignment, keep, kept, groups, poses, space)
+    return _merge_references(store, assignment, keep, kept, groups, poses, space, config)
 
 # _rejected_everything: the outcome when no reference survives the null, which is the expected result for a decoy
 def _rejected_everything(store: ParticleStore, space: SearchSpace) -> PolishResult:
@@ -102,7 +116,7 @@ def _rejected_everything(store: ParticleStore, space: SearchSpace) -> PolishResu
     return PolishResult(np.full(n, -1), np.zeros(n, dtype=np.float32), np.zeros(n, dtype=np.float32), np.tile(np.eye(3), (n, 1, 1)), np.zeros((n, 3), dtype=np.int64), np.ones(n, dtype=np.int8), [], np.zeros(0), space)
 
 # _merge_references: one reference per merge group, built from every member at its pose composed with the pose of its old reference against the group's largest reference
-def _merge_references(store: ParticleStore, assignment: Assignment, keep: list[int], kept: list[np.ndarray], groups: np.ndarray, poses, space: SearchSpace) -> list[np.ndarray]:
+def _merge_references(store: ParticleStore, assignment: Assignment, keep: list[int], kept: list[np.ndarray], groups: np.ndarray, poses, space: SearchSpace, config: PolishConfig) -> list[np.ndarray]:
     labels = np.full(len(store), -1)
     rotations, shifts = assignment.rotations.copy(), assignment.shifts.astype(float)
     sizes = np.array([(assignment.labels == k).sum() for k in keep])
@@ -116,7 +130,7 @@ def _merge_references(store: ParticleStore, assignment: Assignment, keep: list[i
                 relative_rotation, relative_shift = poses[anchor][position]    # old reference onto the anchor
                 shifts[chosen] = np.einsum('nij,j->ni', rotations[chosen], relative_shift) + shifts[chosen]
                 rotations[chosen] = rotations[chosen] @ relative_rotation
-    return [reference for reference in rebuild_references(store, labels, rotations, shifts, len(np.unique(groups))) if reference is not None]
+    return [reference for reference in rebuild_references(store, labels, rotations, shifts, len(np.unique(groups)), threads=config.threads) if reference is not None]
 
 # _finalise: reject particles below the null threshold, renumber the surviving references and measure their half-split agreement
 def _finalise(store: ParticleStore, assignment: Assignment, references: list[np.ndarray], threshold: float, space: SearchSpace, config: PolishConfig) -> PolishResult:
@@ -126,7 +140,7 @@ def _finalise(store: ParticleStore, assignment: Assignment, references: list[np.
     for new, old in enumerate(used):
         renumbered[labels == old] = new
     flipped = (assignment.rotations[:, 2, 2] < 0) & (space.prior is OrientationPrior.AXIS)  # a filament pose that sends +z to -z carries the polarity flip, other priors have no polarity
-    ceilings = half_split_ceilings(store.batches(), renumbered, assignment.rotations, assignment.shifts, space, len(used), store.volumes.box_voxels, seed=config.seed)
+    ceilings = half_split_ceilings(store.batches(), renumbered, assignment.rotations, assignment.shifts, space, len(used), store.volumes.box_voxels, seed=config.seed, threads=config.threads)
     return PolishResult(renumbered, assignment.cc, assignment.margin, assignment.rotations, assignment.shifts, np.where(flipped, -1, 1).astype(np.int8), [references[k] for k in used], ceilings, space)
 
 # _save: checkpoint the references after a stage together with the seeds they derive from
@@ -151,7 +165,7 @@ def _resume(checkpoint_dir: Path | None, seed_labels: np.ndarray, config: Polish
     return None, 0
 
 # posed_class_averages: coverage-corrected average per cluster id from particles at their polish poses
-def posed_class_averages(store: ParticleStore, labels: np.ndarray, rotations: np.ndarray, shifts: np.ndarray, prior: OrientationPrior) -> dict[str, tuple[np.ndarray, int]]:
+def posed_class_averages(store: ParticleStore, labels: np.ndarray, rotations: np.ndarray, shifts: np.ndarray, prior: OrientationPrior, *, threads: int = 1) -> dict[str, tuple[np.ndarray, int]]:
     n_labels = int(labels.max()) + 1 if (labels >= 0).any() else 0
-    averages = rebuild_references(store, labels, rotations, shifts, n_labels, min_members=1)
+    averages = rebuild_references(store, labels, rotations, shifts, n_labels, min_members=1, threads=threads)
     return {label_to_cluster_id(k, prior): (average, int((labels == k).sum())) for k, average in enumerate(averages) if average is not None}

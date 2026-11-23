@@ -51,10 +51,10 @@ def classify_combined(
     working_voxels = working_box(settings.box_voxels, settings.bin_factor)
     tilt = (settings.tilt_max_degrees, settings.tilt_axis_degrees)
     voxel_size_angstrom = settings.voxel_size_angstrom
-    seeds = reduce_and_cluster(features, settings.clustering)
+    seeds = reduce_and_cluster(features, settings.clustering, cache=work_dir / 'clustering' / 'combined.npz')
     (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
+    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working', n_workers=settings.n_workers)
     outcome = run_polish(store, seeds.embedding, seeds.labels, polish_config, checkpoint_dir=work_dir / 'polish')
     cluster_ids = [label_to_cluster_id(int(label), polish_config.prior) for label in outcome.labels]
     _report_clusters(cluster_ids, seeds.explained_variance_ratio)
@@ -64,9 +64,11 @@ def classify_combined(
     for half_set, half_indices in half_set_indices(particles).items():
         if not half_indices:
             continue
-        averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale, polish_config.prior)
+        log.progress(f'Building class averages for half {half_set.value}')
+        averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale, polish_config.prior, threads=settings.n_workers)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_set.value)
         averages_by_half[half_set.value] = averages
+    log.progress(f'Writing {len(particles)} assignments')
     assignments = [
         _pose_assignment(particle, cluster_id, 'stamp-polish-classifier', polish_config.prior, outcome.rotations[index], outcome.shifts[index] * scale, float(outcome.cc[index]), float(outcome.margin[index]), int(outcome.polarity[index]))
         for index, (particle, cluster_id) in enumerate(zip(particles, cluster_ids))
@@ -89,10 +91,13 @@ def classify_strict(
     members = {half.value: indices for half, indices in half_set_indices(list(particles)).items()}
     if not members['A'] or not members['B']:
         raise StampPipelineError('Strict mode needs particles in both half-sets')
-    seeds = {half: reduce_and_cluster(features[indices], settings.clustering) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
+    seeds = {}
+    for half, indices in members.items():
+        log.progress(f'Seeding half {half}: {len(indices)} particle(s)')
+        seeds[half] = reduce_and_cluster(features[indices], settings.clustering, cache=work_dir / 'clustering' / f'half{half}.npz')     # one PCA per half, so nothing in half A depends on half B
     (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
+    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working', n_workers=settings.n_workers)
     results, matches = run_polish_by_half(store, members, {h: seeds[h].embedding for h in members}, {h: seeds[h].labels for h in members}, polish_config, checkpoint_dir=work_dir / 'polish')
     for label_b, match in sorted(matches.items()):
         log.debug(f'Cross-half cluster matching (B -> A, by reference): c{label_b:02d} -> c{match.label_a:02d}  similarity={match.similarity:.3f}')
@@ -108,9 +113,11 @@ def classify_strict(
     assignments: list[ClassAssignment] = []
     averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
     for half, indices in members.items():
-        averages = posed_class_averages(full.take(indices), labels[half], poses[half][0], poses[half][1] * scale, polish_config.prior)
+        log.progress(f'Building class averages for half {half}')
+        averages = posed_class_averages(full.take(indices), labels[half], poses[half][0], poses[half][1] * scale, polish_config.prior, threads=settings.n_workers)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half)
         averages_by_half[half] = averages
+        log.progress(f'Writing {len(indices)} half {half} assignments')
         result = results[half]
         for local, index in enumerate(indices):
             cluster_id = label_to_cluster_id(int(labels[half][local]), polish_config.prior)

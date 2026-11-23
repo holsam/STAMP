@@ -24,7 +24,7 @@ from stamp.classify.merge import half_split_ceilings, merge_groups, pair_thresho
 from stamp.classify.null import null_bar, null_threshold
 from stamp.classify.polish import PolishConfig, run_polish
 from stamp.classify.prepare import fourier_bin, normalise, prepare_particle, soft_mask, working_box
-from stamp.classify.references import hard_assign, rebuild_references, score_against_refs
+from stamp.classify.references import align_store, hard_assign, rebuild_references, score_against_refs
 from stamp.classify.search import rotated_bank, search_space
 from stamp.classify.shfeatures import build_sh_feature_matrix, sh_power
 from stamp.classify.spherical import fit_matrix, lm_pairs, real_sh_basis, sphere_grid
@@ -262,6 +262,27 @@ class TestCluster:
         seeded = labels >= 0
         purity = sum(np.bincount(data.labels[labels == k]).max() for k in np.unique(labels[seeded])) / seeded.sum()
         assert seeded.mean() > 0.8 and purity >= 0.9
+
+    # test_reduce_and_cluster_cache: a second call with the same input loads from the cache, a changed config recomputes
+    def test_reduce_and_cluster_cache(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        features = _three_blobs()
+        config = ClusteringConfig(method='kmeans', n_components=2, n_clusters=3)
+        cache = tmp_path / 'clustering' / 'combined.npz'
+        first = reduce_and_cluster(features, config, cache=cache)
+        monkeypatch.setattr('stamp.classify.cluster._cluster_embedding', lambda *args, **kwargs: pytest.fail('clustered again'))
+        again = reduce_and_cluster(features, config, cache=cache)
+        assert np.array_equal(first.labels, again.labels) and np.allclose(first.embedding, again.embedding)
+        assert first.centroids.keys() == again.centroids.keys()
+        monkeypatch.undo()
+        changed = reduce_and_cluster(features, ClusteringConfig(method='kmeans', n_components=2, n_clusters=2), cache=cache)
+        assert len(changed.centroids) == 2
+
+    # test_reduce_and_cluster_cache_ignores_corrupt_file: a truncated cache is recomputed, not trusted
+    def test_reduce_and_cluster_cache_ignores_corrupt_file(self, tmp_path: Path) -> None:
+        cache = tmp_path / 'c.npz'
+        cache.write_bytes(b'not an npz')
+        result = reduce_and_cluster(_three_blobs(), ClusteringConfig(method='kmeans', n_components=2, n_clusters=3), cache=cache)
+        assert len(result.centroids) == 3
 
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
@@ -710,6 +731,18 @@ class TestMatch:
         assert np.median(error) <= 5.0 and np.percentile(error, 90) <= 10.0
         assert (result.shift == shifts).all(axis=1).mean() > 0.9
 
+    # test_align_to_reference_threads_match_serial: threading changes nothing about the poses found
+    def test_align_to_reference_threads_match_serial(self, tmp_path: Path) -> None:
+        reference = asymmetric_object(_REF_BOX, 1)
+        data = synthetic_set(tmp_path, [reference], OrientationPrior.NORMAL, 30, seed=6)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        volumes, wedges = data.store.load(list(range(len(data.store))))
+        serial = align_to_reference(volumes, wedges, reference, space)
+        threaded = align_to_reference(volumes, wedges, reference, space, threads=4)
+        assert np.array_equal(serial.rotation_index, threaded.rotation_index)
+        assert np.array_equal(serial.shift, threaded.shift)
+        assert np.allclose(serial.cc, threaded.cc)
+
     # test_axis_prior_recovers_azimuth_polarity_and_shift: rods with random polarity and axial offsets
     def test_axis_prior_recovers_azimuth_polarity_and_shift(self) -> None:
         rng = np.random.default_rng(4)
@@ -772,6 +805,15 @@ class TestMerge:
         right = half_split_ceilings(data.store.batches(), labels, data.rotations, data.shifts, space, 1, _REF_BOX)[0]
         wrong = half_split_ceilings(data.store.batches(), labels, scrambled, data.shifts, space, 1, _REF_BOX)[0]
         assert right > 0.8 and wrong < right
+
+    # test_ceiling_threads_match_serial: half-split agreement is the same threaded
+    def test_ceiling_threads_match_serial(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path, [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 40, seed=4)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        labels = np.zeros(len(data.labels), dtype=int)
+        serial = half_split_ceilings(data.store.batches(), labels, data.rotations, data.shifts, space, 1, _REF_BOX)
+        threaded = half_split_ceilings(data.store.batches(), labels, data.rotations, data.shifts, space, 1, _REF_BOX, threads=4)
+        assert np.allclose(serial, threaded, rtol=1e-4)
 
     # test_null_is_below_real_signal: real particles beat the rejection threshold and the agreement bar is below a real pure label's ceiling
     def test_null_is_below_real_signal(self, tmp_path: Path) -> None:
@@ -882,6 +924,29 @@ class TestReferences:
         assert store.volumes.box_voxels == 23 and len(store) == 4
         assert np.allclose(store.volumes[2], prepare_particle(raw[2], 23), atol=1e-5)
 
+    # test_build_store_parallel_matches_serial: two workers give the same prepared volumes as one, across several tomograms
+    def test_build_store_parallel_matches_serial(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path / 'data', [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 12, seed=1)
+        source = data.store.volumes
+        serial = build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'serial')
+        parallel = build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'parallel', n_workers=2)
+        assert len(serial) == len(parallel) == len(source)
+        for i in range(len(source)):
+            assert np.array_equal(serial.volumes[i], parallel.volumes[i])
+
+    # test_build_store_resumes: a second call prepares nothing, and a stray partial file does not stop a rebuild
+    def test_build_store_resumes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        data = synthetic_set(tmp_path / 'data', [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 8, seed=2)
+        source = data.store.volumes
+        first = build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'prepared')
+        monkeypatch.setattr('stamp.classify.store.prepare_particle', lambda *args, **kwargs: pytest.fail('prepared again'))
+        build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'prepared')
+        monkeypatch.undo()
+        (tmp_path / 'prepared' / 't0.npy').unlink()
+        (tmp_path / 'prepared' / 't0.npy.partial').write_bytes(b'junk')
+        rebuilt = build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'prepared')
+        assert all(np.array_equal(first.volumes[i], rebuilt.volumes[i]) for i in range(len(first)))
+
     # test_scoring_against_true_objects_recovers_classes: assignment against the generating objects labels particles correctly
     def test_scoring_against_true_objects_recovers_classes(self, tmp_path: Path) -> None:
         objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
@@ -898,6 +963,61 @@ class TestReferences:
         rebuilt = rebuild_references(data.store, data.labels, data.rotations, data.shifts, 2)
         for reference, truth in zip(rebuilt, objects):
             assert float((reference * truth).sum() / np.linalg.norm(reference) / np.linalg.norm(truth)) > 0.9
+
+    # test_rebuild_threads_match_serial: partial sums agree with the serial sum to float tolerance
+    def test_rebuild_threads_match_serial(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NONE, 25, noise_sigma=0.05, seed=3)
+        serial = rebuild_references(data.store, data.labels, data.rotations, data.shifts, 2)
+        threaded = rebuild_references(data.store, data.labels, data.rotations, data.shifts, 2, threads=4)
+        for a, b in zip(serial, threaded):
+            assert np.allclose(a, b, rtol=1e-4, atol=1e-5)
+
+    # test_batch_indices_match_iter_batches: the index-only iterator splits exactly as the reading one
+    def test_batch_indices_match_iter_batches(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path, [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 10, seed=1)
+        assert list(data.store.volumes.batch_indices(4)) == [indices for indices, _ in data.store.volumes.iter_batches(4)]
+
+    # test_align_store_resumes: a finished checkpoint is reused without aligning, a different reference ignores it
+    def test_align_store_resumes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        reference = asymmetric_object(_REF_BOX, 1)
+        data = synthetic_set(tmp_path / 'data', [reference], OrientationPrior.NORMAL, 20, seed=2)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        checkpoint = tmp_path / 'scores' / 'ref00.npz'
+        first = align_store(data.store, reference, space, batch_size=8, checkpoint=checkpoint)
+        monkeypatch.setattr('stamp.classify.references.align_to_reference', lambda *args, **kwargs: pytest.fail('aligned again'))
+        again = align_store(data.store, reference, space, batch_size=8, checkpoint=checkpoint)
+        assert np.array_equal(first.rotation_index, again.rotation_index) and np.allclose(first.cc, again.cc)
+        monkeypatch.undo()
+        other = align_store(data.store, asymmetric_object(_REF_BOX, 2), space, batch_size=8, checkpoint=checkpoint)    # digest differs, so recomputed
+        assert not np.allclose(first.cc, other.cc)
+
+    # test_align_store_partial_resume: only batches missing from the done mask are aligned
+    def test_align_store_partial_resume(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        reference = asymmetric_object(_REF_BOX, 1)
+        data = synthetic_set(tmp_path / 'data', [reference], OrientationPrior.NORMAL, 20, seed=3)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        checkpoint = tmp_path / 'ref00.npz'
+        full = align_store(data.store, reference, space, batch_size=8, checkpoint=checkpoint)
+        with np.load(checkpoint) as saved:
+            arrays = {key: saved[key] for key in saved.files}
+        last = list(data.store.volumes.batch_indices(8))[-1]
+        arrays['done'][last] = False
+        np.savez(checkpoint, **arrays)
+        real = align_to_reference
+        calls = []
+        monkeypatch.setattr('stamp.classify.references.align_to_reference', lambda *args, **kwargs: calls.append(1) or real(*args, **kwargs))
+        resumed = align_store(data.store, reference, space, batch_size=8, checkpoint=checkpoint)
+        assert len(calls) == 1 and np.array_equal(full.rotation_index, resumed.rotation_index)
+
+    # test_score_against_refs_checkpoints_per_reference: one file per reference is written
+    def test_score_against_refs_checkpoints_per_reference(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path / 'data', objects, OrientationPrior.NORMAL, 10, seed=4)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        scores = score_against_refs(data.store, objects, space, checkpoint_dir=tmp_path / 'scores')
+        assert sorted(path.name for path in (tmp_path / 'scores').glob('*.npz')) == ['ref00.npz', 'ref01.npz']
+        assert scores.cc.shape == (2, len(data.store))
 
 # TestSearch: class containing unit tests for per-prior alignment search space
 class TestSearch:

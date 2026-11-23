@@ -26,6 +26,7 @@ class HalfMatch:
 def match_halves(result_a: PolishResult, result_b: PolishResult, merge_fraction: float, *, threads: int = 1) -> dict[int, HalfMatch]:
     if not result_a.references or not result_b.references:
         return {}   # a half with no surviving cluster has nothing to match
+    log.progress(f'Matching {len(result_b.references)} half-B reference(s) to {len(result_a.references)} half-A reference(s)')
     space = result_a.space
     stack = np.stack(result_b.references)
     full = np.ones_like(stack)

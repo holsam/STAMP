@@ -4,12 +4,14 @@ STAMP: class averages from subvolumes
 
 # Import external dependencies
 import numpy as np
+import scipy.fft as sfft
 from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.classify.frames import rotate_density
 from stamp.utils.mrc import write_class_average_mrc
 from stamp.utils.log import log
+from stamp.utils.parallel import thread_map
 
 # write_class_averages: write each class average as an MRC with its voxel size set
 def write_class_averages(
@@ -35,12 +37,20 @@ class WeightedAverage:
         self.coverage = np.zeros((box_voxels,) * 3)
         self.count = 0
 
-    # add: undo each particle's shift and rotation, then accumulate its spectrum and rotated wedge
-    def add(self, particles: np.ndarray, wedges: np.ndarray, rotations: np.ndarray, shifts: np.ndarray) -> None:
-        for particle, wedge, rotation, shift in zip(particles, wedges, rotations, shifts):
-            aligned = rotate_density(np.roll(particle, -np.round(shift).astype(int), axis=(0, 1, 2)), rotation.T)
-            self.total += np.fft.fftshift(np.fft.fftn(aligned))
-            self.coverage += rotate_density(np.fft.fftshift(wedge), rotation.T)   # fftshift puts the Fourier origin on the voxel the rotation turns about
+    # add: undo each particle's shift and rotation, then accumulate its spectrum and rotated wedge, with threads each summing a slice of the batch before the partial sums are combined
+    def add(self, particles: np.ndarray, wedges: np.ndarray, rotations: np.ndarray, shifts: np.ndarray, *, threads: int = 1) -> None:
+        # _slice: partial sums over some of the batch, so no two threads touch the same array
+        def _slice(indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            total = np.zeros_like(self.total)
+            coverage = np.zeros_like(self.coverage)
+            for i in indices:
+                aligned = rotate_density(np.roll(particles[i], -np.round(shifts[i]).astype(int), axis=(0, 1, 2)), rotations[i].T)
+                total += np.fft.fftshift(sfft.fftn(aligned))
+                coverage += rotate_density(np.fft.fftshift(wedges[i]), rotations[i].T)   # fftshift puts the Fourier origin on the voxel the rotation turns about
+            return total, coverage
+        for total, coverage in thread_map(_slice, np.array_split(np.arange(len(particles)), max(threads, 1)), threads):
+            self.total += total
+            self.coverage += coverage
         self.count += len(particles)
 
     # result: coverage-corrected average, unobserved directions are filled by particles
@@ -49,7 +59,7 @@ class WeightedAverage:
         return average.astype(np.float32)
 
 # weighted_average: coverage-corrected average of aligned particles in one call
-def weighted_average(particles: np.ndarray, wedges: np.ndarray, rotations: np.ndarray, shifts: np.ndarray, *, eps: float = 0.05) -> np.ndarray:
+def weighted_average(particles: np.ndarray, wedges: np.ndarray, rotations: np.ndarray, shifts: np.ndarray, *, eps: float = 0.05, threads: int = 1) -> np.ndarray:
     accumulator = WeightedAverage(particles.shape[1])
-    accumulator.add(particles, wedges, rotations, shifts)
+    accumulator.add(particles, wedges, rotations, shifts, threads=threads)
     return accumulator.result(eps=eps)

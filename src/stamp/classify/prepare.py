@@ -4,6 +4,7 @@ STAMP: normalisation, soft masking and Fourier binning of subvolumes for alignme
 
 # Import external dependencies
 import numpy as np
+from functools import cache
 
 # radius_grid: distance of every voxel of a box from its centre
 def radius_grid(box_voxels: int) -> np.ndarray:
@@ -11,10 +12,13 @@ def radius_grid(box_voxels: int) -> np.ndarray:
     x, y, z = np.meshgrid(axis, axis, axis, indexing='ij')
     return np.sqrt(x * x + y * y + z * z)
 
+@cache
 # soft_mask: sphere of 1 inside radius_voxels with a cosine fall to 0 over edge_voxels
 def soft_mask(box_voxels: int, radius_voxels: float, edge_voxels: float = 3.0) -> np.ndarray:
     ramp = np.clip((radius_grid(box_voxels) - radius_voxels) / edge_voxels, 0.0, 1.0)
-    return (0.5 * (1.0 + np.cos(np.pi * ramp))).astype(np.float32)
+    mask = (0.5 * (1.0 + np.cos(np.pi * ramp))).astype(np.float32)
+    mask.flags.writeable = False
+    return mask
 
 # normalise: zero mean and unit variance, with statistics from the voxels where mask > 0.5
 def normalise(volume: np.ndarray, mask: np.ndarray) -> np.ndarray:

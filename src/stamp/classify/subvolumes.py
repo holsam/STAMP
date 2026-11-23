@@ -65,27 +65,8 @@ class Subvolumes:
                 rows = [self.index[i][1] for i in chunk]
                 yield chunk, np.asarray(mmap[rows])
 
-    # write_rolled: persist (global_index, subvolume) pairs to a new per-tomogram cache via preallocated memmaps, return the resulting store
-    def write_rolled(self, rolled: Iterator[tuple[int, np.ndarray]], new_cache_dir: Path, *, box_voxels: int | None = None) -> 'Subvolumes':
-        new_cache_dir.mkdir(parents=True, exist_ok=True)
-        row_counts: dict[str, int] = {}
-        new_index: list[tuple[str, int]] = []
-        for tomogram_id, _row in self.index:
-            new_index.append((tomogram_id, row_counts.get(tomogram_id, 0)))
-            row_counts[tomogram_id] = row_counts.get(tomogram_id, 0) + 1
-        new_box_voxels = box_voxels or self.box_voxels
-        shape = (new_box_voxels,) * 3
-        outputs: dict[str, np.ndarray] = {}
-        written = 0
-        for global_index, subvolume in rolled:
-            tomogram_id, row = new_index[global_index]
-            if tomogram_id not in outputs:
-                if len(outputs) >= _MAX_OPEN_MMAPS:  # flush and close the oldest to bound open handles
-                    outputs.pop(next(iter(outputs))).flush()
-                outputs[tomogram_id] = np.lib.format.open_memmap(new_cache_dir / f'{tomogram_id}.npy', mode='r+' if (new_cache_dir / f'{tomogram_id}.npy').exists() else 'w+', dtype=np.float32, shape=(row_counts[tomogram_id], *shape))
-            outputs[tomogram_id][row] = subvolume
-            written += 1
-        for output in outputs.values():
-            output.flush()
-        assert written == len(self.index)  # every particle must be rolled exactly once
-        return Subvolumes(new_cache_dir, new_index, new_box_voxels)
+    # batch_indices: index chunks which would be read by iter_batches, without reading them, so callers can skip batches
+    def batch_indices(self, batch_size: int = 512) -> Iterator[list[int]]:
+        for local_indices in self.indices_by_tomogram().values():
+            for start in range(0, len(local_indices), batch_size):
+                yield local_indices[start:start + batch_size]
