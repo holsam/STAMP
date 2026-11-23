@@ -263,6 +263,27 @@ class TestCluster:
         purity = sum(np.bincount(data.labels[labels == k]).max() for k in np.unique(labels[seeded])) / seeded.sum()
         assert seeded.mean() > 0.8 and purity >= 0.9
 
+    # test_reduce_and_cluster_cache: a second call with the same input loads from the cache, a changed config recomputes
+    def test_reduce_and_cluster_cache(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        features = _three_blobs()
+        config = ClusteringConfig(method='kmeans', n_components=2, n_clusters=3)
+        cache = tmp_path / 'clustering' / 'combined.npz'
+        first = reduce_and_cluster(features, config, cache=cache)
+        monkeypatch.setattr('stamp.classify.cluster._cluster_embedding', lambda *args, **kwargs: pytest.fail('clustered again'))
+        again = reduce_and_cluster(features, config, cache=cache)
+        assert np.array_equal(first.labels, again.labels) and np.allclose(first.embedding, again.embedding)
+        assert first.centroids.keys() == again.centroids.keys()
+        monkeypatch.undo()
+        changed = reduce_and_cluster(features, ClusteringConfig(method='kmeans', n_components=2, n_clusters=2), cache=cache)
+        assert len(changed.centroids) == 2
+
+    # test_reduce_and_cluster_cache_ignores_corrupt_file: a truncated cache is recomputed, not trusted
+    def test_reduce_and_cluster_cache_ignores_corrupt_file(self, tmp_path: Path) -> None:
+        cache = tmp_path / 'c.npz'
+        cache.write_bytes(b'not an npz')
+        result = reduce_and_cluster(_three_blobs(), ClusteringConfig(method='kmeans', n_components=2, n_clusters=3), cache=cache)
+        assert len(result.centroids) == 3
+
 # TestExtract: class containing unit tests for src/stamp/classify/extract.py
 class TestExtract:
     def test_identity_quaternion_gives_identity_matrix(self) -> None:

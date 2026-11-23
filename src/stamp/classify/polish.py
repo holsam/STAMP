@@ -77,7 +77,9 @@ def run_polish(store: ParticleStore, embedding: np.ndarray, seed_labels: np.ndar
         if scores_dir is not None:
             shutil.rmtree(scores_dir, ignore_errors=True)     # superseded by the round checkpoint
     final_dir = None if checkpoint_dir is None else checkpoint_dir / 'scores_final'
+    log.progress('Scoring final assignment')
     assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads, checkpoint_dir=final_dir, label='final assignment'), space)
+    log.progress('Estimating rejection threshold from the null')
     threshold = null_threshold(store, references, space, quantile=config.reject_quantile, seed=config.seed, threads=config.threads)
     log.debug(f'Rejection threshold from the null: {threshold:.3f}')
     result = _finalise(store, assignment, references, threshold, space, config)
@@ -89,9 +91,12 @@ def run_polish(store: ParticleStore, embedding: np.ndarray, seed_labels: np.ndar
 def _polish_round(store: ParticleStore, references: list[np.ndarray], space: SearchSpace, config: PolishConfig, scores_dir: Path | None = None) -> list[np.ndarray]:
     box_voxels = store.volumes.box_voxels
     assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads, checkpoint_dir=scores_dir, label='round scoring'), space)
+    log.progress('Estimating half-split ceilings')
     ceilings = half_split_ceilings(store.batches(), assignment.labels, assignment.rotations, assignment.shifts, space, len(references), box_voxels, seed=config.seed, threads=config.threads)
+    log.progress(f'Rebuilding {len(references)} reference(s)')
     rebuilt = rebuild_references(store, assignment.labels, assignment.rotations, assignment.shifts, len(references), threads=config.threads)
     counts = np.bincount(assignment.labels, minlength=len(references))
+    log.progress('Estimating null bar')
     bar = null_bar(store, references[int(counts.argmax())], space, max(int(np.median(counts[counts > 0])), 8), sigmas=config.null_sigmas, seed=config.seed, threads=config.threads)
     keep = [k for k, reference in enumerate(rebuilt) if reference is not None and ceilings[k] >= bar]
     log.debug(f'Null bar {bar:.3f}: kept {len(keep)} of {len(references)} reference(s)')
@@ -100,6 +105,7 @@ def _polish_round(store: ParticleStore, references: list[np.ndarray], space: Sea
     kept = [rebuilt[k] for k in keep]
     if len(kept) == 1:
         return kept
+    log.progress(f'Merging {len(kept)} reference(s)')
     similarity, poses = pairwise_similarity(kept, space, threads=config.threads)
     groups = merge_groups(similarity, pair_thresholds(ceilings[keep], config.merge_fraction))
     return _merge_references(store, assignment, keep, kept, groups, poses, space, config)
