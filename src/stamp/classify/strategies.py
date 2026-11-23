@@ -64,7 +64,7 @@ def classify_combined(
     for half_set, half_indices in half_set_indices(particles).items():
         if not half_indices:
             continue
-        averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale, polish_config.prior)
+        averages = posed_class_averages(full.take(half_indices), outcome.labels[half_indices], outcome.rotations[half_indices], outcome.shifts[half_indices] * scale, polish_config.prior, threads=settings.n_workers)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half_set.value)
         averages_by_half[half_set.value] = averages
     assignments = [
@@ -108,7 +108,7 @@ def classify_strict(
     assignments: list[ClassAssignment] = []
     averages_by_half: dict[str, dict[str, tuple[np.ndarray, int]]] = {}
     for half, indices in members.items():
-        averages = posed_class_averages(full.take(indices), labels[half], poses[half][0], poses[half][1] * scale, polish_config.prior)
+        averages = posed_class_averages(full.take(indices), labels[half], poses[half][0], poses[half][1] * scale, polish_config.prior, threads=settings.n_workers)
         write_class_averages(averages, output_dir / 'class_averages', voxel_size_angstrom, half)
         averages_by_half[half] = averages
         result = results[half]

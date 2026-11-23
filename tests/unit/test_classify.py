@@ -710,6 +710,18 @@ class TestMatch:
         assert np.median(error) <= 5.0 and np.percentile(error, 90) <= 10.0
         assert (result.shift == shifts).all(axis=1).mean() > 0.9
 
+    # test_align_to_reference_threads_match_serial: threading changes nothing about the poses found
+    def test_align_to_reference_threads_match_serial(self, tmp_path: Path) -> None:
+        reference = asymmetric_object(_REF_BOX, 1)
+        data = synthetic_set(tmp_path, [reference], OrientationPrior.NORMAL, 30, seed=6)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        volumes, wedges = data.store.load(list(range(len(data.store))))
+        serial = align_to_reference(volumes, wedges, reference, space)
+        threaded = align_to_reference(volumes, wedges, reference, space, threads=4)
+        assert np.array_equal(serial.rotation_index, threaded.rotation_index)
+        assert np.array_equal(serial.shift, threaded.shift)
+        assert np.allclose(serial.cc, threaded.cc)
+
     # test_axis_prior_recovers_azimuth_polarity_and_shift: rods with random polarity and axial offsets
     def test_axis_prior_recovers_azimuth_polarity_and_shift(self) -> None:
         rng = np.random.default_rng(4)
@@ -772,6 +784,15 @@ class TestMerge:
         right = half_split_ceilings(data.store.batches(), labels, data.rotations, data.shifts, space, 1, _REF_BOX)[0]
         wrong = half_split_ceilings(data.store.batches(), labels, scrambled, data.shifts, space, 1, _REF_BOX)[0]
         assert right > 0.8 and wrong < right
+
+    # test_ceiling_threads_match_serial: half-split agreement is the same threaded
+    def test_ceiling_threads_match_serial(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path, [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 40, seed=4)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        labels = np.zeros(len(data.labels), dtype=int)
+        serial = half_split_ceilings(data.store.batches(), labels, data.rotations, data.shifts, space, 1, _REF_BOX)
+        threaded = half_split_ceilings(data.store.batches(), labels, data.rotations, data.shifts, space, 1, _REF_BOX, threads=4)
+        assert np.allclose(serial, threaded, rtol=1e-4)
 
     # test_null_is_below_real_signal: real particles beat the rejection threshold and the agreement bar is below a real pure label's ceiling
     def test_null_is_below_real_signal(self, tmp_path: Path) -> None:
@@ -921,6 +942,15 @@ class TestReferences:
         rebuilt = rebuild_references(data.store, data.labels, data.rotations, data.shifts, 2)
         for reference, truth in zip(rebuilt, objects):
             assert float((reference * truth).sum() / np.linalg.norm(reference) / np.linalg.norm(truth)) > 0.9
+
+    # test_rebuild_threads_match_serial: partial sums agree with the serial sum to float tolerance
+    def test_rebuild_threads_match_serial(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path, objects, OrientationPrior.NONE, 25, noise_sigma=0.05, seed=3)
+        serial = rebuild_references(data.store, data.labels, data.rotations, data.shifts, 2)
+        threaded = rebuild_references(data.store, data.labels, data.rotations, data.shifts, 2, threads=4)
+        for a, b in zip(serial, threaded):
+            assert np.allclose(a, b, rtol=1e-4, atol=1e-5)
 
 # TestSearch: class containing unit tests for per-prior alignment search space
 class TestSearch:

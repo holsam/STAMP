@@ -4,10 +4,12 @@ STAMP: wedge-aware alignment of particles to a reference over a search space
 
 # Import external dependencies
 import numpy as np
+import scipy.fft as sfft
 from dataclasses import dataclass
 
 # Import internal STAMP objects
 from stamp.classify.search import SearchSpace, rotated_bank
+from stamp.utils.parallel import thread_map
 
 # Alignment: best candidate per particle against one reference
 @dataclass(frozen=True)
@@ -51,7 +53,7 @@ def refine_shift(
     max_shift: tuple[int, int, int],
 ) -> tuple[int, np.ndarray, float]:
     box_voxels = particle_ft.shape[0]
-    correlation = np.fft.ifftn(particle_ft[None] * np.conj(candidates_ft), axes=(1, 2, 3)).real
+    correlation = sfft.ifftn(particle_ft[None] * np.conj(candidates_ft), axes=(1, 2, 3)).real
     windows = [_window(m, box_voxels) for m in max_shift]
     local = correlation[:, windows[0][:, None, None], windows[1][None, :, None], windows[2][None, None, :]]
     flat = local.reshape(len(local), -1)
@@ -78,13 +80,17 @@ def align_to_reference(
     scores, norms = rank_rotations(filtered, wedges, bank, box_voxels)
     top = (len(bank) if len(bank) <= EXHAUSTIVE_BELOW else 5) if top is None else min(top, len(bank))
     shortlist = np.tile(np.arange(top), (len(particles), 1)) if top == len(bank) else np.argsort(-scores, axis=1)[:, :top]   # exhaustive keeps bank order so one set of spectra serves every particle
-    bank_ft = np.fft.fftn(bank.reshape(len(bank), *(box_voxels,) * 3), axes=(1, 2, 3)) if top == len(bank) else None
-    rotation_index = np.empty(len(particles), dtype=np.int64)
-    shift = np.zeros((len(particles), 3), dtype=np.int64)
-    cc = np.empty(len(particles), dtype=np.float32)
     bank_cubes = bank.reshape(len(bank), *(box_voxels,) * 3)
-    for i in range(len(particles)):
-        candidates_ft = bank_ft if bank_ft is not None else np.fft.fftn(bank_cubes[shortlist[i]], axes=(1, 2, 3))
-        best, shift[i], cc[i] = refine_shift(np.fft.fftn(filtered[i]), np.linalg.norm(filtered[i]) + 1e-8, candidates_ft, norms[i, shortlist[i]], space.max_shift)
-        rotation_index[i] = shortlist[i, best]
+    bank_ft = sfft.fftn(bank_cubes, axes=(1, 2, 3), workers=threads) if top == len(bank) else None
+
+    # _refine_one: shift search for one particle against its shortlisted rotations
+    def _refine_one(i: int) -> tuple[int, np.ndarray, float]:
+        candidates_ft = bank_ft if bank_ft is not None else sfft.fftn(bank_cubes[shortlist[i]], axes=(1, 2, 3))
+        best, particle_shift, particle_cc = refine_shift(sfft.fftn(filtered[i]), np.linalg.norm(filtered[i]) + 1e-8, candidates_ft, norms[i, shortlist[i]], space.max_shift)
+        return int(shortlist[i, best]), particle_shift, particle_cc
+
+    results = thread_map(_refine_one, range(len(particles)), threads)
+    rotation_index = np.array([r[0] for r in results], dtype=np.int64)
+    shift = np.array([r[1] for r in results], dtype=np.int64).reshape(len(particles), 3)
+    cc = np.array([r[2] for r in results], dtype=np.float32)
     return Alignment(rotation_index, shift, cc)

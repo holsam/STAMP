@@ -53,14 +53,14 @@ def hard_assign(scores: Scores, space: SearchSpace) -> Assignment:
     return Assignment(labels, scores.cc[labels, columns], margin, space.rotations[scores.rotation_index[labels, columns]], scores.shift[labels, columns, :])
 
 # rebuild_references: coverage-corrected average of each label's members at their poses
-def rebuild_references(store: ParticleStore, labels: np.ndarray, rotations: np.ndarray, shifts: np.ndarray, n_refs: int, *, min_members: int = 3, batch_size: int = 256) -> list[np.ndarray | None]:
+def rebuild_references(store: ParticleStore, labels: np.ndarray, rotations: np.ndarray, shifts: np.ndarray, n_refs: int, *, min_members: int = 3, batch_size: int = 256, threads: int = 1) -> list[np.ndarray | None]:
     accumulators = {k: WeightedAverage(store.volumes.box_voxels) for k in range(n_refs) if (labels == k).sum() >= min_members}
     for indices, volumes, wedges in store.batches(batch_size):
         indices = np.array(indices)
         for k, accumulator in accumulators.items():
             chosen = labels[indices] == k
             if chosen.any():
-                accumulator.add(volumes[chosen], wedges[chosen], rotations[indices[chosen]], shifts[indices[chosen]])
+                accumulator.add(volumes[chosen], wedges[chosen], rotations[indices[chosen]], shifts[indices[chosen]], threads=threads)
     return [accumulators[k].result() if k in accumulators else None for k in range(n_refs)]
 
 # refine_reference: grow a reference from a single seed particle by iterated alignment of the members and re-averaging
@@ -68,7 +68,7 @@ def refine_reference(members: ParticleStore, seed: np.ndarray, space: SearchSpac
     reference = seed
     for _ in range(n_iter):
         alignment = align_store(members, reference, space, threads=threads)
-        reference = rebuild_references(members, np.zeros(len(members), dtype=int), space.rotations[alignment.rotation_index], alignment.shift, 1, min_members=1)[0]
+        reference = rebuild_references(members, np.zeros(len(members), dtype=int), space.rotations[alignment.rotation_index], alignment.shift, 1, min_members=1, threads=threads)[0]
     return reference
 
 # seed_reference: reference for a seed cluster, started from the member closest to the cluster's mean in feature space

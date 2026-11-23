@@ -3,8 +3,8 @@ STAMP: shared per-item multiprocessing helper
 '''
 
 # Import external dependencies
-from collections.abc import Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from collections.abc import Callable, Sequence
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from functools import partial
 from typing import TypeVar
@@ -109,3 +109,12 @@ def run_parallel_ordered(
         progress_offset=progress_offset,
     )
     return [result for _, result in sorted(indexed_results, key=lambda pair: pair[0])]
+
+# thread_map: apply Callable over each item in order, chunked across a thread pool when threads > 1
+def thread_map[T, R](fn: Callable[[T], R], items: Sequence[T], threads: int = 1) -> list[R]:
+    if threads <= 1 or len(items) <= 1:
+        return [fn(item) for item in items]
+    step = max(1, -(-len(items) // (threads * 4)))     # a few chunks per thread so a slow chunk does not idle the rest
+    chunks = [items[start:start + step] for start in range(0, len(items), step)]
+    with ThreadPoolExecutor(threads) as pool:
+        return [result for part in pool.map(lambda chunk: [fn(item) for item in chunk], chunks) for result in part]
