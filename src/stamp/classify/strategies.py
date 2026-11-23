@@ -54,7 +54,7 @@ def classify_combined(
     seeds = reduce_and_cluster(features, settings.clustering)
     (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
+    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working', n_workers=settings.n_workers)
     outcome = run_polish(store, seeds.embedding, seeds.labels, polish_config, checkpoint_dir=work_dir / 'polish')
     cluster_ids = [label_to_cluster_id(int(label), polish_config.prior) for label in outcome.labels]
     _report_clusters(cluster_ids, seeds.explained_variance_ratio)
@@ -92,7 +92,7 @@ def classify_strict(
     seeds = {half: reduce_and_cluster(features[indices], settings.clustering) for half, indices in members.items()}   # one PCA per half, so nothing in half A depends on half B
     (output_dir / 'class_averages').mkdir(parents=True, exist_ok=True)     # present even when polish rejects everything, so a decoy that matched nothing is still compared
     orientations = [particle.orientation for particle in particles]
-    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working')
+    store = build_store(subvols, orientations, working_voxels, *tilt, work_dir / 'working', n_workers=settings.n_workers)
     results, matches = run_polish_by_half(store, members, {h: seeds[h].embedding for h in members}, {h: seeds[h].labels for h in members}, polish_config, checkpoint_dir=work_dir / 'polish')
     for label_b, match in sorted(matches.items()):
         log.debug(f'Cross-half cluster matching (B -> A, by reference): c{label_b:02d} -> c{match.label_a:02d}  similarity={match.similarity:.3f}')

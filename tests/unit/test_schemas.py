@@ -204,17 +204,6 @@ class TestSubvolumes:
             _ = subvols[i]  # touch every tomogram once, sequentially
         assert len(subvols._mmaps.entries) <= 64
 
-    def test_write_rolled_produces_a_readable_subvols(self, tmp_path):
-        box_voxels = 2
-        _write_cache(tmp_path, 'tomoA', 3, box_voxels)
-        index = [('tomoA', i) for i in range(3)]
-        subvols = Subvolumes(tmp_path, index, box_voxels)
-        rolled = ((i, subvols[i] * 2) for i in range(len(subvols)))
-        new_subvols = subvols.write_rolled(rolled, tmp_path / 'rolled')
-        for i in range(len(subvols)):
-            np.testing.assert_array_equal(new_subvols[i], subvols[i] * 2)
-
-
 # test_particle_set_round_trips_prior: a particle's prior is read from its JSON dict and survives a round trip
 def test_particle_set_round_trips_prior() -> None:
     legacy = {

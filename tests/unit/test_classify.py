@@ -882,6 +882,29 @@ class TestReferences:
         assert store.volumes.box_voxels == 23 and len(store) == 4
         assert np.allclose(store.volumes[2], prepare_particle(raw[2], 23), atol=1e-5)
 
+    # test_build_store_parallel_matches_serial: two workers give the same prepared volumes as one, across several tomograms
+    def test_build_store_parallel_matches_serial(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path / 'data', [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 12, seed=1)
+        source = data.store.volumes
+        serial = build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'serial')
+        parallel = build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'parallel', n_workers=2)
+        assert len(serial) == len(parallel) == len(source)
+        for i in range(len(source)):
+            assert np.array_equal(serial.volumes[i], parallel.volumes[i])
+
+    # test_build_store_resumes: a second call prepares nothing, and a stray partial file does not stop a rebuild
+    def test_build_store_resumes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        data = synthetic_set(tmp_path / 'data', [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 8, seed=2)
+        source = data.store.volumes
+        first = build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'prepared')
+        monkeypatch.setattr('stamp.classify.store.prepare_particle', lambda *args, **kwargs: pytest.fail('prepared again'))
+        build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'prepared')
+        monkeypatch.undo()
+        (tmp_path / 'prepared' / 't0.npy').unlink()
+        (tmp_path / 'prepared' / 't0.npy.partial').write_bytes(b'junk')
+        rebuilt = build_store(source, data.store.orientations, 11, 60.0, 90.0, tmp_path / 'prepared')
+        assert all(np.array_equal(first.volumes[i], rebuilt.volumes[i]) for i in range(len(first)))
+
     # test_scoring_against_true_objects_recovers_classes: assignment against the generating objects labels particles correctly
     def test_scoring_against_true_objects_recovers_classes(self, tmp_path: Path) -> None:
         objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
