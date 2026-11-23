@@ -64,3 +64,9 @@ class Subvolumes:
                 chunk = local_indices[start : start + batch_size]
                 rows = [self.index[i][1] for i in chunk]
                 yield chunk, np.asarray(mmap[rows])
+
+    # batch_indices: index chunks which would be read by iter_batches, without reading them, so callers can skip batches
+    def batch_indices(self, batch_size: int = 512) -> Iterator[list[int]]:
+        for local_indices in self.indices_by_tomogram().values():
+            for start in range(0, len(local_indices), batch_size):
+                yield local_indices[start:start + batch_size]

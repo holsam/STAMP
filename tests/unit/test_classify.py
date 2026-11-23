@@ -24,7 +24,7 @@ from stamp.classify.merge import half_split_ceilings, merge_groups, pair_thresho
 from stamp.classify.null import null_bar, null_threshold
 from stamp.classify.polish import PolishConfig, run_polish
 from stamp.classify.prepare import fourier_bin, normalise, prepare_particle, soft_mask, working_box
-from stamp.classify.references import hard_assign, rebuild_references, score_against_refs
+from stamp.classify.references import align_store, hard_assign, rebuild_references, score_against_refs
 from stamp.classify.search import rotated_bank, search_space
 from stamp.classify.shfeatures import build_sh_feature_matrix, sh_power
 from stamp.classify.spherical import fit_matrix, lm_pairs, real_sh_basis, sphere_grid
@@ -951,6 +951,52 @@ class TestReferences:
         threaded = rebuild_references(data.store, data.labels, data.rotations, data.shifts, 2, threads=4)
         for a, b in zip(serial, threaded):
             assert np.allclose(a, b, rtol=1e-4, atol=1e-5)
+
+    # test_batch_indices_match_iter_batches: the index-only iterator splits exactly as the reading one
+    def test_batch_indices_match_iter_batches(self, tmp_path: Path) -> None:
+        data = synthetic_set(tmp_path, [asymmetric_object(_REF_BOX, 1)], OrientationPrior.NORMAL, 10, seed=1)
+        assert list(data.store.volumes.batch_indices(4)) == [indices for indices, _ in data.store.volumes.iter_batches(4)]
+
+    # test_align_store_resumes: a finished checkpoint is reused without aligning, a different reference ignores it
+    def test_align_store_resumes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        reference = asymmetric_object(_REF_BOX, 1)
+        data = synthetic_set(tmp_path / 'data', [reference], OrientationPrior.NORMAL, 20, seed=2)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        checkpoint = tmp_path / 'scores' / 'ref00.npz'
+        first = align_store(data.store, reference, space, batch_size=8, checkpoint=checkpoint)
+        monkeypatch.setattr('stamp.classify.references.align_to_reference', lambda *args, **kwargs: pytest.fail('aligned again'))
+        again = align_store(data.store, reference, space, batch_size=8, checkpoint=checkpoint)
+        assert np.array_equal(first.rotation_index, again.rotation_index) and np.allclose(first.cc, again.cc)
+        monkeypatch.undo()
+        other = align_store(data.store, asymmetric_object(_REF_BOX, 2), space, batch_size=8, checkpoint=checkpoint)    # digest differs, so recomputed
+        assert not np.allclose(first.cc, other.cc)
+
+    # test_align_store_partial_resume: only batches missing from the done mask are aligned
+    def test_align_store_partial_resume(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        reference = asymmetric_object(_REF_BOX, 1)
+        data = synthetic_set(tmp_path / 'data', [reference], OrientationPrior.NORMAL, 20, seed=3)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        checkpoint = tmp_path / 'ref00.npz'
+        full = align_store(data.store, reference, space, batch_size=8, checkpoint=checkpoint)
+        with np.load(checkpoint) as saved:
+            arrays = {key: saved[key] for key in saved.files}
+        last = list(data.store.volumes.batch_indices(8))[-1]
+        arrays['done'][last] = False
+        np.savez(checkpoint, **arrays)
+        real = align_to_reference
+        calls = []
+        monkeypatch.setattr('stamp.classify.references.align_to_reference', lambda *args, **kwargs: calls.append(1) or real(*args, **kwargs))
+        resumed = align_store(data.store, reference, space, batch_size=8, checkpoint=checkpoint)
+        assert len(calls) == 1 and np.array_equal(full.rotation_index, resumed.rotation_index)
+
+    # test_score_against_refs_checkpoints_per_reference: one file per reference is written
+    def test_score_against_refs_checkpoints_per_reference(self, tmp_path: Path) -> None:
+        objects = [asymmetric_object(_REF_BOX, 1), asymmetric_object(_REF_BOX, 2)]
+        data = synthetic_set(tmp_path / 'data', objects, OrientationPrior.NORMAL, 10, seed=4)
+        space = search_space(OrientationPrior.NORMAL, _REF_BOX, angular_step_degrees=15.0, shift_range_voxels=2)
+        scores = score_against_refs(data.store, objects, space, checkpoint_dir=tmp_path / 'scores')
+        assert sorted(path.name for path in (tmp_path / 'scores').glob('*.npz')) == ['ref00.npz', 'ref01.npz']
+        assert scores.cc.shape == (2, len(data.store))
 
 # TestSearch: class containing unit tests for per-prior alignment search space
 class TestSearch:

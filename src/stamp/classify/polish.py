@@ -4,6 +4,7 @@ STAMP: polish step, seed references, reassignment, merging and null-based reject
 
 # Import external dependencies
 import numpy as np
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,20 +68,27 @@ def run_polish(store: ParticleStore, embedding: np.ndarray, seed_labels: np.ndar
         _save(checkpoint_dir, 'seeds', seed_labels, references)
     for round_number in range(first_round, config.n_polish_rounds):
         log.progress(f'Polish round {round_number + 1}/{config.n_polish_rounds}: {len(references)} reference(s)')
-        references = _polish_round(store, references, space, config)
+        scores_dir = None if checkpoint_dir is None else checkpoint_dir / f'scores_round{round_number}'
+        references = _polish_round(store, references, space, config, scores_dir)
         if not references:
             log.warning('No reference beat the phase-randomised null, every particle is rejected: the particles share no consistent structure at this resolution')
             return _rejected_everything(store, space)
         _save(checkpoint_dir, f'round{round_number}', seed_labels, references)
-    assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads), space)
+        if scores_dir is not None:
+            shutil.rmtree(scores_dir, ignore_errors=True)     # superseded by the round checkpoint
+    final_dir = None if checkpoint_dir is None else checkpoint_dir / 'scores_final'
+    assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads, checkpoint_dir=final_dir, label='final assignment'), space)
     threshold = null_threshold(store, references, space, quantile=config.reject_quantile, seed=config.seed, threads=config.threads)
     log.debug(f'Rejection threshold from the null: {threshold:.3f}')
-    return _finalise(store, assignment, references, threshold, space, config)
+    result = _finalise(store, assignment, references, threshold, space, config)
+    if final_dir is not None:
+        shutil.rmtree(final_dir, ignore_errors=True)
+    return result
 
 # _polish_round: reassign every particle, rebuild references, drop those that do not beat the null and merge those that are the same structure; empty when none beats the null
-def _polish_round(store: ParticleStore, references: list[np.ndarray], space: SearchSpace, config: PolishConfig) -> list[np.ndarray]:
+def _polish_round(store: ParticleStore, references: list[np.ndarray], space: SearchSpace, config: PolishConfig, scores_dir: Path | None = None) -> list[np.ndarray]:
     box_voxels = store.volumes.box_voxels
-    assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads), space)
+    assignment = hard_assign(score_against_refs(store, references, space, threads=config.threads, checkpoint_dir=scores_dir, label='round scoring'), space)
     ceilings = half_split_ceilings(store.batches(), assignment.labels, assignment.rotations, assignment.shifts, space, len(references), box_voxels, seed=config.seed, threads=config.threads)
     rebuilt = rebuild_references(store, assignment.labels, assignment.rotations, assignment.shifts, len(references), threads=config.threads)
     counts = np.bincount(assignment.labels, minlength=len(references))
