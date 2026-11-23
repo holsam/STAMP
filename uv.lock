@@ -890,7 +890,7 @@ wheels = [
 
 [[package]]
 name = "stamp"
-version = "1.0.0rc2"
+version = "1.0.0rc3"
 source = { editable = "." }
 dependencies = [
     { name = "fast-hdbscan" },
