@@ -9,7 +9,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.config import DiagramConfig
-from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
+from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram
 from stamp.tools.diagram.utils.plotting import draw_carriers
 from stamp.utils.plotting.core import BLUE, GREEN, GREY, ORANGE, RED, finish, frame, show_segmentation
 
@@ -139,3 +139,17 @@ def save_storyboard(run, outdir):
 # render: run the mocked picking stage and write its figures, returning the output directory
 def render(config: DiagramConfig) -> Path:
     return render_diagram(config, PickRun, save_panels, save_storyboard)
+
+# save_comparison: panels that differ by prior, one column per prior
+def save_comparison(runs: dict, outdir: Path):
+    rows = [plot_orientation, plot_decoys, plot_final]
+    fig = plt.figure(figsize=(6.5 * len(runs), 6.2 * len(rows)))
+    grid = fig.add_gridspec(len(rows), len(runs), hspace=0.2, wspace=0.15)
+    for col, run in enumerate(runs.values()):
+        for row, fn in enumerate(rows):
+            fn(run, fig.add_subplot(grid[row, col]))
+    finish(fig, outdir / '00_pick_priors.png')
+
+# render_all: pick diagram for every orientation prior, with a comparison figure
+def render_all(config: DiagramConfig) -> Path:
+    return render_all_priors(config, PickRun, save_panels, save_storyboard, save_comparison)

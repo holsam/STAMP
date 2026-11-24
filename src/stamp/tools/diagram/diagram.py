@@ -5,7 +5,8 @@ STAMP: CLI for `stamp tools diagram` command group
 # Import external dependencies
 import typer
 from pathlib import Path
-from typing import Annotated, Callable
+from types import ModuleType
+from typing import Annotated
 
 # Import diagram stage renderers
 from stamp.tools.diagram import classify as classify_diagram
@@ -54,6 +55,10 @@ PriorOpt = Annotated[
     OrientationPrior,
     typer.Option('--orientation-prior', help='What is known about particle orientation: normal (membrane proteins), axis (filaments) or none.'),
 ]
+AllPriorsOpt = Annotated[
+    bool,
+    typer.Option('--all-priors', help='Render once per orientation prior into <out-dir>/<prior>/ and add a comparison figure (--orientation-prior is ignored).'),
+]
 SeedOpt = Annotated[
     int,
     typer.Option('--seed', help='Random seed.'),
@@ -82,16 +87,17 @@ def _config(
         **overrides,
     )
 
-# _run: build the config and hand it to a stage renderer
+# _run: build the config and hand it to a stage renderer module, which renders one prior or all of them
 def _run(
-    renderer: Callable[[DiagramConfig], object],
+    renderer: ModuleType,
     target: Path,
     distractor: Path,
     also: list[Path] | None,
     output_dir: Path,
     **overrides,
 ) -> None:
-    renderer(_config(target, distractor, also, output_dir, **overrides))
+    all_priors = overrides.pop('all_priors')
+    (renderer.render_all if all_priors else renderer.render)(_config(target, distractor, also, output_dir, **overrides))
 
 # Define overview diagram command
 @diagramCli.command('overview', rich_help_panel='Overview Diagrams')
@@ -105,10 +111,11 @@ def overview_subcommand(
     pixel_size: PixelOpt = 3.0,
     seed: SeedOpt = 0,
     orientation_prior: PriorOpt = OrientationPrior.NORMAL,
+    all_priors: AllPriorsOpt = False,
 ) -> None:
     '''Generate a diagram of the overall STAMP workflow.'''
     _run(
-        overview_diagram.render,
+        overview_diagram,
         target,
         distractor,
         also,
@@ -118,6 +125,7 @@ def overview_subcommand(
         pixel_size=pixel_size,
         seed=seed,
         orientation_prior=orientation_prior,
+        all_priors=all_priors,
     )
 
 # Define pick diagram command
@@ -134,10 +142,11 @@ def pick_subcommand(
     n_vesicles: NVesiclesOpt = 14,
     seed: SeedOpt = 0,
     orientation_prior: PriorOpt = OrientationPrior.NORMAL,
+    all_priors: AllPriorsOpt = False,
 ) -> None:
     '''Generate a diagram of the pick command workflow.'''
     _run(
-        pick_diagram.render,
+        pick_diagram,
         target,
         distractor,
         also,
@@ -149,6 +158,7 @@ def pick_subcommand(
         n_vesicles=n_vesicles,
         seed=seed,
         orientation_prior=orientation_prior,
+        all_priors=all_priors,
     )
 
 # Define classify diagram command
@@ -175,10 +185,11 @@ def classify_subcommand(
     ] = 2,
     seed: SeedOpt = 0,
     orientation_prior: PriorOpt = OrientationPrior.NORMAL,
+    all_priors: AllPriorsOpt = False,
 ) -> None:
     '''Generate a diagram of the classify command workflow.'''
     _run(
-        classify_diagram.render,
+        classify_diagram,
         target, distractor,
         also,
         output_dir,
@@ -190,6 +201,7 @@ def classify_subcommand(
         n_polish_rounds=n_polish_rounds,
         seed=seed,
         orientation_prior=orientation_prior,
+        all_priors=all_priors,
     )
 
 # Define identify diagram command
@@ -204,10 +216,11 @@ def identify_subcommand(
     pixel_size: PixelOpt = 3.0,
     seed: SeedOpt = 0,
     orientation_prior: PriorOpt = OrientationPrior.NORMAL,
+    all_priors: AllPriorsOpt = False,
 ) -> None:
     '''Generate a diagram of the identify command workflow.'''
     _run(
-        identify_diagram.render,
+        identify_diagram,
         target,
         distractor,
         also,
@@ -217,4 +230,5 @@ def identify_subcommand(
         pixel_size=pixel_size,
         seed=seed,
         orientation_prior=orientation_prior,
+        all_priors=all_priors,
     )

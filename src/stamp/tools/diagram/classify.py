@@ -10,7 +10,7 @@ from pathlib import Path
 from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.classify import class_label
 from stamp.tools.diagram.utils.config import DiagramConfig
-from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
+from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram
 from stamp.utils.plotting.core import BLUE, CLUSTER_COLOURS, GREY, ORANGE, RED, bare, cluster_colour, finish, scatter_groups, style_axis, subgrid_axes, tile_particles
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
@@ -207,3 +207,17 @@ def save_storyboard(run, outdir):
 # render: run mocked classify stage and write its figures, returning output directory
 def render(config: DiagramConfig) -> Path:
     return render_diagram(config, ClassifyRun, save_panels, save_storyboard)
+
+# save_comparison: the panels that differ by prior, one column per prior
+def save_comparison(runs: dict, outdir: Path):
+    rows = [plot_features, lambda run, ax: plot_seeds(run, ax, run.half_a, 'A'), plot_search_space, plot_null]
+    fig = plt.figure(figsize=(6.5 * len(runs), 5.2 * len(rows)))
+    grid = fig.add_gridspec(len(rows), len(runs), hspace=0.4, wspace=0.25)
+    for col, run in enumerate(runs.values()):
+        for row, fn in enumerate(rows):
+            fn(run, fig.add_subplot(grid[row, col]))
+    finish(fig, outdir / '00_classify_priors.png')
+
+# render_all: classify diagram for every orientation prior, with a comparison figure
+def render_all(config: DiagramConfig) -> Path:
+    return render_all_priors(config, ClassifyRun, save_panels, save_storyboard, save_comparison)

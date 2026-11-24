@@ -11,7 +11,7 @@ from scipy.ndimage import rotate
 from stamp.tools.diagram.classify import draw_null
 from stamp.tools.diagram.utils.classify import class_label
 from stamp.tools.diagram.utils.config import DiagramConfig
-from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
+from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram
 from stamp.tools.diagram.utils.plotting import structure_projection_scatter
 from stamp.utils.plotting.core import BLUE, GREEN, GREY, ORANGE, RED, bare, finish, style_axis, subgrid_axes
 from stamp.utils.plotting.classify import class_average_grid
@@ -189,3 +189,17 @@ def save_storyboard(run, outdir):
 # render: run the mocked identify stage and write its figures, returning the output directory
 def render(config: DiagramConfig) -> Path:
     return render_diagram(config, IdentifyRun, save_panels, save_storyboard)
+
+# save_comparison: panels that differ by prior, one column per prior
+def save_comparison(runs: dict, outdir: Path):
+    rows = [plot_registration, plot_score_matrix, plot_decoy_control]
+    fig = plt.figure(figsize=(7 * len(runs), 4.6 * len(rows)))
+    grid = fig.add_gridspec(len(rows), len(runs), hspace=0.35, wspace=0.3)
+    for col, run in enumerate(runs.values()):
+        for row, fn in enumerate(rows):
+            fn(run, fig.add_subplot(grid[row, col]))
+    finish(fig, outdir / '00_identify_priors.png')
+
+# render_all: identify diagram for every orientation prior, with a comparison figure
+def render_all(config: DiagramConfig) -> Path:
+    return render_all_priors(config, IdentifyRun, save_panels, save_storyboard, save_comparison)

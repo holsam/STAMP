@@ -11,7 +11,7 @@ from stamp.tools.diagram import classify as classify_panels
 from stamp.tools.diagram import identify as identify_panels
 from stamp.tools.diagram import pick as pick_panels
 from stamp.tools.diagram.utils.config import DiagramConfig
-from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
+from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram
 from stamp.schemas.particles import OrientationPrior
 from stamp.utils.plotting.core import BLUE, GREY, bare, finish, style_axis, subgrid_axes, tile_particles
 
@@ -121,3 +121,7 @@ def save_storyboard(run, outdir: Path):
 # render: run the mocked pipeline and write the overview figures, returning the output directory
 def render(config: DiagramConfig) -> Path:
     return render_diagram(config, OverviewRun, save_individual_panels, save_storyboard)
+
+# render_all: same for every orientation prior, each in its own subdirectory
+def render_all(config: DiagramConfig) -> Path:
+    return render_all_priors(config, OverviewRun, save_individual_panels, save_storyboard)
