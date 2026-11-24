@@ -8,6 +8,7 @@ from pathlib import Path
 
 # Import internal STAMP objects
 from stamp.schemas.particles import OrientationPrior
+from stamp.tools.diagram.utils.classify import class_label
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.render import DiagramRun, render_diagram
 from stamp.utils.plotting.core import BLUE, CLUSTER_COLOURS, GREY, ORANGE, RED, bare, cluster_colour, finish, scatter_groups, style_axis, subgrid_axes, tile_particles
@@ -122,10 +123,8 @@ def plot_merge(run, ax):
     merges = f'{len(polish.merged)} merged' if polish.merged else 'none merged'
     ax.set_title(f'merge: reference agreement vs half-split ceiling ({merges})', fontsize=7)
 
-# plot_null: correlation of half A particles with their reference against phase-randomised null
-def plot_null(run, ax):
-    polish, w = run.half_a.polish, run.w
-    junk = w.particle_class[run.half_a.index] < 0
+# draw_null: correlation of particles with their reference against the phase-randomised null, with the two rejection bars
+def draw_null(ax, polish, junk, title):
     bins = np.linspace(0, 1, 41)
     ax.hist(polish.null_best, bins=bins, color='0.6', alpha=0.8, label='phase-randomised null')
     ax.hist(polish.cc[~junk], bins=bins, color=BLUE, alpha=0.7, label='particles')
@@ -133,7 +132,12 @@ def plot_null(run, ax):
         ax.hist(polish.cc[junk], bins=bins, color=RED, alpha=0.9, label='junk picks')
     ax.axvline(polish.particle_bar, color='k', ls='--', lw=0.9, label=f'reject below {polish.particle_bar:.2f}')
     ax.axvline(polish.reference_bar, color=ORANGE, ls=':', lw=1.2, label=f'reference bar {polish.reference_bar:.2f}')
-    style_axis(ax, f'null rejection: {int((polish.labels == -1).sum())} of {len(polish.labels)} half A particles rejected', xlabel='correlation with best reference', ylabel='particles', legend=True)
+    style_axis(ax, title, xlabel='correlation with best reference', ylabel='particles', legend=True)
+
+# plot_null: half A particles against the null
+def plot_null(run, ax):
+    polish = run.half_a.polish
+    draw_null(ax, polish, run.w.particle_class[run.half_a.index] < 0, f'null rejection: {int((polish.labels == -1).sum())} of {len(polish.labels)} half A particles rejected')
 
 # plot_halves: half A references (top) and matched half B references moved into frame of A (bottom)
 def plot_halves(run, fig, cell):
@@ -152,7 +156,7 @@ def plot_halves(run, fig, cell):
 # plot_class_averages: final class averages, wedge-weighted over both halves, with member counts
 def plot_class_averages(run, axes):
     w = run.w
-    class_average_grid(axes, w.cluster_ids, w.averages, lambda c: f'class {c} (n={w.class_counts[c]})')
+    class_average_grid(axes, w.cluster_ids, w.averages, lambda c: f'{class_label(w.prior, c)} (n={w.class_counts[c]})')
 
 # --- drivers ---
 # _n_classes: columns needed for a row of class averages

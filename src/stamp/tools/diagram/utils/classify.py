@@ -10,6 +10,10 @@ from scipy.ndimage import map_coordinates
 from stamp.schemas.particles import OrientationPrior
 
 # --- rotation-invariant particle features ---
+# class_label: class id as classify writes it, prefixed with the orientation prior (normal-c00)
+def class_label(prior: OrientationPrior, cluster_id: int) -> str:
+    return f'{prior.value}-c{cluster_id:02d}'
+
 # radial_profile: mean intensity per radial bin, invariant to in-plane rotation
 def radial_profile(image: np.ndarray, n_bins: int = 24) -> np.ndarray:
     ny, nx = image.shape

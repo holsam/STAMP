@@ -7,35 +7,6 @@ import numpy as np
 from pathlib import Path
 from scipy.ndimage import gaussian_filter, rotate
 
-# standardise: zero-mean, unit-variance an array of values
-def standardise(values: np.ndarray) -> np.ndarray:
-    centred = values - values.mean()
-    spread = centred.std()
-    return centred / spread if spread > 0 else centred
-
-# best_fit: identify best masked real-space cross-correlation
-def best_fit(class_average: np.ndarray, simulated: np.ndarray):
-    deviation = np.abs(class_average - class_average.mean())
-    mask = deviation > class_average.std()
-    if not mask.any():
-        mask = np.ones_like(class_average, dtype=bool)
-    reference = standardise(class_average[mask])
-    best, best_image = -1.0, simulated
-    for angle in range(0, 360, 15):
-        rotated = simulated if angle == 0 else rotate(simulated, angle, reshape=False, order=1, mode='constant')
-        for dy in (-2, 0, 2):
-            for dx in (-2, 0, 2):
-                shifted = np.roll(rotated, (dy, dx), axis=(0, 1))
-                candidate = standardise(shifted[mask])
-                score = float(np.dot(reference, candidate) / reference.size)
-                if score > best:
-                    best, best_image = score, shifted
-    return best, best_image
-
-# fit_score: return best fit score
-def fit_score(class_average: np.ndarray, simulated: np.ndarray) -> float:
-    return best_fit(class_average, simulated)[0]
-
 # --- PDB structure -> illustrative 2D density projection ---
 # read_atom_coordinates: read (N, 3) Cartesian coordinates from ATOM/HETATM records, fixed-column PDB format with a whitespace-split fallback
 def read_atom_coordinates(pdb_path: Path) -> np.ndarray:

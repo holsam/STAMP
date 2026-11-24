@@ -9,6 +9,8 @@ from scipy.ndimage import gaussian_filter, rotate
 from types import SimpleNamespace
 
 # Import internal STAMP objects
+from stamp.identify.decoy_check import evaluate_decoy_control
+from stamp.identify.fit import rank_candidates
 from stamp.classify.cluster import ClusteringConfig, reduce_and_cluster
 from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.carriers import carrier_of, make_carriers, place_on
@@ -16,10 +18,11 @@ from stamp.tools.diagram.utils.align import align_stack, apply_pose, bin_stack, 
 from stamp.tools.diagram.utils.classify import add_averaging_noise, feature_matrix, standardise_columns
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.decoy import random_volume_decoys, shifted_decoys, synthetic_noise_tile
-from stamp.tools.diagram.utils.identify import best_fit, fit_score, project_density, read_atom_coordinates, synthetic_truth
+from stamp.tools.diagram.utils.identify import project_density, read_atom_coordinates, synthetic_truth
 from stamp.tools.diagram.utils.polish import PolishConfig, Stacks, match_halves, run_polish
 from stamp.tools.diagram.utils.search import apply_wedge, search_space, wedge_keep
 from stamp.tools.diagram.utils.pick import beam_deviation, circular_mean, infer_orientations, reconcile, simulate_picks_file
+from stamp.tools.diagram.utils.register import register_score
 from stamp.tools.diagram.utils.refine import fourier_ring_correlation, resolution_at_threshold
 from stamp.tools.diagram.utils.scene import render_scene
 
@@ -261,60 +264,59 @@ class Walkthrough:
         self.polish_angle[index] = (polish.angle[sel] + relative_angle) % 360
         return images, masks
 
-    # -- stage 5: identification -----------------------------
+    # -- stage 6: identification by registration of each candidate to each class average ------------
     def identify(self):
-        scrambled = gaussian_filter(self.rng.permutation(self.target_truth.ravel()).reshape(self.target_truth.shape), sigma=2.0)
-        self.candidates = {
-            self.target_name: self.target_truth,
-            self.distractor_name: self.distractor_truth,
-            'decoy_model': scrambled / (scrambled.max() or 1.0),
-        }
+        self.candidates = {self.target_name: self.target_truth, self.distractor_name: self.distractor_truth}
+        self.registrations = {}
         self.score_matrix = {}
         self.fit_images = {}
         self.calls = {}
         for cluster_id in self.cluster_ids:
-            average = self.averages[cluster_id]
-            self.score_matrix[cluster_id] = {}
-            self.fit_images[cluster_id] = {}
-            for name, sim in self.candidates.items():
-                score, aligned = best_fit(average, sim)
-                self.score_matrix[cluster_id][name] = score
-                self.fit_images[cluster_id][name] = aligned
-            ranked = sorted(self.score_matrix[cluster_id].items(), key=lambda kv: kv[1], reverse=True)
-            (best_name, best_cc), (_, second_cc) = ranked[0], ranked[1]
-            decoy_cc = self.score_matrix[cluster_id]['decoy_model']
-            identified = (
-                best_name != 'decoy_model'
-                and best_cc >= self.args.identify_min_cc
-                and best_cc - second_cc >= self.args.identify_min_gap
-                and best_cc - decoy_cc >= self.args.decoy_margin
-            )
+            self.registrations[cluster_id] = {name: register_score(self.averages[cluster_id], simulated, self.prior) for name, simulated in self.candidates.items()}
+            self.score_matrix[cluster_id] = {name: result.score for name, result in self.registrations[cluster_id].items()}
+            self.fit_images[cluster_id] = {name: result.fitted for name, result in self.registrations[cluster_id].items()}
+            ranked = rank_candidates(f'c{cluster_id:02d}', self.score_matrix[cluster_id], method='stamp-register')
             self.calls[cluster_id] = {
-                'candidate': best_name if identified else None,
-                'best_name': best_name,
-                'cc': best_cc,
-                'gap': best_cc - second_cc,
-                'decoy_cc': decoy_cc,
-                'identified': identified,
+                'candidate': ranked.candidate_protein,
+                'cc': ranked.fit_score,
+                'gap': ranked.score_gap_to_runner_up,
                 'true_species': self.names[self.cluster_dominant[cluster_id]],
                 'in_panel': self.cluster_dominant[cluster_id] in self.panel_class_ids,
             }
-        self.identified = self.calls[self.target_cluster]['best_name']
+        self.identified = self.calls[self.target_cluster]['candidate']
 
-    # -- stage 6: decoy control -----------------------------
+    # -- stage 7: decoy control, noise-only decoy particles through the same classify, then the same registration -----
     def decoy_control(self):
-        target_average = self.averages[self.target_cluster]
-        real_scores, decoy_scores = [], []
-        for _ in range(self.args.n_decoy_trials):
-            jittered = add_averaging_noise(self.target_truth, self.args.per_particle_snr, n_averaged=int(self.rng.integers(2, 6)), rng=self.rng)
-            real_scores.append(fit_score(target_average, jittered))
-            shuffled = gaussian_filter(self.rng.permutation(self.target_truth.ravel()).reshape(self.target_truth.shape), sigma=2.0)
-            decoy_scores.append(fit_score(target_average, shuffled))
-        self.real_scores = np.array(real_scores)
-        self.decoy_scores = np.array(decoy_scores)
-        self.decoy_passed = self.real_scores.mean() > self.decoy_scores.mean() + 0.05
+        args, box, factor = self.args, self.box, self.args.bin_factor
+        n = len(self.consensus)
+        self.decoy_particles, self.decoy_masks, self.decoy_masks_binned = [], [], []
+        for _ in range(n):
+            phi = 0.0 if self.prior is OrientationPrior.NONE else float(self.decoy_rng.uniform(0, 360))
+            keep = wedge_keep(box, args.tilt_max_degrees, phi)
+            self.decoy_particles.append(apply_wedge(self.decoy_rng.normal(0.0, self.truths[0].std() / args.per_particle_snr, size=(box, box)), keep))
+            self.decoy_masks.append(keep)
+            self.decoy_masks_binned.append(wedge_keep(box // factor, args.tilt_max_degrees, phi))
+        particles = np.array(self.decoy_particles)
+        stacks = Stacks(particles, np.array(self.decoy_masks), bin_stack(particles, factor), np.array(self.decoy_masks_binned), factor)
+        features = standardise_columns(feature_matrix(particles, self.prior))
+        polish_config = PolishConfig(args.n_polish_rounds, args.min_cluster_size, args.merge_fraction, args.reference_quantile, args.reject_quantile, args.seed)
+        halves = self.decoy_rng.integers(2, size=n)
+        self.decoy_polish, self.decoy_references = [], []
+        for half in (0, 1):
+            index = np.where(halves == half)[0]
+            reduced = reduce_and_cluster(features[index], ClusteringConfig(method=args.cluster_method, n_components=args.cluster_components, min_cluster_size=args.min_cluster_size, n_clusters=self.n_classes + 1, random_state=args.seed))
+            try:
+                result = run_polish(stacks.take(index), reduced.embedding, reduced.labels, self.space, polish_config)
+            except ValueError:  # no seed cluster big enough: nothing to polish, no decoy class
+                continue
+            self.decoy_polish.append(result)
+            self.decoy_references += result.references
+        self.real_scores = [max(scores.values()) for scores in self.score_matrix.values()]
+        self.decoy_scores = [max(register_score(reference, simulated, self.prior).score for simulated in self.candidates.values()) for reference in self.decoy_references]
+        self.decoy_result = evaluate_decoy_control(self.real_scores, self.decoy_scores)
+        self.decoy_passed = self.decoy_result.passed
 
-    # -- stage 7: refinement / FRC ------------------------
+    # -- stage 8: refinement / FRC ------------------------
     def refine(self):
         self.half_a, self.half_b = self.half_averages[self.target_cluster]
         self.recovered = self.averages[self.target_cluster]

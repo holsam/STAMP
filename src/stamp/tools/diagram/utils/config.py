@@ -47,8 +47,4 @@ class DiagramConfig:
     reference_quantile: float = 0.99              # null quantile a reference's median correlation must clear
     reject_quantile: float = 0.95                 # null quantile of the best correlation below which a particle is rejected
     # identify
-    identify_min_cc: float = 0.72
-    identify_min_gap: float = 0.06
-    decoy_margin: float = 0.05
-    n_decoy_trials: int = 40
     seed: int = 0

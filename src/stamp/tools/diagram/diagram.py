@@ -66,15 +66,6 @@ NVesiclesOpt = Annotated[
     int,
     typer.Option('--n-vesicles', help='Vesicles in the mock scene.'),
 ]
-IdentifyMinCcOpt = Annotated[
-    float,
-    typer.Option('--identify-min-cc', help='Minimum CC to call a class.'),
-]
-IdentifyMinGapOpt = Annotated[
-    float,
-    typer.Option('--identify-min-gap', help='Minimum CC gap to runner-up.'),
-]
-
 # _config: assemble a DiagramConfig, leaving unspecified knobs at their defaults
 def _config(
     target: Path,
@@ -112,8 +103,6 @@ def overview_subcommand(
     n_synthetic_unknowns: UnknownsOpt = 2,
     box_size: BoxOpt = 64,
     pixel_size: PixelOpt = 3.0,
-    identify_min_cc: IdentifyMinCcOpt = 0.72,
-    identify_min_gap: IdentifyMinGapOpt = 0.06,
     seed: SeedOpt = 0,
     orientation_prior: PriorOpt = OrientationPrior.NORMAL,
 ) -> None:
@@ -127,8 +116,6 @@ def overview_subcommand(
         n_synthetic_unknowns=n_synthetic_unknowns,
         box_size=box_size,
         pixel_size=pixel_size,
-        identify_min_cc=identify_min_cc,
-        identify_min_gap=identify_min_gap,
         seed=seed,
         orientation_prior=orientation_prior,
     )
@@ -215,11 +202,6 @@ def identify_subcommand(
     n_synthetic_unknowns: UnknownsOpt = 2,
     box_size: BoxOpt = 64,
     pixel_size: PixelOpt = 3.0,
-    identify_min_cc: IdentifyMinCcOpt = 0.72,
-    identify_min_gap: IdentifyMinGapOpt = 0.06,
-    decoy_margin: Annotated[
-        float, typer.Option('--decoy-margin', help='Minimum CC margin over the decoy model.'),
-    ] = 0.05,
     seed: SeedOpt = 0,
     orientation_prior: PriorOpt = OrientationPrior.NORMAL,
 ) -> None:
@@ -233,9 +215,6 @@ def identify_subcommand(
         n_synthetic_unknowns=n_synthetic_unknowns,
         box_size=box_size,
         pixel_size=pixel_size,
-        identify_min_cc=identify_min_cc,
-        identify_min_gap=identify_min_gap,
-        decoy_margin=decoy_margin,
         seed=seed,
         orientation_prior=orientation_prior,
     )
