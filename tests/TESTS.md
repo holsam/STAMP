@@ -64,6 +64,7 @@ File | Covers
 `test_picking.py` | Surface extraction, quaternion orientation, beam angle, consensus reconciliation, vesicle labelling
 `test_refine.py` | Half-set splitting/guards, independent-output checks, FSC computation, refine output tree, RELION pose export
 `test_schemas.py` | Pydantic model validation (`Particle`, `RawPick`, etc.), including rejection of bad input
+`test_tools.py` | Mocked pipeline for diagram command.
 `test_utils.py` | Half-set assignment determinism, I/O helpers, logging setup
 
 Nothing in the suite runs external tools. The refinement tests stand in for RELION and M by writing synthetic half-maps.

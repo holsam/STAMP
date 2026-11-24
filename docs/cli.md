@@ -286,7 +286,25 @@ Argument/Option | Default | Use
 
 ### `stamp tools diagram`
 
-Generate diagrams of STAMP workflows. Run `stamp tools diagram --help` for the current subcommand list.
+Generate diagrams of STAMP workflows from a mocked 2D pipeline. Run `stamp tools diagram --help` for the current subcommand list.
+
+The decoy panel follows `--method auto` (`shifted` for `normal`, `random-volume` for `axis` and `none`), with `synthetic-noise` drawn for `normal` only.
+
+```
+stamp tools diagram {overview|pick|classify|identify|stream} TARGET.pdb DISTRACTOR.pdb [options]
+```
+
+Option | Default | Description
+-- | -- | --
+`-o, --out-dir` | `out/diagrams/<subcommand>` | Output directory for PNGs
+`--orientation-prior` | `normal` | `normal` (particles on vesicles), `axis` (on filaments), `none` (anywhere) or `mixed` (all three on one tomogram)
+`--all-priors` | off | Render once per prior into `<out-dir>/<prior>/` and add a `00_<subcommand>_priors.png` comparison; `--orientation-prior` is ignored
+`--also` | none | Extra PDBs that are classified but not in the identify panel
+`--n-synthetic-unknowns` | `2` | Procedurally generated extra species
+`--box-size-px`, `--pixel-size-a`, `--seed` | `64`, `3.0`, `0` | Geometry and random seed
+`--cluster-method`, `--min-cluster-size`, `--polish-rounds` | `leiden`, `10`, `2` | `classify` only: seed clustering and polish settings
+`--field-px`, `--n-vesicles` | `900`, `14` | `pick` only: scene size
+`--n-tomograms` | `4` | `stream` only: tomograms appended before finalise
 
 ### `stamp tools completion`
 
