@@ -13,6 +13,7 @@ from stamp.tools.diagram import classify as classify_diagram
 from stamp.tools.diagram import identify as identify_diagram
 from stamp.tools.diagram import overview as overview_diagram
 from stamp.tools.diagram import pick as pick_diagram
+from stamp.tools.diagram import stream as stream_diagram
 from enum import Enum
 from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.config import DiagramConfig
@@ -246,4 +247,34 @@ def identify_subcommand(
         seed=seed,
         orientation_prior=orientation_prior,
         all_priors=all_priors,
+    )
+
+# Define stream diagram command
+@diagramCli.command('stream', rich_help_panel='Command Diagrams')
+def stream_subcommand(
+    target: TargetArg,
+    distractor: DistractorArg,
+    output_dir: OutDirOpt = Path('out/diagrams/stream'),
+    also: AlsoOpt = None,
+    n_synthetic_unknowns: UnknownsOpt = 2,
+    box_size: BoxOpt = 64,
+    pixel_size: PixelOpt = 3.0,
+    n_tomograms: Annotated[int, typer.Option('--n-tomograms', min=2, help='Tomograms appended before finalise.')] = 4,
+    seed: SeedOpt = 0,
+    orientation_prior: PriorOpt = DiagramPrior.NORMAL,
+) -> None:
+    '''Generate a diagram of the stream workflow.'''
+    _run(
+        stream_diagram,
+        target,
+        distractor,
+        also,
+        output_dir,
+        n_synthetic_unknowns=n_synthetic_unknowns,
+        box_size=box_size,
+        pixel_size=pixel_size,
+        n_tomograms=n_tomograms,
+        seed=seed,
+        orientation_prior=orientation_prior,
+        all_priors=False,
     )

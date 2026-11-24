@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 # Import internal STAMP objects
 from stamp.schemas.particles import OrientationPrior
-from stamp.tools.diagram import classify, identify, overview, pick
+from stamp.tools.diagram import classify, identify, overview, pick, stream
 from stamp.tools.diagram.utils.align import align_stack, align_to_references, bin_stack
 from stamp.tools.diagram.utils.classify import class_label
 from stamp.tools.diagram.utils.carriers import make_carriers, nearest_surface, place_on
@@ -180,6 +180,15 @@ class TestMixed:
         outdir = pick.render_mixed_priors(_config(tmp_path, OrientationPrior.NORMAL))
         assert (outdir / '00_pick_mixed.png').stat().st_size > 0
         assert all((outdir / prior.value / '00_pick_storyboard.png').exists() for prior in OrientationPrior)
+
+# TestStream: class containing tests for stream.py
+class TestStream:
+    # check the stream diagram appends each tomogram and gives whole tomograms to one half
+    def test_stream_render(self, tmp_path: Path) -> None:
+        run = stream.StreamRun(replace(_config(tmp_path, OrientationPrior.NORMAL), n_tomograms=3))
+        assert len(run.tomograms) == 3 and len(run.real_half) == 3
+        outdir = stream.render(replace(_config(tmp_path, OrientationPrior.NORMAL), n_tomograms=3))
+        assert (outdir / '00_stream_storyboard.png').stat().st_size > 0
 
 # TestDiagram: class containing smoke tests for the diagram renderers
 class TestDiagram:

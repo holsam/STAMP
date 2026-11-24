@@ -26,6 +26,7 @@ class DiagramConfig:
     # mixed scene: set by render_mixed, each group classifies its own species on a shared tomogram
     shared_scene: object | None = None            # SharedScene from utils/mixed.py
     class_ids: tuple[int, ...] | None = None      # species present in this prior group (default: all)
+    n_tomograms: int = 4                          # tomograms appended in the stream diagram
     # orientation prior: sets the carriers particles sit on and the alignment search space
     orientation_prior: OrientationPrior = OrientationPrior.NORMAL
     tilt_max_degrees: float = 60.0                # half-width of the tilt range, sets the missing wedge
