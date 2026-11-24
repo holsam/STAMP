@@ -58,6 +58,9 @@ class Walkthrough:
         self.distractor_name = self.names[1]
         self.target_truth = self.truths[0]
         self.distractor_truth = self.truths[1]
+        # species present in this run: all, or one prior group of a mixed scene
+        self.class_ids = tuple(args.class_ids) if args.class_ids else tuple(range(self.n_classes))
+        self.focus_class = self.class_ids[0]     # the species whose class is carried into refine
         # classes covered by the identify candidate panel
         self.panel_class_ids = {0, 1}
 
@@ -65,11 +68,19 @@ class Walkthrough:
     def _class_counts(self):
         counts = [self.args.n_target, self.args.n_distractor]
         counts += [self.args.n_extra] * (self.n_classes - 2)
-        return counts
+        return [count if class_id in self.class_ids else 0 for class_id, count in enumerate(counts)]
 
     # -- stage 1: scene = carriers (vesicles or filaments) + raw tomogram + segmentation ------
     def build_scene(self):
         self.prior = self.args.orientation_prior
+        shared = self.args.shared_scene
+        if shared is not None:     # a prior group of a mixed scene: its own carriers and species on the shared tomogram
+            self.carriers = shared.carriers[self.prior]
+            self.true_particles = [p for p in shared.particles if p['class'] in self.class_ids]
+            self.true_xy = np.array([[p['x'], p['y']] for p in self.true_particles])
+            self.true_class = np.array([p['class'] for p in self.true_particles])
+            self.raw_tomogram, self.segmentation = shared.raw_tomogram, shared.segmentation
+            return
         self.carriers = make_carriers(self.prior, self.field_px, self.args.n_vesicles, self.args.n_filaments, self.rng)
         counts = self._class_counts()
 
@@ -195,7 +206,7 @@ class Walkthrough:
         self.halves = []
         for half in (0, 1):
             index = np.where(self.particle_half == half)[0]
-            clustering = ClusteringConfig(method=args.cluster_method, n_components=args.cluster_components, min_cluster_size=args.min_cluster_size, n_clusters=self.n_classes + 1, random_state=args.seed)
+            clustering = ClusteringConfig(method=args.cluster_method, n_components=args.cluster_components, min_cluster_size=args.min_cluster_size, n_clusters=len(self.class_ids) + 1, random_state=args.seed)
             reduced = reduce_and_cluster(standardise_columns(self.features[index]), clustering)
             polish = run_polish(self.stacks.take(index), reduced.embedding, reduced.labels, self.space, polish_config)
             self.halves.append(SimpleNamespace(index=index, embedding=reduced.embedding, explained=reduced.explained_variance_ratio, seed_labels=reduced.labels, polish=polish))
@@ -216,7 +227,7 @@ class Walkthrough:
     def _summarise_clusters(self):
         self.cluster_ids = sorted(set(self.cluster_labels) - {-1})
         self.cluster_dominant = {c: self._dominant(self.cluster_labels == c) for c in self.cluster_ids}
-        target_counts = {c: int(np.sum((self.cluster_labels == c) & (self.particle_class == 0))) for c in self.cluster_ids}
+        target_counts = {c: int(np.sum((self.cluster_labels == c) & (self.particle_class == self.focus_class))) for c in self.cluster_ids}
         self.target_cluster = max(target_counts, key=target_counts.get)
 
     # _dominant: most common true species among a cluster's members, ignoring junk picks
@@ -304,7 +315,7 @@ class Walkthrough:
         self.decoy_polish, self.decoy_references = [], []
         for half in (0, 1):
             index = np.where(halves == half)[0]
-            reduced = reduce_and_cluster(features[index], ClusteringConfig(method=args.cluster_method, n_components=args.cluster_components, min_cluster_size=args.min_cluster_size, n_clusters=self.n_classes + 1, random_state=args.seed))
+            reduced = reduce_and_cluster(features[index], ClusteringConfig(method=args.cluster_method, n_components=args.cluster_components, min_cluster_size=args.min_cluster_size, n_clusters=len(self.class_ids) + 1, random_state=args.seed))
             try:
                 result = run_polish(stacks.take(index), reduced.embedding, reduced.labels, self.space, polish_config)
             except ValueError:  # no seed cluster big enough: nothing to polish, no decoy class

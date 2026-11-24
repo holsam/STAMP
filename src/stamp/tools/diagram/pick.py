@@ -9,7 +9,7 @@ from pathlib import Path
 # Import internal STAMP objects
 from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.config import DiagramConfig
-from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram
+from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram, render_mixed
 from stamp.tools.diagram.utils.plotting import draw_carriers
 from stamp.utils.plotting.core import BLUE, GREEN, GREY, ORANGE, RED, finish, frame, show_segmentation
 
@@ -153,3 +153,25 @@ def save_comparison(runs: dict, outdir: Path):
 # render_all: pick diagram for every orientation prior, with a comparison figure
 def render_all(config: DiagramConfig) -> Path:
     return render_all_priors(config, PickRun, save_panels, save_storyboard, save_comparison)
+
+# PRIOR_COLOURS: one colour per orientation prior in the mixed figures
+PRIOR_COLOURS = {OrientationPrior.NORMAL: BLUE, OrientationPrior.AXIS: ORANGE, OrientationPrior.NONE: GREEN}
+
+# save_mixed: shared tomogram with each prior group's final picks, and with each group's decoys by the method `auto` resolves for it
+def save_mixed(runs: dict, shared, outdir: Path):
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6.5))
+    for ax in axes:
+        ax.imshow(shared.raw_tomogram, cmap=GREY)
+    for prior, run in runs.items():
+        w = run.w
+        axes[0].scatter(w.consensus[:, 0], w.consensus[:, 1], s=18, c=PRIOR_COLOURS[prior], label=f'{prior.value} picks (n={len(w.consensus)})')
+        axes[1].scatter(w.decoy_points[:, 0], w.decoy_points[:, 1], s=34, c=PRIOR_COLOURS[prior], marker='x', label=f'{prior.value} decoys: {w.decoy_method} (n={len(w.decoy_points)})')
+    frame(axes[0], runs[OrientationPrior.NORMAL].w.field_px, 'one picks set, each pick carrying its prior (consensus and filters per group)')
+    frame(axes[1], runs[OrientationPrior.NORMAL].w.field_px, 'decoys per prior: shifted for normal, random-volume for axis and none')
+    for ax in axes:
+        ax.legend(fontsize=7, loc='upper right', framealpha=0.5)
+    finish(fig, outdir / '00_pick_mixed.png')
+
+# render_mixed_priors: pick diagram on one tomogram holding all three priors
+def render_mixed_priors(config: DiagramConfig) -> Path:
+    return render_mixed(config, PickRun, save_panels, save_storyboard, save_mixed)

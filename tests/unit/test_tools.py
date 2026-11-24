@@ -17,6 +17,7 @@ from stamp.tools.diagram.utils.classify import class_label
 from stamp.tools.diagram.utils.carriers import make_carriers, nearest_surface, place_on
 from stamp.tools.diagram.utils.config import DiagramConfig
 from stamp.tools.diagram.utils.decoy import random_volume_decoys, shifted_decoys
+from stamp.tools.diagram.utils.mixed import MIXED_CLASS, build_shared_scene
 from stamp.tools.diagram.utils.pick import infer_orientations, reconcile
 from stamp.tools.diagram.utils.polish import PolishConfig, Stacks, run_polish
 from stamp.tools.diagram.utils.register import register_score
@@ -165,6 +166,20 @@ class TestRegister:
         for angle, sign in ((70.0, 1.0), (200.0, -1.0)):
             average = sign * rotate(target, angle, reshape=False, order=1)
             assert register_score(average, target, OrientationPrior.NORMAL).score > register_score(average, other, OrientationPrior.NORMAL).score + 0.1
+
+# TestMixed: class containing tests for utils/mixed.py
+class TestMixed:
+    # check the shared scene has carriers and particles for each prior, one species per prior
+    def test_shared_scene_holds_every_prior(self, tmp_path: Path) -> None:
+        scene = build_shared_scene(replace(_config(tmp_path, OrientationPrior.NORMAL), field_px=700))
+        assert scene.carriers[OrientationPrior.NORMAL] and scene.carriers[OrientationPrior.AXIS] and scene.carriers[OrientationPrior.NONE] == []
+        assert {p['class'] for p in scene.particles} == set(MIXED_CLASS.values())
+
+    # check a mixed render writes one directory per prior group and the summary figure
+    def test_mixed_pick_render(self, tmp_path: Path) -> None:
+        outdir = pick.render_mixed_priors(_config(tmp_path, OrientationPrior.NORMAL))
+        assert (outdir / '00_pick_mixed.png').stat().st_size > 0
+        assert all((outdir / prior.value / '00_pick_storyboard.png').exists() for prior in OrientationPrior)
 
 # TestDiagram: class containing smoke tests for the diagram renderers
 class TestDiagram:

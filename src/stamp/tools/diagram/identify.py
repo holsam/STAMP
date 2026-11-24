@@ -11,10 +11,11 @@ from scipy.ndimage import rotate
 from stamp.tools.diagram.classify import draw_null
 from stamp.tools.diagram.utils.classify import class_label
 from stamp.tools.diagram.utils.config import DiagramConfig
-from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram
+from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram, render_mixed
 from stamp.tools.diagram.utils.plotting import structure_projection_scatter
 from stamp.utils.plotting.core import BLUE, GREEN, GREY, ORANGE, RED, bare, finish, style_axis, subgrid_axes
 from stamp.utils.plotting.classify import class_average_grid
+from stamp.identify.decoy_check import evaluate_decoy_control
 from stamp.utils.plotting.identify import decoy_hist, score_heatmap
 
 # ORIENTATIONS: in-plane angles (degrees) shown for each simulated density map
@@ -203,3 +204,29 @@ def save_comparison(runs: dict, outdir: Path):
 # render_all: identify diagram for every orientation prior, with a comparison figure
 def render_all(config: DiagramConfig) -> Path:
     return render_all_priors(config, IdentifyRun, save_panels, save_storyboard, save_comparison)
+
+# save_mixed: ranked calls of every prior group and one decoy control across all groups
+def save_mixed(runs: dict, shared, outdir: Path):
+    real = [score for run in runs.values() for score in run.w.real_scores]
+    decoy = [score for run in runs.values() for score in run.w.decoy_scores]
+    result = evaluate_decoy_control(real, decoy)
+    fig, (ax_calls, ax_control) = plt.subplots(1, 2, figsize=(16, 4.5), gridspec_kw={'width_ratios': [1.6, 1]})
+    ax_calls.set_axis_off()
+    lines = ['ranked identification per prior group', '']
+    for run in runs.values():
+        for cluster_id in run.cluster_ids:
+            call = run.calls[cluster_id]
+            panel = '' if call['in_panel'] else '  (true species not in panel)'
+            lines.append(f'{class_label(run.w.prior, cluster_id)}  ->  {call["candidate"]}   CC {call["cc"]:.2f}  gap {call["gap"]:.2f}   true: {call["true_species"]}{panel}')
+    ax_calls.text(0.02, 0.98, '\n'.join(lines), transform=ax_calls.transAxes, va='top', ha='left', fontsize=9, family='monospace')
+    if decoy:
+        decoy_hist(ax_control, np.array(real), np.array(decoy), result.passed)
+    else:
+        ax_control.hist(real, bins=np.linspace(0, 1, 21), color=BLUE, alpha=0.8, label='real classes')
+        style_axis(ax_control, 'decoy control: no decoy class survived', xlabel='best registration score', ylabel='classes', legend=True)
+    ax_control.text(0.02, 0.97, f'{"PASS" if result.passed else "FAIL"} (one control across all priors): {result.reason}', transform=ax_control.transAxes, va='top', ha='left', fontsize=6, wrap=True)
+    finish(fig, outdir / '00_identify_mixed.png')
+
+# render_mixed_priors: identify diagram on one tomogram holding all three priors
+def render_mixed_priors(config: DiagramConfig) -> Path:
+    return render_mixed(config, IdentifyRun, save_panels, save_storyboard, save_mixed)

@@ -13,6 +13,7 @@ from stamp.tools.diagram import classify as classify_diagram
 from stamp.tools.diagram import identify as identify_diagram
 from stamp.tools.diagram import overview as overview_diagram
 from stamp.tools.diagram import pick as pick_diagram
+from enum import Enum
 from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.config import DiagramConfig
 
@@ -51,9 +52,16 @@ PixelOpt = Annotated[
     float,
     typer.Option('--pixel-size-a', help='Angstroms per pixel.'),
 ]
+# DiagramPrior: the orientation priors, or mixed for one tomogram holding all three
+class DiagramPrior(str, Enum):
+    NORMAL = 'normal'
+    AXIS = 'axis'
+    NONE = 'none'
+    MIXED = 'mixed'
+
 PriorOpt = Annotated[
-    OrientationPrior,
-    typer.Option('--orientation-prior', help='What is known about particle orientation: normal (membrane proteins), axis (filaments) or none.'),
+    DiagramPrior,
+    typer.Option('--orientation-prior', help='What is known about particle orientation: normal (membrane proteins), axis (filaments), none, or mixed (one tomogram with all three, each group classified on its own; not for overview).'),
 ]
 AllPriorsOpt = Annotated[
     bool,
@@ -97,6 +105,13 @@ def _run(
     **overrides,
 ) -> None:
     all_priors = overrides.pop('all_priors')
+    prior = overrides.pop('orientation_prior')
+    if prior is DiagramPrior.MIXED:
+        if all_priors or not hasattr(renderer, 'render_mixed_priors'):
+            raise typer.BadParameter('mixed is for the pick, classify and identify diagrams and cannot be combined with --all-priors', param_hint='--orientation-prior')
+        renderer.render_mixed_priors(_config(target, distractor, also, output_dir, **overrides))
+        return
+    overrides['orientation_prior'] = OrientationPrior(prior.value)
     (renderer.render_all if all_priors else renderer.render)(_config(target, distractor, also, output_dir, **overrides))
 
 # Define overview diagram command
@@ -110,7 +125,7 @@ def overview_subcommand(
     box_size: BoxOpt = 64,
     pixel_size: PixelOpt = 3.0,
     seed: SeedOpt = 0,
-    orientation_prior: PriorOpt = OrientationPrior.NORMAL,
+    orientation_prior: PriorOpt = DiagramPrior.NORMAL,
     all_priors: AllPriorsOpt = False,
 ) -> None:
     '''Generate a diagram of the overall STAMP workflow.'''
@@ -141,7 +156,7 @@ def pick_subcommand(
     field_px: FieldPxOpt = 900,
     n_vesicles: NVesiclesOpt = 14,
     seed: SeedOpt = 0,
-    orientation_prior: PriorOpt = OrientationPrior.NORMAL,
+    orientation_prior: PriorOpt = DiagramPrior.NORMAL,
     all_priors: AllPriorsOpt = False,
 ) -> None:
     '''Generate a diagram of the pick command workflow.'''
@@ -184,7 +199,7 @@ def classify_subcommand(
         typer.Option('--polish-rounds', help='Polish rounds.'),
     ] = 2,
     seed: SeedOpt = 0,
-    orientation_prior: PriorOpt = OrientationPrior.NORMAL,
+    orientation_prior: PriorOpt = DiagramPrior.NORMAL,
     all_priors: AllPriorsOpt = False,
 ) -> None:
     '''Generate a diagram of the classify command workflow.'''
@@ -215,7 +230,7 @@ def identify_subcommand(
     box_size: BoxOpt = 64,
     pixel_size: PixelOpt = 3.0,
     seed: SeedOpt = 0,
-    orientation_prior: PriorOpt = OrientationPrior.NORMAL,
+    orientation_prior: PriorOpt = DiagramPrior.NORMAL,
     all_priors: AllPriorsOpt = False,
 ) -> None:
     '''Generate a diagram of the identify command workflow.'''

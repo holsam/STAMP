@@ -23,6 +23,9 @@ class DiagramConfig:
     box_size: int = 64
     pixel_size: float = 3.0
     field_px: int = 900                           # side of the mock tomogram slice, pixels
+    # mixed scene: set by render_mixed, each group classifies its own species on a shared tomogram
+    shared_scene: object | None = None            # SharedScene from utils/mixed.py
+    class_ids: tuple[int, ...] | None = None      # species present in this prior group (default: all)
     # orientation prior: sets the carriers particles sit on and the alignment search space
     orientation_prior: OrientationPrior = OrientationPrior.NORMAL
     tilt_max_degrees: float = 60.0                # half-width of the tilt range, sets the missing wedge

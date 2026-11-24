@@ -10,7 +10,7 @@ from pathlib import Path
 from stamp.schemas.particles import OrientationPrior
 from stamp.tools.diagram.utils.classify import class_label
 from stamp.tools.diagram.utils.config import DiagramConfig
-from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram
+from stamp.tools.diagram.utils.render import DiagramRun, render_all_priors, render_diagram, render_mixed
 from stamp.utils.plotting.core import BLUE, CLUSTER_COLOURS, GREY, ORANGE, RED, bare, cluster_colour, finish, scatter_groups, style_axis, subgrid_axes, tile_particles
 from stamp.utils.plotting.classify import class_average_grid, scatter_labels
 
@@ -221,3 +221,17 @@ def save_comparison(runs: dict, outdir: Path):
 # render_all: classify diagram for every orientation prior, with a comparison figure
 def render_all(config: DiagramConfig) -> Path:
     return render_all_priors(config, ClassifyRun, save_panels, save_storyboard, save_comparison)
+
+# save_mixed: class averages of every prior group
+def save_mixed(runs: dict, shared, outdir: Path):
+    width = max(_n_classes(run) for run in runs.values())
+    fig = plt.figure(figsize=(3 * width, 3.2 * len(runs)))
+    grid = fig.add_gridspec(len(runs), 1, hspace=0.35)
+    for row, run in enumerate(runs.values()):
+        plot_class_averages(run, subgrid_axes(fig, grid[row, 0], _n_classes(run)))
+    fig.suptitle('classify results per prior group: each group is picked, aligned over its own search space and averaged on its own', fontsize=10)
+    finish(fig, outdir / '00_classify_mixed.png')
+
+# render_mixed_priors: classify diagram on one tomogram holding all three priors
+def render_mixed_priors(config: DiagramConfig) -> Path:
+    return render_mixed(config, ClassifyRun, save_panels, save_storyboard, save_mixed)

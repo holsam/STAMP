@@ -25,8 +25,8 @@ def make_vesicles(field_px: int, n_vesicles: int, rng: np.random.Generator, radi
             vesicles.append({'kind': 'circle', 'cx': cx, 'cy': cy, 'r': r})
     return vesicles
 
-# make_filaments: straight filaments with random direction, kept clear of each other
-def make_filaments(field_px: int, n_filaments: int, rng: np.random.Generator, length_px: tuple[float, float] = (200, 380), margin: float = 40, gap: float = 40) -> list[Carrier]:
+# make_filaments: straight filaments with random direction, kept clear of each other and vesicles by avoid_gap
+def make_filaments(field_px: int, n_filaments: int, rng: np.random.Generator, length_px: tuple[float, float] = (200, 380), margin: float = 40, gap: float = 40, avoid: list[Carrier] | None = None, avoid_gap: float = 0.0) -> list[Carrier]:
     filaments: list[Carrier] = []
     attempts = 0
     while len(filaments) < n_filaments and attempts < 2000:
@@ -37,7 +37,9 @@ def make_filaments(field_px: int, n_filaments: int, rng: np.random.Generator, le
         half = 0.5 * length * np.array([np.cos(angle), np.sin(angle)])
         candidate = {'kind': 'line', 'x0': float(centre[0] - half[0]), 'y0': float(centre[1] - half[1]), 'x1': float(centre[0] + half[0]), 'y1': float(centre[1] + half[1])}
         inside = all(margin <= v <= field_px - margin for v in (candidate['x0'], candidate['y0'], candidate['x1'], candidate['y1']))
-        if inside and all(carrier_distance(f, *_sample_line(candidate, 8.0)[0].T).min() > gap for f in filaments):
+        points = _sample_line(candidate, 8.0)[0]
+        clear = all(np.hypot(points[:, 0] - v['cx'], points[:, 1] - v['cy']).min() > v['r'] + avoid_gap for v in avoid or [])
+        if inside and clear and all(carrier_distance(f, *points.T).min() > gap for f in filaments):
             filaments.append(candidate)
     return filaments
 
